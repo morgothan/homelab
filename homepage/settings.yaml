@@ -2,11 +2,6 @@
 # For configuration options and examples, please see:
 # https://gethomepage.dev/configs/settings/
 
-providers:
-  openweathermap: openweathermapapikey
-  weatherapi: YOUR_WEATHERAPI_KEY
-  cache: 15
-
 layout:
 
   Media:
