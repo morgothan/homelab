@@ -248,7 +248,7 @@ function html(initial) {
       <span>&#128266; CLICK TO UNMUTE</span>
       <small>[ sound required for full experience ]</small>
     </div>
-    <video id="vid" playsinline autoplay muted loop>
+    <video id="vid" playsinline autoplay muted>
       <source src="/${initial}" type="video/mp4">
     </video>
   </div>
@@ -312,8 +312,7 @@ function html(initial) {
       }
     }
 
-    // Auto-advance when video ends (only if not looping — remove "loop" attr to enable)
-    // vid.addEventListener('ended', nextVideo);
+    vid.addEventListener('ended', nextVideo);
 
     nextBtn.addEventListener('click', nextVideo);
 
