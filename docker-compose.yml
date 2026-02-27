@@ -425,8 +425,6 @@ services:
       - OIDC_PROXMOX_CLIENT_SECRET
       - OIDC_SYNOLOGY_CLIENT_ID
       - OIDC_SYNOLOGY_CLIENT_SECRET
-      - OIDC_TANDOOR_CLIENT_ID
-      - OIDC_TANDOOR_CLIENT_SECRET
     secrets:
       - authelia_jwt_secret
       - authelia_storage_encryption_key
