@@ -182,3 +182,7 @@ docker-compose.override.yml
 .DS_Store
 *.swp
 *.swo
+
+
+# claude.md file
+CLAUDE.md
