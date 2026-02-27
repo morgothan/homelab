@@ -55,6 +55,9 @@ traefik/traefik.yml
 # Site configs (contain LAN hostnames and external domain names)
 traefik/configs/site-*.yml
 
+# Basic auth injection middleware (contains base64-encoded credentials)
+traefik/configs/middlewares-basicauth.yml
+
 # Traefik plugin cache (downloaded at runtime, owned by root)
 traefik/plugins/
 
