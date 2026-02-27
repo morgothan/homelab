@@ -804,7 +804,7 @@ services:
       #external access
       - traefik.http.routers.kopia-ui-http.entrypoints=https
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
-      - traefik.http.routers.kopia-ui-http.middlewares=chain-authelia@file
+      - traefik.http.routers.kopia-ui-http.middlewares=chain-authelia@file,kopia-auth@file
 #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
