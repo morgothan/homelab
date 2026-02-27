@@ -1,0 +1,94 @@
+api:
+  dashboard: true
+
+entryPoints:
+  tcp_nut:
+    address: ":3493"
+
+  tcp_redis:
+    address: ":6379"
+
+  http:
+    address: ":80"
+    forwardedHeaders:
+      trustedIPs:
+        - 127.0.0.1/32
+        - 192.168.0.0/16
+        - 172.16.0.0/12
+  https:
+    address: ":443"
+    http:
+      tls:
+       certResolver: letsencrypt
+    forwardedHeaders:
+      trustedIPs:
+        - 127.0.0.1/32
+        - 192.168.0.0/16
+        - 172.16.0.0/12
+  metrics:
+    address: ":8082"
+
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    defaultRule: "Host(`{{ index .Labels \"com.docker.compose.service\"}}.yourdomain.com`)"
+    network: proxy
+  file:
+    directory: "/configs"
+    watch: true
+  redis:
+    endpoints:
+      - "redis:6379"
+    db: 1
+
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      email: you@example.com
+      storage: acme.json
+      dnsChallenge:
+        provider: cloudflare
+        resolvers:
+          - "1.1.1.1:53"
+          - "1.0.0.1:53"
+
+serversTransport:
+  insecureSkipVerify: true
+
+accessLog:
+  filePath: "/logs/access.log"
+  format: json
+  filters:
+    statusCodes:
+      - "200"
+      - "400-599"
+  bufferingSize: 100
+  fields:
+    headers:
+      defaultMode: drop
+      names:
+        User-Agent: keep
+
+log:
+  level: WARN
+
+metrics:
+  prometheus:
+    addRoutersLabels: true
+    entryPoint: metrics
+
+experimental:
+  otlpLogs: true
+  plugins:
+    traefik-modsecurity-plugin:
+      moduleName: "github.com/madebymode/traefik-modsecurity-plugin"
+      version: "v1.6.0"
+    real-ip:
+      moduleName: github.com/Paxxs/traefik-get-real-ip
+      version: "v1.0.3"
+    geoblock:
+      moduleName: "github.com/PascalMinder/geoblock"
+      version: "v0.3.2"

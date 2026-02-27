@@ -1,0 +1,915 @@
+x-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "1m"
+    max-file: "1"
+    tag: "{{.Name}}"
+
+services:
+########## CloudFlare tunnel
+  tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: cf_tunnel
+    restart: unless-stopped
+    logging: *logging
+    command: tunnel run 
+    environment:
+      - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
+      - TUNNEL_LOGLEVEL=info
+      - TUNNEL_METRICS=0.0.0.0:60123 
+    networks:
+      #- cftunnel-transport
+      - ${DOCKERNET}
+        
+######## Traefik reverse proxy 
+  traefik:
+    image: traefik:latest
+    container_name: traefik
+    restart: always
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+      #- cftunnel-transport
+    ports:
+      - 80:80
+      - 443:443
+      - 8082:8082
+      - 3493:3493
+      - 6379:6379
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKERDIR}/traefik/traefik.yml:/traefik.yml:ro
+      - ${DOCKERDIR}/traefik/ban.html:/ban.html:ro
+      - ${DOCKERDIR}/traefik/configs:/configs:ro
+      - ${DOCKERDIR}/traefik/plugins:/plugins-storage:rw
+      - ${DOCKERDIR}/traefik/acme.json/acme.json:/acme.json:rw
+      - ${DOCKERDIR}/traefik/logs:/logs:rw
+        #      - ${DOCKERDIR}/.htpasswd:/.htpasswd:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      #  - TZ=America/New_York
+      #- CF_DNS_API_TOKEN=${CFAPI}
+      - CF_API_EMAIL=${CF_API_EMAIL}
+      - CF_DNS_API_TOKEN=${CF_DNS_API_TOKEN}
+    command:
+      - --serverstransport.insecureskipverify=true
+        #      - --experimental.plugins.traefik-modsecurity-plugin.modulename=github.com/acouvreur/traefik-modsecurity-plugin
+        #      - --experimental.plugins.traefik-modsecurity-plugin.version=v1.3.0        
+        #      - --providers.docker=true        
+    read_only: true
+    security_opt:
+      - no-new-privileges=true
+    labels:
+      - traefik.enable=true
+        # externall access
+        #- traefik.http.routers.traefik-http.entrypoints=http
+        #- traefik.http.routers.traefik-http.rule=Host(`traefik.${DOMAIN}`)
+        #- traefik.http.routers.traefik-http.middlewares=chain-authelia@file
+        #- traefik.http.routers.traefik-http.service=api@internal
+        # local access
+      - traefik.http.routers.traefik-http-local.entrypoints=http
+      - traefik.http.routers.traefik-http-local.rule=Host(`traefik.${LOCAL}`)
+      - traefik.http.routers.traefik-http-local.service=api@internal
+        # https access
+      - traefik.http.routers.traefik-https.entrypoints=https
+      - traefik.http.routers.traefik-https.rule=Host(`traefik.${DOMAIN}`)
+      - traefik.http.routers.traefik-https.middlewares=chain-authelia@file
+      - traefik.http.routers.traefik-https.service=api@internal
+      - traefik.http.routers.traefik-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.traefik-https.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.traefik-https.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.routers.traefik-https.tls.domains[1].main=${PUBLIC}
+      - traefik.http.routers.traefik-https.tls.domains[1].sans=*.${PUBLIC}
+      - traefik.http.routers.traefik-https.tls.domains[2].main=${HEYSHUTUP}
+      - traefik.http.routers.traefik-https.tls.domains[2].sans=*.${HEYSHUTUP}
+        #      - traefik.http.routers.traefik-https.tls2.certresolver=http
+        #      - traefik.http.routers.traefik-https.tls2.domains[0].main=${PUBLIC}
+        #      - traefik.http.routers.traefik-https.tls2.domains[0].sans=*.${PUBLIC}
+  # error page handler
+  error-pages:
+    volumes:
+      - ${DOCKERDIR}/error-pages:/var/www/
+    image: busybox:latest
+    container_name: error-pages
+    command: httpd -f -h /var/www/
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+        #      - traefik.http.routers.error-pages-https.entrypoints=https
+        #      - traefik.http.routers.error-pages-https.rule=Host(`error-pages`)
+      - traefik.http.services.error-pages.loadbalancer.server.port=80
+  # Nginx server with OWASP CRS (Core Rule Set) rules
+  waf:
+    container_name: waf
+      #image: owasp/modsecurity-crs:nginx-alpine
+    image: owasp/modsecurity-crs:nginx-alpine
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      - PARANOIA=1
+      - ANOMALY_INBOUND=10
+      - ANOMALY_OUTBOUND=5
+      - BACKEND=http://dummy
+      - REPORTING_LEVEL=2
+      - MODSEC_AUDIT_LOG_FORMAT=JSON
+      - MODSEC_RULE_ENGINE=On
+      - UID=1000
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/waf_logs:/var/log/nginx:rw
+
+  # Dummy service that always returns status HTTP 200 to WAF container
+  dummy:
+    container_name: dummy
+    image: traefik/whoami:latest
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+      #external access  
+      - traefik.http.routers.whoami-http.entrypoints=https
+      - traefik.http.routers.whoami-http.rule=Host(`whoami.${DOMAIN}`)
+      - traefik.http.routers.whoami-http.middlewares=chain-authelia@file
+        #      - traefik.http.routers.whoami-http.middlewares=waf@file
+      - traefik.http.routers.whoami-http.service=whoami
+      #local access
+      - traefik.http.routers.whoami-http-local.entrypoints=http
+      - traefik.http.routers.whoami-http-local.rule=Host(`whoami.${LOCAL}`)
+      - traefik.http.routers.whoami-http-local.service=whoami
+  
+      - traefik.http.services.whoami.loadbalancer.server.port=80
+
+######## Homepage ###############
+  homepage:
+    image: ghcr.io/gethomepage/homepage:latest
+    container_name: homepage
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - ${DOCKERDIR}/homepage:/app/config # Make sure your local config directory exists
+      - /var/run/docker.sock:/var/run/docker.sock:ro # (optional) For docker integrations, see alternative methods
+      - ${DOCKERDIR}/homepage/images:/app/public/images
+      - ${DOCKERDIR}/homepage/icons:/app/public/icons
+    environment:
+      - HOMEPAGE_ALLOWED_HOSTS=home.${DOMAIN},homepage.${DOMAIN}
+    restart: unless-stopped
+    logging: *logging
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.homepage-http.entrypoints=https
+      - traefik.http.routers.homepage-http.rule=Host(`home.${DOMAIN}`)
+        #- traefik.http.routers.heimdall-http.middlewares=chain-oauth@file
+      - traefik.http.routers.homepage-http.middlewares=chain-authelia@file
+        #      - traefik.http.routers.heimdall-http.middlewares=modsecurity@file
+      - traefik.http.routers.homepage-http.service=homepage
+      - traefik.http.services.homepage.loadbalancer.server.port=3000
+      
+################ portainer maintain docker images
+  portainer:
+    image: portainer/portainer-ce:latest
+    command: -H unix:///var/run/docker.sock
+    container_name: portainer
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - portainer_data:/data
+    networks:
+      - ${DOCKERNET}
+    labels:
+      # Frontend
+      - traefik.enable=true
+      - traefik.http.routers.frontend.entrypoints=https
+      - traefik.http.routers.frontend.rule=Host(`portainer.${DOMAIN}`)
+      - traefik.http.routers.frontend.middlewares=chain-authelia-nowaf@file
+        #- traefik.http.routers.frontend.middlewares=chain-oauth@file
+      - traefik.http.routers.frontend.service=frontend
+      - traefik.http.services.frontend.loadbalancer.server.port=9000
+
+
+####################### prometheus         
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.retention.time=30d'
+    networks:
+      - ${DOCKERNET}
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ${DOCKERDIR}/prometheus/etc:/etc/prometheus
+      - prometheus_data:/prometheus
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    labels:
+      - traefik.enable=true
+        #external access  
+      - traefik.http.routers.prometheus-http.entrypoints=https
+      - traefik.http.routers.prometheus-http.rule=Host(`prometheus.${DOMAIN}`)
+      - traefik.http.routers.prometheus-http.middlewares=chain-authelia@file
+        #- traefik.http.routers.influx2-http.middlewares=chain-oauth@file
+      - traefik.http.routers.prometheus-http.service=prometheus
+      - traefik.http.services.prometheus.loadbalancer.server.port=9090
+        #local access
+      - traefik.http.routers.prometheus-http-local.entrypoints=http
+      - traefik.http.routers.prometheus-http-local.rule=Host(`prometheus.${LOCAL}`)
+      - traefik.http.routers.prometheus-http-local.service=prometheus
+
+
+
+######################### Grafana
+  grafana:
+    image: grafana/grafana:latest
+    restart: unless-stopped
+    logging: *logging
+    container_name: grafana
+    networks:
+      - ${DOCKERNET}
+        #    ports:
+        # - '3000:3000'
+    volumes:
+      - grafana-storage:/var/lib/grafana
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    depends_on:
+      #      - influxdb
+      #      - influxdb2
+      - prometheus
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - GF_INSTALL_PLUGINS=grafana-clock-panel,natel-discrete-panel,grafana-piechart-panel
+      - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
+      - GF_PUBLIC_DASHBOARDS_ENABLED=false
+      - GF_FEATURE_TOGGLES_PUBLIC_DASHBOARDS=true
+    labels:
+      - traefik.enable=true
+        #external access  
+      - traefik.http.routers.grafana-http.entrypoints=https
+      - traefik.http.routers.grafana-http.rule=Host(`grafana.${DOMAIN}`)
+      - traefik.http.routers.grafana-http.middlewares=chain-authelia-nowaf@file
+        #- traefik.http.routers.grafana-http.middlewares=chain-oauth@file
+      - traefik.http.routers.grafana-http.service=grafana
+      - traefik.http.services.grafana.loadbalancer.server.port=3000
+        #local access
+      - traefik.http.routers.grafana-http-local.entrypoints=http
+      - traefik.http.routers.grafana-http-local.rule=Host(`grafana.${LOCAL}`)
+      - traefik.http.routers.grafana-http-local.service=grafana
+
+####### Promtail #########
+  promtail:
+    command: -config.file=/etc/promtail/promtail-config.yml
+    container_name: promtail
+    image: grafana/promtail:latest
+    networks:
+      - ${DOCKERNET}
+        #    ports:
+        #      - "1514:1514"
+        #      - "9080:9080"
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ${DOCKERDIR}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+
+
+################### Unifi Poller        
+  unifi-poller:
+    restart: unless-stopped
+    logging: *logging
+    container_name: unifi-poller
+    image: ghcr.io/unpoller/unpoller:${POLLER_TAG}
+    depends_on:
+      - grafana
+        #      - influxdb
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - UP_INFLUXDB_DISABLE=true
+      - UP_UNIFI_DEFAULT_USER=${UNIFI_USER}
+      - UP_UNIFI_DEFAULT_PASS=${UNIFI_PASS}
+      - UP_UNIFI_DEFAULT_URL=${UNIFI_URL}
+      - UP_POLLER_DEBUG=${POLLER_DEBUG}
+      - UP_UNIFI_DEFAULT_SAVE_DPI=${POLLER_SAVE_DPI}
+      - UP_LOKI_DISABLE=false
+      - UP_LOKI_URL=http://logger.${LOCAL}:3100
+
+  
+        
+########################## dozzle docker logs
+  dozzle:
+    image: amir20/dozzle:latest
+    container_name: dozzle
+    networks:
+      - ${DOCKERNET}
+    environment:
+      - DOZZLE_REMOTE_AGENT=sketchy-nas.${LOCAL}:7007,beszel.${LOCAL}:7007,whisper.iot.${LOCAL}:7007,smsf.${LOCAL}:7007
+      - DOZZLE_AUTH_PROVIDER=forward-proxy
+        #DOZZLE_AUTH_PROVIDER: simple
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/dozzle:/data
+      - /var/run/docker.sock:/var/run/docker.sock
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.dozzle-http.entrypoints=https
+      - traefik.http.routers.dozzle-http.rule=Host(`dozzle.${DOMAIN}`)
+        #- traefik.http.routers.dozzle-http.middlewares=chain-authelia@file
+      - traefik.http.routers.dozzle-http.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.dozzle-http.service=dozzle
+      - traefik.http.services.dozzle.loadbalancer.server.port=8080
+    expose:
+      - 8080
+    restart: unless-stopped
+    logging: *logging
+
+############################ tautulli (Plex Metrics)
+  tautulli:
+    image: ghcr.io/tautulli/tautulli
+    container_name: tautulli
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ${DOCKERDIR}/tautulli:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+        #ports:
+        #- 8181:8181
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tautulli-http.entrypoints=https
+      - traefik.http.routers.tautulli-http.rule=Host(`tautulli.${DOMAIN}`)
+      - traefik.http.routers.tautulli-http.middlewares=chain-authelia@file
+        #- traefik.http.routers.tautulli-http.middlewares=chain-oauth@file
+      - traefik.http.routers.tautulli-http.service=tautulli
+      - traefik.http.services.tautulli.loadbalancer.server.port=8181
+        #local access
+      - traefik.http.routers.tautulli-http-local.entrypoints=http
+      - traefik.http.routers.tautulli-http-local.rule=Host(`tautulli.${LOCAL}`)
+      - traefik.http.routers.tautulli-http-local.service=tautulli
+
+####################### Authelia (Lite) - Self-Hosted Single Sign-On and Two-Factor Authentication
+  authelia:
+    container_name: authelia
+    image: authelia/authelia:latest
+    depends_on:
+      redis:
+        condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging: *logging
+    # profiles: ["core", "all"]
+    networks:
+      - ${DOCKERNET}
+    # ports:
+    #   - "9091:9091"
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/authelia:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+      - DOMAIN
+      - LOCAL
+      - X_AUTHELIA_CONFIG_FILTERS=template
+      - AUTHELIA_IDENTITY_VALIDATION_RESET_PASSWORD_JWT_SECRET_FILE=/run/secrets/authelia_jwt_secret
+      - AUTHELIA_SESSION_SECRET_FILE=/run/secrets/authelia_session_secret
+      - AUTHELIA_STORAGE_ENCRYPTION_KEY_FILE=/run/secrets/authelia_storage_encryption_key
+      - AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE=/run/secrets/authelia_smtp_password
+      - AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE=/run/secrets/authelia_oidc_hmac_secret
+      # OIDC client IDs and secret hashes (referenced via {{ env }} in authelia/configuration.yml)
+      - OIDC_BESZEL_CLIENT_ID
+      - OIDC_BESZEL_CLIENT_SECRET
+      - OIDC_CLOUDFLARE_CLIENT_ID
+      - OIDC_CLOUDFLARE_CLIENT_SECRET
+      - OIDC_DOCMOST_CLIENT_ID
+      - OIDC_DOCMOST_CLIENT_SECRET
+      - OIDC_GRAFANA_CLIENT_ID
+      - OIDC_GRAFANA_CLIENT_SECRET
+      - OIDC_GUACAMOLE_CLIENT_ID
+      - OIDC_GUACAMOLE_CLIENT_SECRET
+      - OIDC_IMMICH_CLIENT_ID
+      - OIDC_IMMICH_CLIENT_SECRET
+      - OIDC_MEALIE_CLIENT_ID
+      - OIDC_MEALIE_CLIENT_SECRET
+      - OIDC_OPENWEBUI_CLIENT_ID
+      - OIDC_OPENWEBUI_CLIENT_SECRET
+      - OIDC_OUTLINE_CLIENT_ID
+      - OIDC_OUTLINE_CLIENT_SECRET
+      - OIDC_PORTAINER_CLIENT_ID
+      - OIDC_PORTAINER_CLIENT_SECRET
+      - OIDC_PROXMOX_CLIENT_ID
+      - OIDC_PROXMOX_CLIENT_SECRET
+      - OIDC_SYNOLOGY_CLIENT_ID
+      - OIDC_SYNOLOGY_CLIENT_SECRET
+      - OIDC_TANDOOR_CLIENT_ID
+      - OIDC_TANDOOR_CLIENT_SECRET
+    secrets:
+      - authelia_jwt_secret
+      - authelia_storage_encryption_key
+      - authelia_session_secret
+      - authelia_smtp_password
+      - authelia_oidc_hmac_secret
+    labels:
+      - traefik.enable=true
+      ## HTTP Routers
+      - traefik.http.routers.authelia-rtr.entrypoints=https
+      - traefik.http.routers.authelia-rtr.rule=Host(`authelia.${DOMAIN}`)
+      ## Middlewares
+      - traefik.http.routers.authelia-rtr.middlewares=chain-no-auth-no-cs@file # Should be chain-no-auth and not chain-authelia
+      ## HTTP Services
+      - traefik.http.routers.authelia-rtr.service=authelia-svc
+      - traefik.http.services.authelia-svc.loadbalancer.server.port=9091        
+
+####################### adguard exporter
+  adguard-exporter:
+    container_name: adguard_exporter
+    image: ghcr.io/henrywhitaker3/adguard-exporter:latest
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    environment:
+      - ADGUARD_SERVERS=http://dns.${LOCAL},http://dns.kids.${LOCAL}
+      - ADGUARD_USERNAMES=admin,admin
+      - ADGUARD_PASSWORDS=${ADGUARD_PASSWORDS}
+      - INTERVAL=15s
+######################### tdarr exporter
+  tdarr-exporter:
+    image: homeylab/tdarr-exporter:latest
+    container_name: tdarr-exporter
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      - TDARR_URL=http://smsf.${LOCAL}:30088
+      - HTTP_MAX_CONCURRENCY=10
+    networks:
+      - ${DOCKERNET}
+
+
+####################### proxmox ve exporter
+  pve-exporter:
+    init: true
+    container_name: pve-exporter
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
+    image: prompve/prometheus-pve-exporter:latest
+
+####### Smokeping style exporter #######
+  smokeping-prober:
+    restart: unless-stopped
+    logging: *logging
+    container_name: smokeping-prober
+    image: quay.io/superq/smokeping-prober:latest
+    networks:
+      - ${DOCKERNET}
+        #ports:
+        #    - 9374:9374
+    privileged: true
+    environment:
+      - GOMAXPROCS=1
+    volumes:
+      - ${DOCKERDIR}/smoke/config.yml:/config.yml
+    command: --config.file=/config.yml
+
+###### Redis #######
+  redis:
+    image: redis:latest
+      #image: docker.io/valkey/valkey:latest
+    container_name: redis
+    healthcheck:
+      test: [ "CMD", "redis-cli", "--raw", "incr", "ping" ]
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/redis:/data
+    networks:
+      - ${DOCKERNET}
+        #    expose:
+        #      - 6379
+    restart: unless-stopped
+    logging: *logging
+    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    environment:
+      - PUID=1000
+      - PGID=1000
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.redis-tcp.entrypoints=tcp_redis
+      - traefik.tcp.routers.redis-tcp.rule=ClientIP(`192.168.0.0/16`)
+      - traefik.tcp.routers.redis-tcp.service=redis
+      - traefik.tcp.services.redis.loadbalancer.server.port=6379
+
+
+###### Redis exporter #####
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    depends_on:
+      - redis
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    command:
+      - '--redis.addr=redis://redis:6379'
+
+####### Guacamole ########       
+  guacamole:
+    container_name: guacamole
+    image: jwetzell/guacamole:latest
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/guac:/config
+      - /usr/share/fonts:/usr/share/fonts
+      - /etc/fonts:/etc/fonts
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    environment:
+      - EXTENSIONS=auth-sso-openid
+      - LOG_LEVEL=debug
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.guac-http.entrypoints=https
+      - traefik.http.routers.guac-http.rule=Host(`guac.${DOMAIN}`)
+      # 1. Define the Middleware (ensure X-Forwarded-Proto is passed)
+      - traefik.http.middlewares.guac-headers.headers.customrequestheaders.X-Forwarded-Proto=https
+#      - traefik.http.routers.guac-http.middlewares=chain-authelia@file
+      - traefik.http.routers.guac-http.middlewares=guac-headers,chain-authelia@file
+      - traefik.http.routers.guac-http.service=guac
+      - traefik.http.services.guac.loadbalancer.server.port=8080
+        
+#############3 Gotify Notifications #######3        
+  gotify:
+    image: gotify/server:latest
+    restart: unless-stopped
+    logging: *logging
+    container_name: gotify
+    networks:
+      - ${DOCKERNET}
+      #    ports:
+      #      - 80:80
+    environment:
+      - GOTIFY_DEFAULTUSER_PASS=${GOTIFY_DEFAULTUSER_PASS}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/gotify:/app/data
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.gotify-http.entrypoints=https
+      - traefik.http.routers.gotify-http.rule=Host(`gotify.${DOMAIN}`)
+      - traefik.http.routers.gotify-http.middlewares=chain-authelia@file
+      - traefik.http.routers.gotify-http.service=gotify
+      - traefik.http.services.gotify.loadbalancer.server.port=80
+        #local access
+      - traefik.http.routers.gotify-http-local.entrypoints=http
+      - traefik.http.routers.gotify-http-local.rule=Host(`gotify.${LOCAL}`)
+      - traefik.http.routers.gotify-http-local.service=gotify
+
+
+############ dium notify of updated docker images        
+  diun:
+    image: crazymax/diun:latest
+    container_name: diun
+    command: serve
+    volumes:
+      - "${DOCKERDIR}/data:/data"
+      - "/home/nat/.docker/config.json:/root/.docker/config.json:ro"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      - "DIUN_WATCH_WORKERS=20"
+      - "DIUN_WATCH_SCHEDULE=0 */6 * * *"
+      - "DIUN_WATCH_JITTER=30s"
+      - "DIUN_PROVIDERS_DOCKER=true"
+      - "DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true"
+      - "DIUN_NOTIF_GOTIFY_ENDPOINT=http://gotify"
+      - "DIUN_NOTIF_GOTIFY_TOKEN=${DIUN_GOTIFY_TOKEN}"
+      - "DIUN_NOTIF_GOTIFY_PRIORITY=1"
+      - "DIUN_NOTIF_GOTIFY_TIMEOUT=10s"
+    labels:
+      - "diun.enable=true"
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+
+########### NUT (Network UPS Tool) ##########
+  nut:
+    container_name: nut
+    image: instantlinux/nut-upsd:latest
+    restart: unless-stopped
+    logging: *logging
+    networks: 
+      - ${DOCKERNET}
+        #ports: 
+        # - 3493
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/nut:/etc/nut
+    labels:
+      - traefik.enable=true
+      - traefik.tcp.routers.nut-tcp.entrypoints=tcp_nut
+      - traefik.tcp.routers.nut-tcp.rule=ClientIP(`192.168.0.0/16`)
+      - traefik.tcp.routers.nut-tcp.service=nut
+      - traefik.tcp.services.nut.loadbalancer.server.port=3493
+
+
+########### NUT (Network UPS Tool) exporter #########
+  nut-exporter:
+    container_name: nut-exporter
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - nut
+    networks:
+      - ${DOCKERNET}
+        #ports:
+        # - "9995:9995/tcp"
+    image: hon95/prometheus-nut-exporter:latest
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    environment:
+      - HTTP_PATH=/metrics
+      - RUST_LOG=info
+      - HTTP_PORT=9995
+      - HTTP_PATH=/nut
+      - LOG_REQUESTS_CONSOLE=false
+      - PRINT_METRICS_AND_EXIT=false
+
+############### Overseerr (add content to plex via radarr/sonarr) ######
+  overseerr:
+#    image: sctx/overseerr:latest
+    image: ghcr.io/seerr-team/seerr:latest
+    init: true
+    container_name: overseerr
+    environment:
+      - LOG_LEVEL=debug
+      - PORT=5055 #optional
+    networks:
+      - ${DOCKERNET}
+#    ports:
+#      - 5055:5055
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/jellyseerr:/app/config
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: wget --no-verbose --tries=1 --spider http://localhost:5055/api/v1/status || exit 1
+      start_period: 20s
+      timeout: 3s
+      interval: 15s
+      retries: 3
+
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.overseerr-http.entrypoints=https
+      - traefik.http.routers.overseerr-http.rule=Host(`overseerr.${DOMAIN}`)
+      - traefik.http.routers.overseerr-http.middlewares=chain-authelia@file
+      - traefik.http.routers.overseerr-http.service=overseerr
+      - traefik.http.services.overseerr.loadbalancer.server.port=5055
+        #local access
+      - traefik.http.routers.overseerr-http-local.entrypoints=http
+      - traefik.http.routers.overseerr-http-local.rule=Host(`overseerr.${LOCAL}`)
+      - traefik.http.routers.overseerr-http-local.service=overseerr
+
+
+################ beszel monitoring agent ################
+  beszel-agent:
+    image: henrygd/beszel-agent:latest
+    container_name: "beszel-agent"
+    restart: unless-stopped
+    logging: *logging
+    network_mode: host
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      # monitor other disks / partitions by mounting a folder in /extra-filesystems
+      # - /mnt/disk/.beszel:/extra-filesystems/sda1:ro
+    environment:
+      - PORT=45876
+      - KEY=ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP8RIrxvJtdqYq+V+oU+2vdgYupX6vcN1r2I32UGzX8s
+
+
+
+  postgres:
+    image: postgres:17
+    container_name: "postgres"
+    restart: unless-stopped
+    logging: *logging
+    env_file: .env
+    networks:
+      - ${DOCKERNET} 
+    # ports "5432"
+    volumes:
+      - ${DOCKERDIR}/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD", "pg_isready", "-d", "${PGDB}", "-U", "${PGUSER}"]
+      interval: 30s
+      timeout: 20s
+      retries: 3
+    environment:
+      - POSTGRES_USER=${PGUSER}
+      - POSTGRES_PASSWORD=${PGPASS}
+      - POSTGRES_DB=${PGDB}
+
+  postgres-exporter:
+    image: quay.io/prometheuscommunity/postgres-exporter:latest
+    container_name: "postgres_exporter"
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: 
+      - ${DOCKERNET}
+    environment:
+      - DATA_SOURCE_URI=postgres:5432/postgres?sslmode=disable
+      - DATA_SOURCE_USER=${PGUSER}
+      - DATA_SOURCE_PASS=${PGPASS}
+
+########## HeyShutUp Node.js site
+  heyshutup:
+    container_name: "heyshutup"
+    image: "node:alpine"
+    restart: unless-stopped
+    logging: *logging
+    user: "node"
+    working_dir: /home/node/app
+    environment:
+      - NODE_ENV=production
+    volumes:
+      - ${DOCKERDIR}/heyshutup/:/home/node/app
+    networks:
+      - ${DOCKERNET} 
+    command: "npm start"
+    labels:
+      - traefik.enable=true
+      #external access  
+      - traefik.http.routers.heyshutup-http.entrypoints=https
+      - traefik.http.routers.heyshutup-http.rule=Host(`${HEYSHUTUP}`)
+      - traefik.http.routers.heyshutup-http.middlewares=chain-no-auth@file
+        #      - traefik.http.routers.whoami-http.middlewares=waf@file
+      - traefik.http.routers.heyshutup-http.service=heyshutup
+      - traefik.http.services.heyshutup.loadbalancer.server.port=3000
+
+##### SCRAPARR prometheus data for *arr apps ###########
+  scraparr:
+    image: ghcr.io/thecfu/scraparr
+    container_name: scraparr
+    restart: unless-stopped
+    logging: *logging
+    networks: 
+      - ${DOCKERNET} 
+    volumes:
+      - ${DOCKERDIR}/scraparr/config.yaml:/scraparr/config/config.yaml
+####### nzbget prometheus data #########
+  nzbget_exporter:
+    image: frebib/nzbget-exporter
+    tty: true
+    container_name: nzbget_exporter
+    restart: unless-stopped
+    logging: *logging
+    networks: 
+      - ${DOCKERNET} 
+    environment:
+    - NZBGET_HOST=http://smsf.${LOCAL}:6789
+    - NZBGET_USERNAME=nzbget
+    - NZBGET_PASSWORD=${NZBGET_PASSWORD}
+
+########## Kopia Backup WebUI #######
+  kopia-ui:
+    image: kopia/kopia:latest
+    container_name: kopia-webui
+    restart: unless-stopped
+    logging: *logging
+    #ports:
+    #  - "5151:5151"
+    networks:
+      - ${DOCKERNET} 
+    volumes:
+      - ${DOCKERDIR}/kopia/config:/app/config
+      - ${DOCKERDIR}/kopia/cache:/app/cache
+      - /root/.config/rclone/rclone.conf:/app/rclone/rclone.conf:ro
+    command:
+      - server
+      - start
+      - --address=0.0.0.0:5151
+      - --config-file=/app/config/repository.config
+      - --cache-directory=/app/cache
+      - --disable-csrf-token-checks
+      - --server-username=${KOPIA_USER}
+      - --server-password=${KOPIA_PASS}
+      - --password=${KOPIA_REPO_PW}
+      - --insecure
+    labels:
+      - traefik.enable=true
+      #external access
+      - traefik.http.routers.kopia-ui-http.entrypoints=https
+      - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
+      - traefik.http.routers.kopia-ui-http.middlewares=chain-authelia@file
+#      - traefik.http.routers.whoami-http.middlewares=waf@file
+      - traefik.http.routers.kopia-ui-http.service=kopia-ui
+      - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
+
+  
+######### Mealie recipie #############
+  mealie:
+    image: ghcr.io/mealie-recipes/mealie:latest # 
+    container_name: mealie
+    restart: unless-stopped
+    logging: *logging
+    #ports:
+    #    - "9925:9000" # 
+    networks:
+      - ${DOCKERNET}
+    deploy:
+      resources:
+        limits:
+          memory: 1000M # 
+    volumes:
+      - ${DOCKERDIR}/mealie-data:/app/data/
+    environment:
+      - ALLOW_SIGNUP=false
+      - ALLOW_PASSWORD_LOGIN=false
+      - PUID=1000
+      - PGID=1000
+      - BASE_URL=https://mealie.${DOMAIN}
+      - OIDC_AUTH_ENABLED=true
+      - OIDC_SIGNUP_ENABLED=true
+      - OIDC_CONFIGURATION_URL=https://authelia.${DOMAIN}/.well-known/openid-configuration
+      - OIDC_CLIENT_ID=${MEALIE_OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${MEALIE_OIDC_CLIENT_SECRET}
+      - OIDC_AUTO_REDIRECT=false
+      - OIDC_ADMIN_GROUP=mealie-admins
+      - OIDC_USER_GROUP=mealie-users
+    labels:
+      - traefik.enable=true
+      #external access
+      - traefik.http.routers.mealie-http.entrypoints=https
+      - traefik.http.routers.mealie-http.rule=Host(`mealie.${DOMAIN}`)
+      - traefik.http.routers.mealie-http.middlewares=chain-authelia@file
+#      - traefik.http.routers.whoami-http.middlewares=waf@file
+      - traefik.http.routers.mealie-http.service=mealie
+      - traefik.http.services.mealie.loadbalancer.server.port=9000
+
+
+networks:
+  proxy:  #create with docker network create proxy
+    external: {}
+  cftunnel-transport:    
+
+secrets:
+  #  oauth_secrets:
+  #  file: oauth_secrets
+  authelia_jwt_secret:
+    file: ${DOCKERDIR}/authelia/secrets/authelia_jwt_secret
+  authelia_session_secret:
+    file: ${DOCKERDIR}/authelia/secrets/authelia_session_secret
+  authelia_storage_encryption_key:
+    file: ${DOCKERDIR}/authelia/secrets/authelia_storage_encryption_key
+  authelia_smtp_password:
+    file: ${DOCKERDIR}/authelia/secrets/authelia_smtp_password
+  authelia_oidc_hmac_secret:
+    file: ${DOCKERDIR}/authelia/secrets/authelia_oidc_hmac_secret
+
+volumes:
+  portainer_data:
+    #  influxdb_data:
+  prometheus_data:
+  grafana-storage:

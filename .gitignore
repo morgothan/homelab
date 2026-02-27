@@ -1,0 +1,184 @@
+# =============================================================================
+# SECRETS & CREDENTIALS
+# =============================================================================
+
+# Environment file (contains all real credentials)
+.env
+
+# Authelia secrets directory (JWT, session, storage, SMTP, HMAC, RSA key)
+authelia/secrets/
+
+# Authelia user database (contains email addresses and password hashes)
+authelia/users.yml
+
+# Proxmox exporter (contains API token)
+pve/pve.yml
+
+# Scraparr (contains *arr API keys)
+scraparr/config.yaml
+
+# Homepage services (contains API keys, JWT tokens for HA, Immich, Plex, etc.)
+homepage/services.yaml
+
+# NUT UPS daemon users (contains passwords)
+nut/upsd.users
+
+# Smokeping secrets
+smokeping/config/smokeping_secrets
+
+# Legacy OAuth credential files
+oauth_secrets
+secrets/
+gclient-info
+
+# Heimdall runtime data (app files, SSL certs, logs, nginx state)
+heimdall/www/
+heimdall/keys/
+heimdall/log/
+heimdall/nginx/
+heimdall/php/
+heimdall/.migrations
+
+# =============================================================================
+# TLS CERTIFICATES
+# =============================================================================
+
+traefik/acme.json
+
+# =============================================================================
+# TRAEFIK ENVIRONMENT-SPECIFIC CONFIG
+# =============================================================================
+
+# Static config (contains email address and domain defaultRule)
+traefik/traefik.yml
+
+# Site configs (contain LAN hostnames and external domain names)
+traefik/configs/site-*.yml
+
+# Traefik plugin cache (downloaded at runtime, owned by root)
+traefik/plugins/
+
+# CrowdSec runtime data (owned by root)
+crowdsec/
+
+# Smokeping runtime config and RRD data
+smokeping/config/
+
+# Docmost user uploads
+docmost/
+
+# heyshutup node_modules
+heyshutup/node_modules/
+
+# Misc runtime files
+resume-claude
+.htpasswd
+
+# =============================================================================
+# DATABASES
+# =============================================================================
+
+authelia/db.sqlite3
+*.sqlite3
+*.db
+
+# =============================================================================
+# LOGS
+# =============================================================================
+
+traefik/logs/
+authelia/log/
+waf_logs/
+crowdsec/log/
+
+# =============================================================================
+# RUNTIME DATA (service state, generated files, caches)
+# These contain runtime secrets, session data, or are too large for git
+# =============================================================================
+
+# Overseerr/Jellyseerr (settings.json contains Plex token)
+jellyseerr/
+
+# Mealie app data (contains .secret and .session_secret)
+mealie-data/
+
+# PostgreSQL data and backups
+postgres/
+postgres.backups/
+
+# Diun state
+data/
+
+# Kopia (config may contain rclone/repo credentials, cache is large)
+kopia/config/
+kopia/cache/
+
+# Redis data
+redis/
+
+# Tautulli (runtime config with API tokens)
+tautulli/
+
+# Gotify app data
+gotify/
+
+# Guacamole config (may contain connection passwords)
+guac/
+
+# Dozzle runtime data
+dozzle/
+
+# CrowdSec database
+crowdsec/crowdsec-db/
+
+# Outline runtime data
+outline/
+
+# Tandoor runtime data
+tandoor/
+tnadoor/
+
+# Homepage environment-specific config (contains LAN hostnames and API tokens)
+homepage/docker.yaml
+homepage/proxmox.yaml
+homepage/widgets.yaml
+
+# Homepage runtime data (icons cache, logs, temp)
+homepage/icons/
+homepage/logs/
+homepage/tmp/
+
+# =============================================================================
+# =============================================================================
+# MONITORING ENVIRONMENT-SPECIFIC CONFIG
+# =============================================================================
+
+# Prometheus (contains LAN hostnames for scrape targets)
+prometheus/etc/prometheus.yml
+
+# Promtail (contains LAN Loki endpoint)
+promtail/promtail-config.yml
+
+# Smokeping-prober (contains LAN hostnames to ping)
+smoke/config.yml
+
+# Smokeping Apache config (contains LAN hostname)
+smokeping/config/httpd.conf
+
+# =============================================================================
+# NODE.JS DEPENDENCIES
+# =============================================================================
+
+heyshutup/node_modules/
+
+# =============================================================================
+# MISC
+# =============================================================================
+
+# Docker compose override files (local customizations)
+docker-compose.override.yml
+
+# Editor files
+.DS_Store
+*.swp
+*.swo

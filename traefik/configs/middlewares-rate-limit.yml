@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    middlewares-rate-limit:
+      rateLimit:
+        average: 1000
+        burst: 2000

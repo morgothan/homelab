@@ -1,0 +1,426 @@
+###############################################################
+#                   Authelia configuration                    #
+###############################################################
+ 
+server:
+  address: tcp://0.0.0.0:9091/
+  buffers:
+    read: 4096
+    write: 4096
+  endpoints:
+    enable_pprof: false
+    enable_expvars: false
+  disable_healthcheck: false
+  tls:
+    key: ""
+    certificate: ""
+
+theme: oled
+
+# https://www.authelia.com/configuration/miscellaneous/logging/
+log:
+  level: info
+  format: text
+  file_path: /config/log/authelia.log
+  keep_stdout: true
+ 
+# https://www.authelia.com/configuration/second-factor/time-based-one-time-password/
+totp:
+  issuer: {{ env "DOMAIN" }}
+  period: 30
+  skew: 2
+ 
+# AUTHELIA_DUO_PLACEHOLDER
+ 
+# https://www.authelia.com/reference/guides/passwords/
+authentication_backend:
+  password_reset:
+    disable: false
+  refresh_interval: 5m
+  file:
+    path: /config/users.yml
+    password:
+      algorithm: argon2id
+      iterations: 1
+      salt_length: 16
+      parallelism: 4
+      memory: 128 # blocks this much of the RAM
+identity_validation:
+  reset_password:
+    jwt_lifespan: '5 minutes'
+ 
+# https://www.authelia.com/overview/authorization/access-control/
+access_control:
+  default_policy: deny
+  rules:
+    # - domain:
+    #     - "*.example.com"
+    #     - "example.com"
+    #   policy: bypass
+    #   networks: # bypass authentication for local networks
+    #     - 10.0.0.0/8
+    #     - 192.168.0.0/16
+    #     - 172.16.0.0/12
+    - domain:
+        - "*.{{ env "DOMAIN" }}"
+        - "{{ env "DOMAIN" }}"
+      policy: two_factor
+ 
+# https://www.authelia.com/configuration/session/introduction/
+session:
+  name: authelia_session
+  same_site: lax
+  expiration: 7d
+  inactivity: 2d
+  remember_me: 1M
+  cookies:
+    - domain: '{{ env "DOMAIN" }}'
+      authelia_url: 'https://authelia.{{ env "DOMAIN" }}'
+      default_redirection_url: 'https://home.{{ env "DOMAIN" }}'
+  # AUTHELIA_REDIS_PLACEHOLDER
+  redis:
+    host: redis
+    port: 6379
+ 
+# https://www.authelia.com/configuration/security/regulation/
+regulation:
+  max_retries: 3
+  find_time: 10m
+  ban_time: 12h
+   
+# https://www.authelia.com/configuration/storage/introduction/
+storage:
+  # For local storage, uncomment lines below and comment out mysql. https://docs.authelia.com/configuration/storage/sqlite.html
+  # This is good for the beginning. If you have a busy site then switch to other databases.
+  local:
+   path: /config/db.sqlite3
+ 
+# https://www.authelia.com/configuration/notifications/introduction/
+notifier:
+  disable_startup_check: true
+  # For testing purposes, notifications can be sent in a file. Be sure to map the volume in docker-compose.
+  #  filesystem:
+  #  filename: /config/notifications.txt
+  smtp:
+    username: 79d233001@smtp-brevo.com
+    # password loaded from AUTHELIA_NOTIFIER_SMTP_PASSWORD_FILE env var (see docker-compose.yml)
+      #    host: smtp-relay.brevo.com
+      #    port: 587 # Or 465
+    address: submission://smtp-relay.brevo.com:587
+    sender: Sketchy Authentication <authelia@{{ env "DOMAIN" }}>
+
+
+# https://www.authelia.com/configuration/telemetry/metrics/
+telemetry:
+  metrics:
+    enabled: true
+    address: 'tcp://:9959/metrics'
+    buffers:
+      read: 4096
+      write: 4096
+    timeouts:
+      read: '6s'
+      write: '6s'
+      idle: '30s'
+
+
+        # set up the jwts stuff first
+        
+identity_providers:
+  oidc:
+    # hmac_secret loaded from AUTHELIA_IDENTITY_PROVIDERS_OIDC_HMAC_SECRET_FILE env var (see docker-compose.yml)
+    jwks:
+      - key_id: 'authelia'
+        algorithm: 'RS256'
+        use: 'sig'
+        key: {{ secret "/config/secrets/private.pem" | mindent 10 "|" | msquote }}
+    enable_client_debug_messages: false
+    minimum_parameter_entropy: 8
+    enforce_pkce: 'public_clients_only'
+    enable_pkce_plain_challenge: false
+    enable_jwt_access_token_stateless_introspection: false
+    discovery_signed_response_alg: 'none'
+    discovery_signed_response_key_id: ''
+    require_pushed_authorization_requests: false
+    lifespans:
+      access_token: '1h'
+      authorize_code: '1m'
+      id_token: '1h'
+      refresh_token: '90m'
+    cors:
+      endpoints:
+        - 'authorization'
+        - 'token'
+        - 'revocation'
+        - 'introspection'
+      allowed_origins:
+        - 'https://grafana.{{ env "DOMAIN" }}'
+        - 'https://sketchy-nas.{{ env "DOMAIN" }}'
+        - 'https://guac.{{ env "DOMAIN" }}'
+      allowed_origins_from_client_redirect_uris: false
+
+    ## Added new stuff to restore prior claims parameters. https://www.authelia.com/integration/openid-connect/openid-connect-1.0-claims/#restore-functionality-prior-to-claims-parameter
+    claims_policies:
+      default:
+        id_token: ['groups', 'email', 'email_verified', 'alt_emails', 'preferred_username', 'name']
+    ## The other portions of the mandatory OpenID Connect 1.0 configuration go here.
+    ## See: https://www.authelia.com/c/oidc
+    clients:
+      # run twice, once to make random client_id and again for random client_secret
+      # docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 --random --random.length 64 --random.charset alphanumeric
+
+############ Grafana ##############      
+      - client_id: '{{ env "OIDC_GRAFANA_CLIENT_ID" }}'
+        client_name: 'Grafana'
+        client_secret: '{{ env "OIDC_GRAFANA_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://grafana.{{ env "DOMAIN" }}/login/generic_oauth'
+          - 'https://grafana.{{ env "DOMAIN" }}/api/v1/sso-settings/generic_oauth'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'groups'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_basic'
+          #        claims_policy: 'default'
+
+#SKETCHY-NAS
+      - client_id: '{{ env "OIDC_SYNOLOGY_CLIENT_ID" }}'
+        client_name: 'Synology DSM'
+        client_secret: '{{ env "OIDC_SYNOLOGY_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://sketchy-nas.{{ env "DOMAIN" }}/'
+          - 'https://sketchy-nas.{{ env "DOMAIN" }}/index.cgi?action=oidcauthurl&method=oidc'
+          - 'https://sketchy-nas.{{ env "DOMAIN" }}/#/signin'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'groups'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'
+          #        claims_policy: 'default'
+          
+#PORTAINER
+      - client_id: '{{ env "OIDC_PORTAINER_CLIENT_ID" }}'
+        client_name: 'Portainer'
+        client_secret: '{{ env "OIDC_PORTAINER_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://portainer.{{ env "DOMAIN" }}'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'groups'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+          #        claims_policy: 'default'
+
+#GUACAMOLE
+      - client_id: '{{ env "OIDC_GUACAMOLE_CLIENT_ID" }}'
+        client_name: 'guacamole'
+        client_secret: '{{ env "OIDC_GUACAMOLE_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: false
+        pkce_challenge_method: ''
+        redirect_uris:
+          - 'https://guac.{{ env "DOMAIN" }}'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'groups'
+          - 'email'
+        response_types:
+          - 'id_token'
+        grant_types:
+          - 'implicit'
+        userinfo_signed_response_alg: 'none'
+        claims_policy: 'default'  #needed since guac no longer works with the updated authelia oidc settings
+        token_endpoint_auth_method: 'client_secret_basic'
+
+####### Cloudflare Tunnel #########
+      - client_id: '{{ env "OIDC_CLOUDFLARE_CLIENT_ID" }}'
+        client_name: 'Cloudflare ZeroTrust'
+        client_secret: '{{ env "OIDC_CLOUDFLARE_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://morgothan.cloudflareaccess.com/cdn-cgi/access/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+          #        claims_policy: 'default'
+
+
+######## Proxmox ###############
+      - client_id: '{{ env "OIDC_PROXMOX_CLIENT_ID" }}'
+        client_name: 'proxmox'
+        client_secret: '{{ env "OIDC_PROXMOX_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://proxmox.{{ env "DOMAIN" }}'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+          #        claims_policy: 'default'
+
+######## docmost ###############
+      - client_id: '{{ env "OIDC_DOCMOST_CLIENT_ID" }}'
+        client_name: 'docmost'
+        client_secret: '{{ env "OIDC_DOCMOST_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://docmost.{{ env "DOMAIN" }}'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        claims_policy: 'default'
+          
+
+######### immich #################
+      - client_id: '{{ env "OIDC_IMMICH_CLIENT_ID" }}'
+        client_name: 'immich'
+        client_secret: '{{ env "OIDC_IMMICH_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://photos.{{ env "DOMAIN" }}/auth/login'
+          - 'http://photos.{{ env "LOCAL" }}:30041/auth/login'
+          - 'https://photos.{{ env "DOMAIN" }}/user-settings'
+          - 'http://photos.{{ env "LOCAL" }}:30041/user-settings'
+          - 'app.immich:///oauth-callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'       
+        claims_policy: 'default'
+        token_endpoint_auth_method: 'client_secret_post'  
+
+
+############ Beszel #####################
+
+      - client_id: '{{ env "OIDC_BESZEL_CLIENT_ID" }}'
+        client_name: 'beszel'
+        client_secret: '{{ env "OIDC_BESZEL_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://beszel.{{ env "DOMAIN" }}/api/oauth2-redirect'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'       
+        claims_policy: 'default'
+
+############ Open WebUI (Local ai) #####################
+
+      - client_id: '{{ env "OIDC_OPENWEBUI_CLIENT_ID" }}'
+        client_name: 'open_webui'
+        client_secret: '{{ env "OIDC_OPENWEBUI_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://ai.{{ env "DOMAIN" }}/oauth/oidc/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'
+        userinfo_signed_response_alg: 'RS256'       
+        claims_policy: 'default'
+
+############ outline #####################
+
+      - client_id: '{{ env "OIDC_OUTLINE_CLIENT_ID" }}'
+        client_name: 'outline'
+        client_secret: '{{ env "OIDC_OUTLINE_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        redirect_uris:
+          - 'https://outline.{{ env "DOMAIN" }}/auth/oidc.callback'
+          - 'https://docs.{{ env "DOMAIN" }}/auth/oidc.callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'
+          - 'offline_access'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+          - 'refresh_token'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'    
+        token_endpoint_auth_method: 'client_secret_post'   
+        claims_policy: 'default'
+        
+############ tandoor #####################
+      - client_id: '{{ env "OIDC_TANDOOR_CLIENT_ID" }}'
+        client_name: 'Tandoor'
+        client_secret: '{{ env "OIDC_TANDOOR_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: false
+        pkce_challenge_method: ''
+        redirect_uris:
+          - 'https://tandoor.{{ env "DOMAIN" }}/accounts/oidc/authelia/login/callback/'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_basic'
+        
+        
+        
+############ mealie #####################
+      - client_id: '{{ env "OIDC_MEALIE_CLIENT_ID" }}'
+        client_name: 'Mealie'
+        client_secret: '{{ env "OIDC_MEALIE_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://mealie.{{ env "DOMAIN" }}/login'
+        scopes:
+          - 'openid'
+          - 'email'
+          - 'profile'
+          - 'groups'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_basic'
