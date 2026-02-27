@@ -240,7 +240,7 @@ function html(initial) {
 
   <header>
     <h1>HEY SHUT UP!</h1>
-    <p class="subtitle">ytmnd.com circa 2005 &nbsp;|&nbsp; est. forever</p>
+    <p class="subtitle">heyshutup.com &nbsp;|&nbsp; est. forever</p>
   </header>
 
   <div class="stage" id="stage">
