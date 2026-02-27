@@ -1,0 +1,25 @@
+general:
+  # address: 0.0.0.0
+  # port: 7100
+  # path: /metrics
+
+auth:
+  # username: user
+  # password: pass
+  # token: token
+
+sonarr:
+  url: http://your-nas-ip:port
+  api_key: your_sonarr_api_key
+
+radarr:
+  url: http://your-nas-ip:port
+  api_key: your_radarr_api_key
+
+prowlarr:
+  url: http://your-nas-ip:port
+  api_key: your_prowlarr_api_key
+
+overseerr:
+  url: http://overseerr:5055
+  api_key: your_overseerr_api_key

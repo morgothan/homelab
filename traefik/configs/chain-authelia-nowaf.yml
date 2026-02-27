@@ -1,0 +1,12 @@
+http:
+  middlewares:
+    chain-authelia-nowaf:
+      chain:
+        middlewares:
+          - test-errors
+          - middlewares-rate-limit
+          - middlewares-secure-headers
+          - middlewares-authelia
+          - realip
+            #          - coraza-waf
+            #          - crowdsec

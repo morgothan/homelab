@@ -1,0 +1,14 @@
+#http:
+#  middlewares:
+#    crowdsec:
+#      plugin:
+#        crowdsec-waf:
+#          LogLevel: INFO
+#          CrowdsecLapiKey: "YOUR_CROWDSEC_LAPI_KEY"
+#          Enabled: true
+#          crowdsecAppsecEnabled: true
+#          crowdsecAppsecHost: crowdsec:7422
+#          crowdsecAppsecFailureBlock: true
+#          crowdsecAppsecUnreachableBlock: true
+#          ForwardedHeadersCustomName: X-Real-Ip
+#          banHTMLFilePath: /ban.html
