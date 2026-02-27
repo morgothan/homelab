@@ -1,8 +1,8 @@
 x-logging: &logging
   driver: "json-file"
   options:
-    max-size: "1m"
-    max-file: "1"
+    max-size: "10m"
+    max-file: "5"
     tag: "{{.Name}}"
 
 services:
@@ -515,7 +515,7 @@ services:
         #      - 6379
     restart: unless-stopped
     logging: *logging
-    command: ["redis-server", "--appendonly", "no", "--maxmemory-policy", "noeviction"]
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "everysec", "--maxmemory-policy", "noeviction"]
     environment:
       - PUID=1000
       - PGID=1000
@@ -548,15 +548,13 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/guac:/config
-      - /usr/share/fonts:/usr/share/fonts
-      - /etc/fonts:/etc/fonts
     restart: unless-stopped
     logging: *logging
     networks:
       - ${DOCKERNET}
     environment:
       - EXTENSIONS=auth-sso-openid
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=warn
     labels:
       - traefik.enable=true
       - traefik.http.routers.guac-http.entrypoints=https
@@ -675,7 +673,7 @@ services:
     init: true
     container_name: overseerr
     environment:
-      - LOG_LEVEL=debug
+      - LOG_LEVEL=warn
       - PORT=5055 #optional
     networks:
       - ${DOCKERNET}
