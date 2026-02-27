@@ -1,0 +1,11 @@
+---
+# Homepage Proxmox widget configuration
+# See: https://gethomepage.dev/widgets/services/proxmox/
+#
+# Generate API token in Proxmox: Datacenter → Permissions → API Tokens
+# Recommended: create a read-only user with PVEAuditor role
+
+pve:
+  url: https://proxmox.yourlocalname:8006
+  token: apiuser@pam!tokenname
+  secret: your-api-token-secret-uuid

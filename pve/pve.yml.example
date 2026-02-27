@@ -1,0 +1,5 @@
+default:
+  user: root@pam
+  token_name: "prometheus"
+  token_value: "your-proxmox-api-token-uuid-here"
+  verify_ssl: false

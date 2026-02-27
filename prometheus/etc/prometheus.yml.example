@@ -1,0 +1,116 @@
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+alerting:
+  alertmanagers:
+  - static_configs:
+    - targets: []
+    scheme: http
+    timeout: 10s
+    api_version: v2
+scrape_configs:
+- job_name: prometheus
+  honor_timestamps: true
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  metrics_path: /metrics
+  scheme: http
+  static_configs:
+  - targets:
+    - localhost:9090
+
+- job_name: 'unifipoller'
+  scrape_interval: 30s
+  static_configs:
+    - targets: ['unifi-poller:9130']
+
+- job_name: 'traefik-date'
+  scrape_interval: 30s
+  static_configs:
+    - targets: ['traefik:8082']
+
+- job_name: 'adguard-home'
+  scrape_interval: 15s
+  static_configs:
+    - targets: ['adguard_exporter:9618']
+
+- job_name: 'node'
+  scrape_interval: 15s
+  static_configs:
+    - targets: ['host1.yourlocalname:9100', 'host2.yourlocalname:9100']
+
+- job_name: 'authelia'
+  scrape_interval: 15s
+  static_configs:
+    - targets: ['authelia:9959']
+
+- job_name: redis_exporter
+  static_configs:
+    - targets: ['redis-exporter:9121']
+
+- job_name: 'smokeping-prober'
+  scrape_interval: 5s
+  static_configs:
+    - targets: ['smokeping-prober:9374']
+
+- job_name: "nut"
+  static_configs:
+    - targets: ["nut:3493"]
+  metrics_path: /nut
+  relabel_configs:
+    - source_labels: [__address__]
+      target_label: __param_target
+    - source_labels: [__param_target]
+      target_label: instance
+    - target_label: __address__
+      replacement: nut-exporter:9995
+
+- job_name: "pve"
+  static_configs:
+    - targets:
+      - proxmox.yourlocalname  # Proxmox host
+  metrics_path: /pve
+  params:
+    module: [default]
+    cluster: ['1']
+    node: ['1']
+  relabel_configs:
+    - source_labels: [__address__]
+      target_label: __param_target
+    - source_labels: [__param_target]
+      target_label: instance
+    - target_label: __address__
+      replacement: pve-exporter:9221
+
+- job_name: "unbound"
+  scrape_interval: 5s
+  static_configs:
+    - targets: ['dns.yourlocalname:9167']
+
+- job_name: "cloudflared"
+  static_configs:
+    - targets: ["tunnel:60123"]
+
+- job_name: 'postgres'
+  static_configs:
+    - targets: ["postgres-exporter:9187"]
+
+- job_name: 'scraparr'
+  static_configs:
+    - targets: ['scraparr:7100']
+
+- job_name: 'nzbget_exporter'
+  static_configs:
+    - targets: ['nzbget_exporter:9452']
+
+- job_name: 'netdata'
+  metrics_path: '/api/v1/allmetrics'
+  params:
+    format: [prometheus]
+  static_configs:
+    - targets: ['nas.yourlocalname:20489']
+
+- job_name: 'tdarr'
+  static_configs:
+    - targets: ['tdarr-exporter:9090']

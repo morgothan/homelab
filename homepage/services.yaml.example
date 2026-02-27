@@ -1,0 +1,13 @@
+# Copy to services.yaml and replace all API keys/tokens with real values.
+# This file is gitignored because it contains live API keys and tokens.
+#
+# Tokens needed:
+#   - Home Assistant: Long-lived access token from HA profile page
+#   - Immich: API key from Immich user settings
+#   - Kopia: Web UI password (KOPIA_PASS from .env)
+#   - Outline: API token from Outline settings
+#   - Mealie: Long-lived API token from Mealie user profile
+#   - Plex: Token from any Plex API call (https://www.plexopedia.com/plex-media-server/api/server/token/)
+#   - UniFi: Local API key from UniFi Network settings
+#
+# See https://gethomepage.dev/widgets/ for widget configuration docs.
