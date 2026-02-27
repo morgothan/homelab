@@ -1,0 +1,9 @@
+http:
+  middlewares:
+    test-errors:
+      errors:
+        status:
+          - "403"
+          - "404"
+        service: error-pages@docker
+        query: "/{status}.html"

@@ -1,0 +1,8 @@
+[admin]
+  password = your_strong_admin_password
+  actions = set fsd
+  instcmds = all
+
+[upsmon]
+  password = your_strong_monitor_password
+  upsmon primary

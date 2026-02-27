@@ -1,0 +1,44 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/info-widgets/
+
+- resources:
+    label: Local
+    cpu: true
+    memory: true
+    cputemp: true
+    disk:
+      - /
+
+- glances:
+    url: http://yourserver.yourlocalname:30015
+    version: 4
+    cpu: true
+    mem: true
+    cputemp: true
+    disk:
+      - /mnt
+    diskUnits: bytes
+    expanded: false
+    label: Server
+
+- unifi_console:
+    url: https://192.168.1.1
+    key: your_unifi_api_key   # Create in UniFi: Settings → Control Plane → API Keys
+
+- openmeteo:
+    label: Your City
+    latitude: 0.0000
+    longitude: 0.0000
+    units: imperial
+    cache: 5
+    format:
+      maximumFractionDigits: 1
+
+- datetime:
+    text_size: sm
+    format:
+      dateStyle: short
+      timeStyle: short
+      hour12: false
+      timezone: 'America/New_York'

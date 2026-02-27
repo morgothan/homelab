@@ -1,0 +1,13 @@
+http:
+  middlewares:
+    chain-no-auth-no-cs:
+      chain:
+        middlewares:
+          - test-errors
+          - realip
+          - geoblock-badies
+          - middlewares-rate-limit
+          - middlewares-secure-headers
+          - waf
+            #          - coraza-waf
+            #          - crowdsec

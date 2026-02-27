@@ -1,0 +1,12 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/docker/
+
+# Connect to local Docker socket
+local-docker:
+   socket: /var/run/docker.sock
+
+# Connect to remote Docker hosts via TCP (requires Docker daemon tcp socket enabled)
+# remote-host:
+#   host: hostname.yourlocalname
+#   port: 2375

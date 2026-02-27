@@ -1,0 +1,83 @@
+---
+# For configuration options and examples, please see:
+# https://gethomepage.dev/configs/settings/
+
+providers:
+  openweathermap: openweathermapapikey
+  weatherapi: YOUR_WEATHERAPI_KEY
+  cache: 15
+
+layout:
+
+  Media:
+    style: column
+    header: false
+    Media Player:
+      style: row
+      columns: 3
+      icon: mdi-play-circle
+    Media Aquisition:
+      style: row
+      columns: 3
+      icon: mdi-download
+  
+  Home Services:
+    style: row
+    columns: 4
+    header: true
+    icon: mdi-home
+  
+  Homelab Mgmt:
+    header: true
+    initiallyCollapsed: true
+    style: column
+    icon: mdi-server
+    Remote Access:
+      header: true
+      style: row
+      columns: 2
+      icon: mdi-remote-desktop
+    Infra:
+      header: true
+      style: row
+      columns: 5
+      icon: mdi-lan
+    Metrics/Logs:
+      header: true
+      style: row
+      columns: 5
+      icon: mdi-chart-box
+    Docker:
+      header: true
+      style: row
+      columns: 2
+      icon: mdi-docker
+    Storage:
+      header: true
+      style: row
+      columns: 2
+      icon: mdi-nas
+
+  Bookmarks:
+    style: row  # 'row' combined with 'columns' creates a horizontal bookmark bar
+    columns: 4
+
+fiveColumns: true
+
+useEqualHeights: true
+
+background: 
+  image: /images/Kraken.png
+#  blur: sm
+
+title: SketchyAsFuckIstan
+iconStyle: theme
+statusStyle: "dot"
+
+theme: dark
+
+color: gray  # Must be 'gray' for custom.css Dracula theme - it targets .theme-gray selector
+
+cardBlur: md
+
+headerStyle: boxedWidgets
