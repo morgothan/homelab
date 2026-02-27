@@ -280,23 +280,6 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
           #        claims_policy: 'default'
 
-######## docmost ###############
-      - client_id: '{{ env "OIDC_DOCMOST_CLIENT_ID" }}'
-        client_name: 'docmost'
-        client_secret: '{{ env "OIDC_DOCMOST_CLIENT_SECRET" }}'
-        public: false
-        authorization_policy: 'two_factor'
-        require_pkce: true
-        pkce_challenge_method: 'S256'
-        redirect_uris:
-          - 'https://docmost.{{ env "DOMAIN" }}'
-        scopes:
-          - 'openid'
-          - 'profile'
-          - 'email'
-        userinfo_signed_response_alg: 'none'
-        claims_policy: 'default'
-          
 
 ######### immich #################
       - client_id: '{{ env "OIDC_IMMICH_CLIENT_ID" }}'

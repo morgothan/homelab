@@ -405,8 +405,7 @@ services:
       - OIDC_BESZEL_CLIENT_SECRET
       - OIDC_CLOUDFLARE_CLIENT_ID
       - OIDC_CLOUDFLARE_CLIENT_SECRET
-      - OIDC_DOCMOST_CLIENT_ID
-      - OIDC_DOCMOST_CLIENT_SECRET
+
       - OIDC_GRAFANA_CLIENT_ID
       - OIDC_GRAFANA_CLIENT_SECRET
       - OIDC_GUACAMOLE_CLIENT_ID
@@ -725,41 +724,6 @@ services:
 
 
 
-  postgres:
-    image: postgres:17
-    container_name: "postgres"
-    restart: unless-stopped
-    logging: *logging
-    env_file: .env
-    networks:
-      - ${DOCKERNET} 
-    # ports "5432"
-    volumes:
-      - ${DOCKERDIR}/postgres:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD", "pg_isready", "-d", "${PGDB}", "-U", "${PGUSER}"]
-      interval: 30s
-      timeout: 20s
-      retries: 3
-    environment:
-      - POSTGRES_USER=${PGUSER}
-      - POSTGRES_PASSWORD=${PGPASS}
-      - POSTGRES_DB=${PGDB}
-
-  postgres-exporter:
-    image: quay.io/prometheuscommunity/postgres-exporter:latest
-    container_name: "postgres_exporter"
-    restart: unless-stopped
-    logging: *logging
-    depends_on:
-      postgres:
-        condition: service_healthy
-    networks: 
-      - ${DOCKERNET}
-    environment:
-      - DATA_SOURCE_URI=postgres:5432/postgres?sslmode=disable
-      - DATA_SOURCE_USER=${PGUSER}
-      - DATA_SOURCE_PASS=${PGPASS}
 
 ########## HeyShutUp Node.js site
   heyshutup:
