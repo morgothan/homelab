@@ -15,7 +15,7 @@ services:
     command: tunnel run 
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
-      - TUNNEL_LOGLEVEL=info
+      - TUNNEL_LOGLEVEL=warn
       - TUNNEL_METRICS=0.0.0.0:60123 
     networks:
       #- cftunnel-transport
