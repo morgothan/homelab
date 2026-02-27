@@ -1,0 +1,60 @@
+http:
+  #  serversTransports:
+  #    insecureSkipVerify: true
+
+  # This file is a template for defining external services not in docker-compose.
+  # Copy to traefik/configs/site-<name>.yml and fill in your domain/LAN details.
+  # site-*.yml files are gitignored since they contain hostnames specific to your setup.
+
+  routers:
+
+    # Example: service on external LAN host, behind Authelia 2FA
+    myservice-http:
+      entryPoints:
+        - "https"
+      rule: Host(`myservice.yourdomain.com`)
+      middlewares:
+        - chain-authelia
+      service: "myservice"
+
+    # Example: service accessible on local LAN only (no auth)
+    myservice-local-http:
+      entryPoints:
+        - "http"
+      rule: Host(`myservice.yourlocalname`)
+      service: "myservice"
+
+    # Example: public-facing service with no auth (rate-limit + geoblock + WAF only)
+    mypublic-http:
+      entryPoints:
+        - "https"
+      rule: Host(`mypublic.yourdomain.com`)
+      middlewares:
+        - chain-no-auth
+      service: "mypublic"
+
+    # Example: service with mobile app API access (no auth on specific paths)
+    myapp-mobile:
+      entryPoints:
+        - "https"
+      rule: Host(`myapp.yourdomain.com`) && PathPrefix(`/api`)
+      middlewares:
+        - chain-no-auth
+      service: "myapp"
+
+  services:
+
+    myservice:
+      loadBalancer:
+        servers:
+          - url: "http://myservice.yourlocalname:8080/"
+
+    mypublic:
+      loadBalancer:
+        servers:
+          - url: "http://mypublic.yourlocalname:8081/"
+
+    myapp:
+      loadBalancer:
+        servers:
+          - url: "http://myapp.yourlocalname:8082/"
