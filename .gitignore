@@ -125,6 +125,10 @@ tautulli/
 # Gotify app data
 gotify/
 
+# ntfy data and config (server.yml contains OAuth2 client secret and domain)
+ntfy/server.yml
+ntfy/*.db
+
 # Guacamole config (may contain connection passwords)
 guac/
 
