@@ -1,0 +1,34 @@
+base-url: "https://ntfy.example.com"
+listen-http: ":80"
+cache-file: "/var/lib/ntfy/cache.db"
+auth-file: "/var/lib/ntfy/auth.db"
+auth-default-access: "deny-all"
+
+# OAuth2/OIDC login provider — requires server.yml, cannot be set via env vars.
+# Note: ntfy uses auth-oauth2-providers (not OIDC discovery URL); supply
+# the authorization and token endpoints explicitly from your IdP's
+# /.well-known/openid-configuration response.
+#
+# Authelia endpoints:
+#   auth-url:   https://authelia.example.com/api/oidc/authorization
+#   token-url:  https://authelia.example.com/api/oidc/token
+#
+# Generate client-id and client-secret in Authelia with:
+#   docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
+#     --random --random.length 64 --random.charset alphanumeric
+# Store the plaintext values here; store the pbkdf2 digest in authelia/configuration.yml.
+#
+# After first OIDC login, grant admin role:
+#   docker exec ntfy ntfy user change-role <username> admin
+# Then create a publish token for service accounts (diun, tautulli, etc.):
+#   docker exec ntfy ntfy token add <username>
+auth-oauth2-providers:
+  - name: "authelia"
+    display-name: "Login with Authelia"
+    auth-url: "https://authelia.example.com/api/oidc/authorization"
+    token-url: "https://authelia.example.com/api/oidc/token"
+    user-name-field: "preferred_username"
+    scopes: ["openid", "profile", "email"]
+    client-id: "OIDC_NTFY_CLIENT_ID_PLAINTEXT"
+    client-secret: "OIDC_NTFY_CLIENT_SECRET_PLAINTEXT"
+    redirect-url: "https://ntfy.example.com/v1/account/access-control"
