@@ -157,6 +157,7 @@ identity_providers:
         - 'https://grafana.{{ env "DOMAIN" }}'
         - 'https://sketchy-nas.{{ env "DOMAIN" }}'
         - 'https://guac.{{ env "DOMAIN" }}'
+        - 'https://ntfy.{{ env "DOMAIN" }}'
       allowed_origins_from_client_redirect_uris: false
 
     ## Added new stuff to restore prior claims parameters. https://www.authelia.com/integration/openid-connect/openid-connect-1.0-claims/#restore-functionality-prior-to-claims-parameter
@@ -361,6 +362,24 @@ identity_providers:
         token_endpoint_auth_method: 'client_secret_post'   
         claims_policy: 'default'
         
+############ ntfy #####################
+      - client_id: '{{ env "OIDC_NTFY_CLIENT_ID" }}'
+        client_name: 'ntfy'
+        client_secret: '{{ env "OIDC_NTFY_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://ntfy.{{ env "DOMAIN" }}/v1/account/access-control'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        claims_policy: 'default'
+        token_endpoint_auth_method: 'client_secret_basic'
+
 ############ mealie #####################
       - client_id: '{{ env "OIDC_MEALIE_CLIENT_ID" }}'
         client_name: 'Mealie'
