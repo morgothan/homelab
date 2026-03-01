@@ -414,6 +414,8 @@ services:
       - OIDC_IMMICH_CLIENT_SECRET
       - OIDC_MEALIE_CLIENT_ID
       - OIDC_MEALIE_CLIENT_SECRET
+      - OIDC_NTFY_CLIENT_ID
+      - OIDC_NTFY_CLIENT_SECRET
       - OIDC_OPENWEBUI_CLIENT_ID
       - OIDC_OPENWEBUI_CLIENT_SECRET
       - OIDC_OUTLINE_CLIENT_ID
@@ -481,22 +483,6 @@ services:
       - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
     image: prompve/prometheus-pve-exporter:latest
 
-####### Smokeping style exporter #######
-  smokeping-prober:
-    restart: unless-stopped
-    logging: *logging
-    container_name: smokeping-prober
-    image: quay.io/superq/smokeping-prober:latest
-    networks:
-      - ${DOCKERNET}
-        #ports:
-        #    - 9374:9374
-    privileged: true
-    environment:
-      - GOMAXPROCS=1
-    volumes:
-      - ${DOCKERDIR}/smoke/config.yml:/config.yml
-    command: --config.file=/config.yml
 
 ###### Redis #######
   redis:
@@ -566,7 +552,37 @@ services:
       - traefik.http.routers.guac-http.service=guac
       - traefik.http.services.guac.loadbalancer.server.port=8080
         
-#############3 Gotify Notifications #######3        
+# TODO: migrate from Gotify to ntfy — OIDC integration needs more research
+#       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
+#       and ntfy's login/OIDC flow needs to be validated before cutover
+#########3 ntfy #################
+#  ntfy:
+#    image: binwiederhier/ntfy:latest
+#    restart: unless-stopped
+#    logging: *logging
+#    container_name: ntfy
+#    command: serve --config /etc/ntfy/server.yml
+#    networks:
+#      - ${DOCKERNET}
+#    volumes:
+#      - /etc/localtime:/etc/localtime:ro
+#      - /etc/timezone:/etc/timezone:ro
+#      - ${DOCKERDIR}/ntfy:/var/lib/ntfy
+#      - ${DOCKERDIR}/ntfy/server.yml:/etc/ntfy/server.yml:ro
+#    labels:
+#      - traefik.enable=true
+#      - traefik.http.routers.ntfy-http.entrypoints=https
+#      - traefik.http.routers.ntfy-http.rule=Host(`ntfy.${DOMAIN}`)
+#      - traefik.http.routers.ntfy-http.middlewares=chain-authelia-nowaf@file
+#      - traefik.http.routers.ntfy-http.service=ntfy
+#      - traefik.http.services.ntfy.loadbalancer.server.port=80
+#        #local access
+#      - traefik.http.routers.ntfy-http-local.entrypoints=http
+#      - traefik.http.routers.ntfy-http-local.rule=Host(`ntfy.${LOCAL}`)
+#      - traefik.http.routers.ntfy-http-local.service=ntfy
+
+
+#############3 Gotify Notifications #######3
   gotify:
     image: gotify/server:latest
     restart: unless-stopped
@@ -802,7 +818,7 @@ services:
       #external access
       - traefik.http.routers.kopia-ui-http.entrypoints=https
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
-      - traefik.http.routers.kopia-ui-http.middlewares=chain-authelia@file,kopia-auth@file
+      - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia@file,kopia-auth@file
 #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
