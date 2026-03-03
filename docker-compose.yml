@@ -541,16 +541,21 @@ services:
     environment:
       - EXTENSIONS=auth-sso-openid
       - LOG_LEVEL=warn
+      # JVM heap tuning: prevents GC pauses from causing sporadic input lag
+      - CATALINA_OPTS=-Xms256m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=100
     labels:
       - traefik.enable=true
+      # External HTTPS via Cloudflare Tunnel
       - traefik.http.routers.guac-http.entrypoints=https
       - traefik.http.routers.guac-http.rule=Host(`guac.${DOMAIN}`)
-      # 1. Define the Middleware (ensure X-Forwarded-Proto is passed)
       - traefik.http.middlewares.guac-headers.headers.customrequestheaders.X-Forwarded-Proto=https
-#      - traefik.http.routers.guac-http.middlewares=chain-authelia@file
-      - traefik.http.routers.guac-http.middlewares=guac-headers,chain-authelia@file
+      - traefik.http.routers.guac-http.middlewares=guac-headers,chain-authelia-nowaf@file
       - traefik.http.routers.guac-http.service=guac
       - traefik.http.services.guac.loadbalancer.server.port=8080
+      # Local access — bypasses Cloudflare Tunnel entirely (much lower latency on LAN)
+      - traefik.http.routers.guac-http-local.entrypoints=http
+      - traefik.http.routers.guac-http-local.rule=Host(`guac.${LOCAL}`)
+      - traefik.http.routers.guac-http-local.service=guac
         
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
 #       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
@@ -600,11 +605,22 @@ services:
       - ${DOCKERDIR}/gotify:/app/data
     labels:
       - traefik.enable=true
+      # Main router: strip cached browser Basic-auth creds before Authelia sees them (prevents banning)
       - traefik.http.routers.gotify-http.entrypoints=https
       - traefik.http.routers.gotify-http.rule=Host(`gotify.${DOMAIN}`)
-      - traefik.http.routers.gotify-http.middlewares=chain-authelia@file
+      - traefik.http.routers.gotify-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,gotify-strip-wwwauth
       - traefik.http.routers.gotify-http.service=gotify
       - traefik.http.services.gotify.loadbalancer.server.port=80
+      # Login router (higher priority): /client is Gotify's own login endpoint — needs Basic auth
+      # to reach Gotify, so skip strip-auth-header. No Authelia needed; Gotify validates credentials.
+      - traefik.http.routers.gotify-login.entrypoints=https
+      - traefik.http.routers.gotify-login.rule=Host(`gotify.${DOMAIN}`) && Path(`/client`)
+      - traefik.http.routers.gotify-login.priority=100
+      - traefik.http.routers.gotify-login.middlewares=chain-no-auth-no-waf@file,gotify-strip-wwwauth
+      - traefik.http.routers.gotify-login.service=gotify
+      # Strip WWW-Authenticate from all Gotify responses — prevents browser from caching
+      # Gotify credentials as Basic auth and replaying them to Authelia (causing bans)
+      - traefik.http.middlewares.gotify-strip-wwwauth.headers.customresponseheaders.WWW-Authenticate=""
         #local access
       - traefik.http.routers.gotify-http-local.entrypoints=http
       - traefik.http.routers.gotify-http-local.rule=Host(`gotify.${LOCAL}`)
