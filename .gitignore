@@ -136,6 +136,9 @@ guac/*
 guac/custom-cont-init.d/*
 !guac/custom-cont-init.d/10-fonts.sh
 
+# peaNUT config (contains NUT credentials)
+peanut/
+
 # Dozzle runtime data
 dozzle/
 

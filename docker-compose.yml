@@ -700,6 +700,28 @@ services:
       - LOG_REQUESTS_CONSOLE=false
       - PRINT_METRICS_AND_EXIT=false
 
+########### peaNUT (NUT web UI) ##########
+  peanut:
+    container_name: peanut
+    image: brandawg93/peanut:latest
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - nut
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/peanut:/config
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.peanut-local.entrypoints=http
+      - traefik.http.routers.peanut-local.rule=Host(`peanut.${LOCAL}`)
+      - traefik.http.routers.peanut-local.middlewares=chain-no-auth-no-waf@file
+      - traefik.http.routers.peanut-local.service=peanut
+      - traefik.http.services.peanut.loadbalancer.server.port=8080
+
 ############### Overseerr (add content to plex via radarr/sonarr) ######
   overseerr:
 #    image: sctx/overseerr:latest
