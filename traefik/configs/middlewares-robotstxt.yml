@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    robotstxt:
+      plugin:
+        robotstxt:
+          aiRobotsTxt: true

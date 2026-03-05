@@ -5,6 +5,7 @@ http:
         middlewares:
           - test-errors
           - realip
+          - robotstxt
           - geoblock-badies
           - middlewares-rate-limit
           - middlewares-secure-headers
