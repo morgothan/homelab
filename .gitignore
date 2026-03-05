@@ -130,7 +130,11 @@ ntfy/server.yml
 ntfy/*.db
 
 # Guacamole config (may contain connection passwords)
-guac/
+# Ignore all contents but allow specific tracked files via exceptions
+guac/*
+!guac/custom-cont-init.d/
+guac/custom-cont-init.d/*
+!guac/custom-cont-init.d/10-fonts.sh
 
 # Dozzle runtime data
 dozzle/
