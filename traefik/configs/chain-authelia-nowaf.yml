@@ -4,6 +4,7 @@ http:
       chain:
         middlewares:
           - realip
+          - robotstxt
           - middlewares-rate-limit
           - middlewares-secure-headers
           - middlewares-authelia

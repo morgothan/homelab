@@ -5,6 +5,7 @@ http:
         middlewares:
           #          - test-errors
           - realip
+          - robotstxt
           - middlewares-secure-headers
           - middlewares-rate-limit
             #          - crowdsec
