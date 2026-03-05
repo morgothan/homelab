@@ -720,6 +720,10 @@ services:
       - traefik.http.routers.peanut-local.rule=Host(`peanut.${LOCAL}`)
       - traefik.http.routers.peanut-local.middlewares=chain-no-auth-no-waf@file
       - traefik.http.routers.peanut-local.service=peanut
+      - traefik.http.routers.peanut-rtr.entrypoints=https
+      - traefik.http.routers.peanut-rtr.rule=Host(`peanut.${DOMAIN}`)
+      - traefik.http.routers.peanut-rtr.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.peanut-rtr.service=peanut
       - traefik.http.services.peanut.loadbalancer.server.port=8080
 
 ############### Overseerr (add content to plex via radarr/sonarr) ######
