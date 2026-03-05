@@ -53,14 +53,12 @@ identity_validation:
 access_control:
   default_policy: deny
   rules:
-    # - domain:
-    #     - "*.example.com"
-    #     - "example.com"
-    #   policy: bypass
-    #   networks: # bypass authentication for local networks
-    #     - 10.0.0.0/8
-    #     - 192.168.0.0/16
-    #     - 172.16.0.0/12
+    # Beszel API paths bypass Authelia so PocketBase Bearer tokens pass through
+    # PocketBase enforces its own token auth on protected endpoints
+    - domain: 'beszel.{{ env "DOMAIN" }}'
+      policy: bypass
+      resources:
+        - "^/api/.*$"
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
@@ -164,6 +162,7 @@ identity_providers:
     claims_policies:
       default:
         id_token: ['groups', 'email', 'email_verified', 'alt_emails', 'preferred_username', 'name']
+
     ## The other portions of the mandatory OpenID Connect 1.0 configuration go here.
     ## See: https://www.authelia.com/c/oidc
     clients:
@@ -248,21 +247,6 @@ identity_providers:
         claims_policy: 'default'  #needed since guac no longer works with the updated authelia oidc settings
         token_endpoint_auth_method: 'client_secret_basic'
 
-####### Cloudflare Tunnel #########
-      - client_id: '{{ env "OIDC_CLOUDFLARE_CLIENT_ID" }}'
-        client_name: 'Cloudflare ZeroTrust'
-        client_secret: '{{ env "OIDC_CLOUDFLARE_CLIENT_SECRET" }}'
-        public: false
-        authorization_policy: 'two_factor'
-        redirect_uris:
-          - 'https://morgothan.cloudflareaccess.com/cdn-cgi/access/callback'
-        scopes:
-          - 'openid'
-          - 'profile'
-          - 'email'
-        userinfo_signed_response_alg: 'none'
-          #        claims_policy: 'default'
-
 
 ######## Proxmox ###############
       - client_id: '{{ env "OIDC_PROXMOX_CLIENT_ID" }}'
@@ -310,13 +294,15 @@ identity_providers:
         client_secret: '{{ env "OIDC_BESZEL_CLIENT_SECRET" }}'
         public: false
         authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
         redirect_uris:
           - 'https://beszel.{{ env "DOMAIN" }}/api/oauth2-redirect'
         scopes:
           - 'openid'
           - 'profile'
           - 'email'
-        userinfo_signed_response_alg: 'none'       
+        userinfo_signed_response_alg: 'none'
         claims_policy: 'default'
 
 ############ Open WebUI (Local ai) #####################
@@ -326,6 +312,8 @@ identity_providers:
         client_secret: '{{ env "OIDC_OPENWEBUI_CLIENT_SECRET" }}'
         public: false
         authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
         redirect_uris:
           - 'https://ai.{{ env "DOMAIN" }}/oauth/oidc/callback'
         scopes:
@@ -333,7 +321,12 @@ identity_providers:
           - 'profile'
           - 'email'
           - 'groups'
-        userinfo_signed_response_alg: 'RS256'       
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        userinfo_signed_response_alg: 'RS256'
+        token_endpoint_auth_method: 'client_secret_basic'
         claims_policy: 'default'
 
 ############ outline #####################
