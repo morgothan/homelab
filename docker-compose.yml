@@ -534,6 +534,8 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/guac:/config
+      - ${DOCKERDIR}/guac/fonts:/usr/share/fonts/truetype/nerdfonts:ro
+      - ${DOCKERDIR}/guac/custom-cont-init.d/10-fonts.sh:/etc/cont-init.d/10-fonts.sh:ro
     restart: unless-stopped
     logging: *logging
     networks:
