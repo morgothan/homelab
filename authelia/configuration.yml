@@ -53,12 +53,6 @@ identity_validation:
 access_control:
   default_policy: deny
   rules:
-    # Beszel API paths bypass Authelia so PocketBase Bearer tokens pass through
-    # PocketBase enforces its own token auth on protected endpoints
-    - domain: 'beszel.{{ env "DOMAIN" }}'
-      policy: bypass
-      resources:
-        - "^/api/.*$"
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
