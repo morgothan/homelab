@@ -566,9 +566,11 @@ services:
     container_name: ttyd
     restart: unless-stopped
     logging: *logging
-    command: ttyd -W nsenter -t 1 -m -u -i -n -p -- su - nat -c /home/nat/bin/start-tmux.sh
+    command: ttyd -W /shell
     privileged: true
     pid: host
+    volumes:
+      - /home/nat/bin/ttyd-shell:/shell:ro
     networks:
       - ${DOCKERNET}
     labels:
