@@ -200,3 +200,6 @@ docker-compose.override.yml
 
 # claude.md file
 CLAUDE.md
+
+# Homelab docs (contain API keys in sync script)
+docs/

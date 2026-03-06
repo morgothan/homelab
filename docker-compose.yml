@@ -558,7 +558,27 @@ services:
       - traefik.http.routers.guac-http-local.entrypoints=http
       - traefik.http.routers.guac-http-local.rule=Host(`guac.${LOCAL}`)
       - traefik.http.routers.guac-http-local.service=guac
-        
+
+
+####################### ttyd web terminal
+  ttyd:
+    image: tsl0922/ttyd:latest
+    container_name: ttyd
+    restart: unless-stopped
+    logging: *logging
+    command: ttyd -W nsenter -t 1 -m -u -i -n -p -- su - nat -c /home/nat/bin/start-tmux.sh
+    privileged: true
+    pid: host
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.ttyd-https.entryPoints=https
+      - traefik.http.routers.ttyd-https.rule=Host(`ttyd.${DOMAIN}`)
+      - traefik.http.routers.ttyd-https.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.ttyd-https.tls=true
+      - traefik.http.services.ttyd.loadBalancer.server.port=7681
+
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
 #       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
 #       and ntfy's login/OIDC flow needs to be validated before cutover
