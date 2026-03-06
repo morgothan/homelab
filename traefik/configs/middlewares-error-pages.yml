@@ -3,7 +3,16 @@ http:
     test-errors:
       errors:
         status:
+          - "400"
+          - "401"
           - "403"
           - "404"
+          - "405"
+          - "408"
+          - "429"
+          - "500"
+          - "502"
+          - "503"
+          - "504"
         service: error-pages@docker
         query: "/{status}.html"
