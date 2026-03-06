@@ -6,7 +6,8 @@ x-logging: &logging
     tag: "{{.Name}}"
 
 services:
-########## CloudFlare tunnel
+########## Cloudflare Tunnel
+# Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
     image: cloudflare/cloudflared:latest
     container_name: cf_tunnel
@@ -21,7 +22,8 @@ services:
       #- cftunnel-transport
       - ${DOCKERNET}
         
-######## Traefik reverse proxy 
+########## Traefik
+# Reverse proxy and SSL termination for all services
   traefik:
     image: traefik:latest
     container_name: traefik
@@ -86,7 +88,8 @@ services:
         #      - traefik.http.routers.traefik-https.tls2.certresolver=http
         #      - traefik.http.routers.traefik-https.tls2.domains[0].main=${PUBLIC}
         #      - traefik.http.routers.traefik-https.tls2.domains[0].sans=*.${PUBLIC}
-  # error page handler
+########## Error Pages
+# Serves custom error pages for Traefik (4xx/5xx)
   error-pages:
     volumes:
       - ${DOCKERDIR}/error-pages:/var/www/
@@ -102,7 +105,8 @@ services:
         #      - traefik.http.routers.error-pages-https.entrypoints=https
         #      - traefik.http.routers.error-pages-https.rule=Host(`error-pages`)
       - traefik.http.services.error-pages.loadbalancer.server.port=80
-  # Nginx server with OWASP CRS (Core Rule Set) rules
+########## WAF (ModSecurity / OWASP CRS)
+# Web application firewall sidecar used by Traefik's chain-authelia and chain-no-auth
   waf:
     container_name: waf
       #image: owasp/modsecurity-crs:nginx-alpine
@@ -125,7 +129,8 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/waf_logs:/var/log/nginx:rw
 
-  # Dummy service that always returns status HTTP 200 to WAF container
+########## Whoami (WAF Dummy Backend)
+# Dummy HTTP 200 backend required by the WAF sidecar container
   dummy:
     container_name: dummy
     image: traefik/whoami:latest
@@ -148,7 +153,8 @@ services:
   
       - traefik.http.services.whoami.loadbalancer.server.port=80
 
-######## Homepage ###############
+########## Homepage
+# Dashboard with service widgets, status monitoring, and quick links
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
@@ -173,7 +179,8 @@ services:
       - traefik.http.routers.homepage-http.service=homepage
       - traefik.http.services.homepage.loadbalancer.server.port=3000
       
-################ portainer maintain docker images
+########## Portainer
+# Docker management UI with OIDC login via Authelia
   portainer:
     image: portainer/portainer-ce:latest
     command: -H unix:///var/run/docker.sock
@@ -196,7 +203,8 @@ services:
       - traefik.http.services.frontend.loadbalancer.server.port=9000
 
 
-####################### prometheus         
+########## Prometheus
+# Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
@@ -228,7 +236,8 @@ services:
 
 
 
-######################### Grafana
+########## Grafana
+# Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
     image: grafana/grafana:latest
     restart: unless-stopped
@@ -267,7 +276,8 @@ services:
       - traefik.http.routers.grafana-http-local.rule=Host(`grafana.${LOCAL}`)
       - traefik.http.routers.grafana-http-local.service=grafana
 
-####### Promtail #########
+########## Promtail
+# Ships Docker container logs to Loki via the Docker socket
   promtail:
     command: -config.file=/etc/promtail/promtail-config.yml
     container_name: promtail
@@ -285,7 +295,8 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
 
 
-################### Unifi Poller        
+########## Unifi Poller
+# Exports Unifi network and camera metrics to Prometheus and Loki
   unifi-poller:
     restart: unless-stopped
     logging: *logging
@@ -311,7 +322,8 @@ services:
 
   
         
-########################## dozzle docker logs
+########## Dozzle
+# Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
     image: amir20/dozzle:latest
     container_name: dozzle
@@ -339,7 +351,8 @@ services:
     restart: unless-stopped
     logging: *logging
 
-############################ tautulli (Plex Metrics)
+########## Tautulli
+# Plex media server analytics and playback history
   tautulli:
     image: ghcr.io/tautulli/tautulli
     container_name: tautulli
@@ -368,7 +381,8 @@ services:
       - traefik.http.routers.tautulli-http-local.rule=Host(`tautulli.${LOCAL}`)
       - traefik.http.routers.tautulli-http-local.service=tautulli
 
-####################### Authelia (Lite) - Self-Hosted Single Sign-On and Two-Factor Authentication
+########## Authelia
+# SSO, 2FA, and OIDC provider — forward-auth for all external services
   authelia:
     container_name: authelia
     image: authelia/authelia:latest
@@ -443,7 +457,8 @@ services:
       - traefik.http.routers.authelia-rtr.service=authelia-svc
       - traefik.http.services.authelia-svc.loadbalancer.server.port=9091        
 
-####################### adguard exporter
+########## AdGuard Exporter
+# Exports AdGuard Home metrics (primary + kids) to Prometheus
   adguard-exporter:
     container_name: adguard_exporter
     image: ghcr.io/henrywhitaker3/adguard-exporter:latest
@@ -458,7 +473,8 @@ services:
       - ADGUARD_USERNAMES=admin,admin
       - ADGUARD_PASSWORDS=${ADGUARD_PASSWORDS}
       - INTERVAL=15s
-######################### tdarr exporter
+########## Tdarr Exporter
+# Exports Tdarr media transcoding metrics to Prometheus
   tdarr-exporter:
     image: homeylab/tdarr-exporter:latest
     container_name: tdarr-exporter
@@ -471,7 +487,8 @@ services:
       - ${DOCKERNET}
 
 
-####################### proxmox ve exporter
+########## Proxmox VE Exporter
+# Exports Proxmox host and VM metrics to Prometheus
   pve-exporter:
     init: true
     container_name: pve-exporter
@@ -484,7 +501,8 @@ services:
     image: prompve/prometheus-pve-exporter:latest
 
 
-###### Redis #######
+########## Redis
+# Shared session store for Authelia (db 0) and Traefik (db 1), exposed to LAN on :6379
   redis:
     image: redis:latest
       #image: docker.io/valkey/valkey:latest
@@ -513,7 +531,8 @@ services:
       - traefik.tcp.services.redis.loadbalancer.server.port=6379
 
 
-###### Redis exporter #####
+########## Redis Exporter
+# Exports Redis metrics to Prometheus
   redis-exporter:
     image: oliver006/redis_exporter:latest
     container_name: redis-exporter
@@ -526,7 +545,8 @@ services:
     command:
       - '--redis.addr=redis://redis:6379'
 
-####### Guacamole ########       
+########## Guacamole
+# Web-based remote desktop gateway with OIDC login (implicit grant — PKCE not supported)
   guacamole:
     container_name: guacamole
     image: jwetzell/guacamole:latest
@@ -560,7 +580,8 @@ services:
       - traefik.http.routers.guac-http-local.service=guac
 
 
-####################### ttyd web terminal
+########## ttyd
+# Web terminal — host shell via nsenter into host PID namespace, protected by Authelia 2FA
   ttyd:
     image: tsl0922/ttyd:latest
     container_name: ttyd
@@ -584,7 +605,8 @@ services:
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
 #       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
 #       and ntfy's login/OIDC flow needs to be validated before cutover
-#########3 ntfy #################
+########## ntfy (disabled — see TODO above)
+# Push notification server — pending OIDC configuration before cutover from Gotify
 #  ntfy:
 #    image: binwiederhier/ntfy:latest
 #    restart: unless-stopped
@@ -611,7 +633,8 @@ services:
 #      - traefik.http.routers.ntfy-http-local.service=ntfy
 
 
-#############3 Gotify Notifications #######3
+########## Gotify
+# Push notification server — receives Docker image update alerts from Diun
   gotify:
     image: gotify/server:latest
     restart: unless-stopped
@@ -651,7 +674,8 @@ services:
       - traefik.http.routers.gotify-http-local.service=gotify
 
 
-############ dium notify of updated docker images        
+########## Diun
+# Watches for Docker image updates and sends alerts to Gotify
   diun:
     image: crazymax/diun:latest
     container_name: diun
@@ -677,7 +701,8 @@ services:
     networks:
       - ${DOCKERNET}
 
-########### NUT (Network UPS Tool) ##########
+########## NUT
+# Network UPS Tools daemon — monitors UPS and exposes data over TCP on :3493 to LAN
   nut:
     container_name: nut
     image: instantlinux/nut-upsd:latest
@@ -699,7 +724,8 @@ services:
       - traefik.tcp.services.nut.loadbalancer.server.port=3493
 
 
-########### NUT (Network UPS Tool) exporter #########
+########## NUT Exporter
+# Exports UPS metrics from NUT to Prometheus
   nut-exporter:
     container_name: nut-exporter
     restart: unless-stopped
@@ -722,7 +748,8 @@ services:
       - LOG_REQUESTS_CONSOLE=false
       - PRINT_METRICS_AND_EXIT=false
 
-########### peaNUT (NUT web UI) ##########
+########## peaNUT
+# Web UI for NUT UPS monitoring and status
   peanut:
     container_name: peanut
     image: brandawg93/peanut:latest
@@ -748,7 +775,8 @@ services:
       - traefik.http.routers.peanut-rtr.service=peanut
       - traefik.http.services.peanut.loadbalancer.server.port=8080
 
-############### Overseerr (add content to plex via radarr/sonarr) ######
+########## Overseerr
+# Media request management for Plex — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
     image: ghcr.io/seerr-team/seerr:latest
@@ -787,7 +815,8 @@ services:
       - traefik.http.routers.overseerr-http-local.service=overseerr
 
 
-################ beszel monitoring agent ################
+########## Beszel Agent
+# Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
     image: henrygd/beszel-agent:latest
     container_name: "beszel-agent"
@@ -805,7 +834,8 @@ services:
 
 
 
-########## HeyShutUp Node.js site
+########## HeyShutUp
+# Public Node.js/Express website, no auth, rate limited via chain-no-auth
   heyshutup:
     container_name: "heyshutup"
     image: "node:alpine"
@@ -830,7 +860,8 @@ services:
       - traefik.http.routers.heyshutup-http.service=heyshutup
       - traefik.http.services.heyshutup.loadbalancer.server.port=3000
 
-##### SCRAPARR prometheus data for *arr apps ###########
+########## Scraparr
+# Exports *arr app metrics (Radarr, Sonarr, etc.) to Prometheus
   scraparr:
     image: ghcr.io/thecfu/scraparr
     container_name: scraparr
@@ -840,7 +871,8 @@ services:
       - ${DOCKERNET} 
     volumes:
       - ${DOCKERDIR}/scraparr/config.yaml:/scraparr/config/config.yaml
-####### nzbget prometheus data #########
+########## NZBGet Exporter
+# Exports NZBGet download queue metrics to Prometheus
   nzbget_exporter:
     image: frebib/nzbget-exporter
     tty: true
@@ -854,7 +886,8 @@ services:
     - NZBGET_USERNAME=nzbget
     - NZBGET_PASSWORD=${NZBGET_PASSWORD}
 
-########## Kopia Backup WebUI #######
+########## Kopia
+# Backup UI — manages rclone-based remote backups, Basic auth injected by Traefik
   kopia-ui:
     image: kopia/kopia:latest
     container_name: kopia-webui
@@ -890,7 +923,8 @@ services:
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
 
   
-######### Mealie recipie #############
+########## Mealie
+# Recipe manager with OIDC login via Authelia, no password login
   mealie:
     image: ghcr.io/mealie-recipes/mealie:latest # 
     container_name: mealie
