@@ -3,6 +3,7 @@ http:
     chain-authelia-nowaf:
       chain:
         middlewares:
+          - test-errors
           - realip
           - robotstxt
           - middlewares-rate-limit
