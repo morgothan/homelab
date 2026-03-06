@@ -30,7 +30,7 @@ layout:
     Remote Access:
       header: true
       style: row
-      columns: 2
+      columns: 3
       icon: mdi-remote-desktop
     Infra:
       header: true
