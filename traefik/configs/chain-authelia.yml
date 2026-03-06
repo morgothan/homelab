@@ -3,7 +3,7 @@ http:
     chain-authelia:
       chain:
         middlewares:
-          #          - test-errors
+          - test-errors
           - realip
           - robotstxt
           - middlewares-secure-headers
