@@ -13,11 +13,17 @@ services:
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
-    command: tunnel run 
+    command: tunnel run
     environment:
       - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
       - TUNNEL_LOGLEVEL=warn
-      - TUNNEL_METRICS=0.0.0.0:60123 
+      - TUNNEL_METRICS=0.0.0.0:60123
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:60123/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       #- cftunnel-transport
       - ${DOCKERNET}
@@ -98,6 +104,11 @@ services:
     command: httpd -f -h /var/www/
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/404.html || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - ${DOCKERNET}
     labels:
@@ -113,6 +124,12 @@ services:
     image: owasp/modsecurity-crs:nginx-alpine
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     environment:
       - PARANOIA=1
       - ANOMALY_INBOUND=10
@@ -136,6 +153,11 @@ services:
     image: traefik/whoami:latest
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - ${DOCKERNET}
     labels:
@@ -158,6 +180,12 @@ services:
   homepage:
     image: ghcr.io/gethomepage/homepage:latest
     container_name: homepage
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     networks:
       - ${DOCKERNET}
     volumes:
@@ -187,6 +215,11 @@ services:
     container_name: portainer
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - portainer_data:/data
@@ -208,6 +241,12 @@ services:
   prometheus:
     image: prom/prometheus:latest
     container_name: prometheus
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
       - '--storage.tsdb.retention.time=30d'
@@ -243,6 +282,12 @@ services:
     restart: unless-stopped
     logging: *logging
     container_name: grafana
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     networks:
       - ${DOCKERNET}
         #    ports:
@@ -282,6 +327,11 @@ services:
     command: -config.file=/etc/promtail/promtail-config.yml
     container_name: promtail
     image: grafana/promtail:latest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9080/ready || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - ${DOCKERNET}
         #    ports:
@@ -302,6 +352,11 @@ services:
     logging: *logging
     container_name: unifi-poller
     image: ghcr.io/unpoller/unpoller:${POLLER_TAG}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9130/metrics || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - grafana
         #      - influxdb
@@ -327,6 +382,11 @@ services:
   dozzle:
     image: amir20/dozzle:latest
     container_name: dozzle
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthcheck || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - ${DOCKERNET}
     environment:
@@ -358,6 +418,12 @@ services:
     container_name: tautulli
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8181/status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
     volumes:
       - ${DOCKERDIR}/tautulli:/config
     environment:
@@ -386,6 +452,12 @@ services:
   authelia:
     container_name: authelia
     image: authelia/authelia:latest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     depends_on:
       redis:
         condition: service_healthy
@@ -536,6 +608,11 @@ services:
   redis-exporter:
     image: oliver006/redis_exporter:latest
     container_name: redis-exporter
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9121/metrics || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - redis
     restart: unless-stopped
@@ -550,6 +627,12 @@ services:
   guacamole:
     container_name: guacamole
     image: jwetzell/guacamole:latest
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -587,6 +670,11 @@ services:
     container_name: ttyd
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:7681/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     command: ttyd -W /shell
     privileged: true
     pid: host
@@ -640,6 +728,11 @@ services:
     restart: unless-stopped
     logging: *logging
     container_name: gotify
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks:
       - ${DOCKERNET}
       #    ports:
@@ -708,6 +801,11 @@ services:
     image: instantlinux/nut-upsd:latest
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z localhost 3493 || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     networks: 
       - ${DOCKERNET}
         #ports: 
@@ -730,6 +828,11 @@ services:
     container_name: nut-exporter
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9995/nut || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - nut
     networks:
@@ -755,6 +858,11 @@ services:
     image: brandawg93/peanut:latest
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/api/v1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     depends_on:
       - nut
     networks:
@@ -841,6 +949,12 @@ services:
     image: "node:alpine"
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     user: "node"
     working_dir: /home/node/app
     environment:
@@ -893,6 +1007,12 @@ services:
     container_name: kopia-webui
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5151/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
     #ports:
     #  - "5151:5151"
     networks:
@@ -926,10 +1046,16 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:latest # 
+    image: ghcr.io/mealie-recipes/mealie:latest #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:9000/api/app/about || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
     #ports:
     #    - "9925:9000" # 
     networks:
