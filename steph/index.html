@@ -1,0 +1,518 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Happy Birthday Steph ♥</title>
+  <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 29.6'%3E%3Cpath fill='%23ff0044' d='M23.6,0c-3.4,0-6.3,2.7-7.6,5.6C14.7,2.7,11.8,0,8.4,0C3.8,0,0,3.8,0,8.4c0,9.4,9.5,11.9,16,21.2c6.1-9.3,16-12.1,16-21.2C32,3.8,28.2,0,23.6,0z'/%3E%3C/svg%3E">
+  <link href="https://fonts.googleapis.com/css2?family=Dancing+Script:wght@600;700&display=swap" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { background: #120008; overflow: hidden; width: 100vw; height: 100vh; }
+    canvas { display: block; position: fixed; inset: 0; }
+
+    #overlay {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      align-items: center;
+      padding: 8vh 5vw;
+      pointer-events: none;
+      z-index: 10;
+    }
+
+    .top-text {
+      font-family: 'Dancing Script', cursive;
+      font-weight: 700;
+      font-size: clamp(2rem, 5vw, 4rem);
+      color: #fff;
+      text-align: center;
+      text-shadow:
+        0 0 15px #ff69b4,
+        0 0 35px #ff1493,
+        0 0 70px #ff1493,
+        0 2px 4px rgba(0,0,0,0.8);
+      opacity: 0;
+      transform: translateY(-24px);
+      transition: opacity 1.8s ease, transform 1.8s ease;
+      letter-spacing: 0.04em;
+    }
+
+    .bottom-text {
+      font-family: 'Dancing Script', cursive;
+      font-weight: 600;
+      font-size: clamp(1.4rem, 3vw, 2.6rem);
+      color: #ffb6c1;
+      text-align: center;
+      text-shadow:
+        0 0 12px #ff69b4,
+        0 0 28px #ff1493,
+        0 2px 4px rgba(0,0,0,0.8);
+      opacity: 0;
+      transform: translateY(24px);
+      transition: opacity 1.8s ease, transform 1.8s ease;
+      font-style: italic;
+      letter-spacing: 0.06em;
+    }
+
+    .text-visible {
+      opacity: 1 !important;
+      transform: translateY(0) !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="overlay">
+    <div class="top-text" id="topText">Happy Birthday Steph</div>
+    <div class="bottom-text" id="bottomText">I love you ♥</div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+  <script>
+  // ─── SCENE ────────────────────────────────────────────────────────────────
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x120008);
+  scene.fog = new THREE.FogExp2(0x120008, 0.04);
+
+  const W = window.innerWidth, H = window.innerHeight;
+  const camera = new THREE.PerspectiveCamera(45, W / H, 0.1, 100);
+  camera.position.z = 8;
+
+  const renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(W, H);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  renderer.physicallyCorrectLights = true;
+  document.body.appendChild(renderer.domElement);
+
+  window.addEventListener('resize', () => {
+    camera.aspect = window.innerWidth / window.innerHeight;
+    camera.updateProjectionMatrix();
+    renderer.setSize(window.innerWidth, window.innerHeight);
+  });
+
+  // ─── LIGHTS ───────────────────────────────────────────────────────────────
+  scene.add(new THREE.AmbientLight(0x3d0020, 3));
+
+  const pinkLight = new THREE.PointLight(0xff69b4, 30, 18);
+  pinkLight.position.set(3, 3, 5);
+  scene.add(pinkLight);
+
+  const redLight = new THREE.PointLight(0xff1493, 18, 12);
+  redLight.position.set(-3, -2, 4);
+  scene.add(redLight);
+
+  const fillLight = new THREE.PointLight(0xffffff, 8, 10);
+  fillLight.position.set(0, 0, 6);
+  scene.add(fillLight);
+
+  // ─── HEART GEOMETRY ───────────────────────────────────────────────────────
+  // Parametric heart curve, arc-length reparameterized so points are evenly
+  // spaced by actual distance along the curve. Without this, points pile up
+  // near the cusps (top dip, bottom tip) leaving large flat polygons on the
+  // smooth outer curves — exactly where glancing light reveals the faceting.
+  function buildHeartShape() {
+    // 1. Dense raw sample to build an arc-length lookup table
+    const SAMPLES = 3000;
+    const raw = [];
+    for (let i = 0; i <= SAMPLES; i++) {
+      const t = (i / SAMPLES) * Math.PI * 2;
+      raw.push([
+        16 * Math.pow(Math.sin(t), 3) / 9,
+        (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) / 9,
+      ]);
+    }
+    const arcLen = [0];
+    for (let i = 1; i <= SAMPLES; i++) {
+      const dx = raw[i][0] - raw[i-1][0], dy = raw[i][1] - raw[i-1][1];
+      arcLen.push(arcLen[i-1] + Math.sqrt(dx*dx + dy*dy));
+    }
+    const total = arcLen[SAMPLES];
+
+    // 2. Resample at N evenly-spaced arc-length positions
+    const N = 256, pts = [];
+    let s = 0;
+    for (let i = 0; i < N; i++) {
+      const target = (i / N) * total;
+      while (s < SAMPLES - 1 && arcLen[s + 1] < target) s++;
+      const span = arcLen[s + 1] - arcLen[s];
+      const frac = span > 0 ? (target - arcLen[s]) / span : 0;
+      pts.push(new THREE.Vector2(
+        raw[s][0] + frac * (raw[s+1][0] - raw[s][0]),
+        raw[s][1] + frac * (raw[s+1][1] - raw[s][1]),
+      ));
+    }
+
+    const shape = new THREE.Shape();
+    shape.setFromPoints(pts);
+    return shape;
+  }
+
+  const heartShape = buildHeartShape();
+  const extrudeSettings = {
+    depth: 0.55,
+    bevelEnabled: true,
+    bevelSegments: 20,
+    steps: 1,
+    bevelSize: 0.14,
+    bevelThickness: 0.14,
+  };
+  const heartGeom = new THREE.ExtrudeGeometry(heartShape, extrudeSettings);
+  heartGeom.center();
+  heartGeom.computeVertexNormals(); // smooth out faceting on extruded sides
+
+  const heartMat = new THREE.MeshStandardMaterial({
+    color: 0xff0044,
+    emissive: 0x4a0012,
+    roughness: 0.38,
+    metalness: 0.05,
+  });
+  const heartMesh = new THREE.Mesh(heartGeom, heartMat);
+
+  // Outer glow (slightly larger, back-face, translucent)
+  const glowMat = new THREE.MeshStandardMaterial({
+    color: 0xff0066,
+    emissive: 0xff0033,
+    emissiveIntensity: 0.4,
+    roughness: 0.8,
+    metalness: 0,
+    transparent: true,
+    opacity: 0.12,
+    side: THREE.BackSide,
+  });
+  const glowMesh = new THREE.Mesh(heartGeom, glowMat);
+  glowMesh.scale.setScalar(1.1);
+  heartMesh.add(glowMesh);
+
+  // HeartGroup holds the mesh; we animate group scale/rotation so arrow
+  // can be parented here after impact.
+  const heartGroup = new THREE.Group();
+  heartGroup.add(heartMesh);
+
+  // ─── INITIALS ON HEART ────────────────────────────────────────────────────
+  // Draw "NH / + / SW" onto a canvas, apply as a transparent decal plane
+  // on both the front and back faces of the heart.
+  (function addInitials() {
+    const cream = 'rgba(255, 230, 210, 0.88)';
+
+    function makeCanvas(mirror) {
+      const canvas = document.createElement('canvas');
+      canvas.width  = 256;
+      canvas.height = 320;
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      if (mirror) {
+        ctx.save();
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+      }
+      ctx.fillStyle    = cream;
+      ctx.textAlign    = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.font = 'bold 100px Georgia, serif';
+      ctx.fillText('NH', 128, 70);
+      ctx.font = 'bold 80px Georgia, serif';
+      ctx.fillText('+', 128, 160);
+      ctx.font = 'bold 100px Georgia, serif';
+      ctx.fillText('SW', 128, 250);
+      if (mirror) ctx.restore();
+      return new THREE.CanvasTexture(canvas);
+    }
+
+    const geo = new THREE.PlaneGeometry(1.6, 2.0);
+
+    // Front face (+Z)
+    const front = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      map: makeCanvas(false), transparent: true, depthWrite: false,
+    }));
+    front.position.z = 0.43;
+    heartGroup.add(front);
+
+    // Back face (-Z): rotated 180° around Y; rotation already reverses U direction
+    // from the back viewer's perspective, so a plain unmirrored canvas reads correctly
+    const back = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+      map: makeCanvas(false), transparent: true, depthWrite: false,
+    }));
+    back.position.z = -0.43;
+    back.rotation.y = Math.PI;
+    heartGroup.add(back);
+  })();
+
+  heartGroup.scale.setScalar(0); // start invisible; intro scales it in
+  scene.add(heartGroup);
+
+  // ─── ARROW ────────────────────────────────────────────────────────────────
+  function buildArrow() {
+    const group = new THREE.Group();
+
+    // Shaft — 5.6 units (y: -2.8 to +2.8)
+    const shaftMat = new THREE.MeshStandardMaterial({ color: 0x8B5E3C, roughness: 0.8, metalness: 0 });
+    const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 5.6, 10), shaftMat);
+    group.add(shaft);
+
+    // Arrowhead — tip at y = 2.96 (shaft half 2.8 + cone half 0.16)
+    const headMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.2, metalness: 0.7 });
+    const head = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.32, 10), headMat);
+    head.position.y = 2.96;
+    group.add(head);
+
+    // Fletching — custom feather profile using bezier curves.
+    // Shape is defined in the XY plane: Y = along shaft, X = radially outward.
+    // Leading tip (y=+0.22) toward arrowhead, trailing tip (y=-0.30) past shaft end.
+    // Outer edge follows a natural feather curve — narrow at front, widest in the
+    // middle-back, tapering to a point at the tail.
+    function buildFletchShape() {
+      const s = new THREE.Shape();
+      s.moveTo(0, 0.22);                               // leading tip (at shaft)
+      s.bezierCurveTo(0.04, 0.15, 0.16, 0.06, 0.20, -0.03);  // outer upper curve
+      s.bezierCurveTo(0.21, -0.12, 0.14, -0.23, 0.00, -0.30); // outer lower curve to trailing tip
+      s.lineTo(0, 0.22);                               // inner edge straight back along shaft
+      return new THREE.ShapeGeometry(s, 16);
+    }
+
+    const fletchGeo = buildFletchShape();
+    const fletchMat = new THREE.MeshStandardMaterial({
+      color: 0xfff5e6, roughness: 0.9, metalness: 0, side: THREE.DoubleSide,
+    });
+    for (let i = 0; i < 3; i++) {
+      const f = new THREE.Mesh(fletchGeo, fletchMat);
+      f.position.y = -2.8;              // centered at shaft tail end
+      f.rotation.y = (i / 3) * Math.PI * 2;
+      group.add(f);
+    }
+
+    return group;
+  }
+
+  // z=0 for both start and end so the arrow sits centered in the heart's depth,
+  // not angled toward/away from the camera. Group center lands at heart center
+  // so both tip and tail poke out symmetrically.
+  const ARROW_START = new THREE.Vector3(11, 11, 0);
+  const ARROW_END   = new THREE.Vector3(0.6, 0.6, 0);
+
+  const arrowDir = ARROW_END.clone().sub(ARROW_START).normalize();
+
+  const arrow = buildArrow();
+  arrow.position.copy(ARROW_START);
+  // Orient: rotate local +Y axis to align with arrowDir
+  arrow.quaternion.setFromUnitVectors(new THREE.Vector3(0, 1, 0), arrowDir);
+  scene.add(arrow);
+
+  // ─── BACKGROUND FLOATING HEARTS ───────────────────────────────────────────
+  // Flat ShapeGeometry hearts (no extrude) as InstancedMesh — cheap to animate.
+  function buildMiniHeartGeo() {
+    const pts = [];
+    for (let i = 0; i <= 64; i++) {
+      const t = (i / 64) * Math.PI * 2;
+      pts.push(new THREE.Vector2(
+        16 * Math.pow(Math.sin(t), 3) / 9,
+        (13 * Math.cos(t) - 5 * Math.cos(2*t) - 2 * Math.cos(3*t) - Math.cos(4*t)) / 9
+      ));
+    }
+    const shape = new THREE.Shape();
+    shape.setFromPoints(pts);
+    const geo = new THREE.ShapeGeometry(shape);
+    geo.center();
+    return geo;
+  }
+
+  const HEART_COUNT = 90;
+  const miniHeartGeo = buildMiniHeartGeo();
+  const miniHeartMat = new THREE.MeshBasicMaterial({
+    color: 0xffffff, side: THREE.DoubleSide, transparent: true, opacity: 0.6,
+  });
+  const heartCloud = new THREE.InstancedMesh(miniHeartGeo, miniHeartMat, HEART_COUNT);
+  heartCloud.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  heartCloud.renderOrder = -1; // always draw behind everything else
+
+  const _hDummy = new THREE.Object3D();
+  const _hColor = new THREE.Color();
+  const _hPalette = [0xff0044, 0xff1493, 0xff69b4, 0xffb6c1, 0xffaacc, 0xffcc00];
+  const _hData = Array.from({ length: HEART_COUNT }, (_, i) => {
+    const d = {
+      x:        (Math.random() - 0.5) * 34,
+      y:        (Math.random() - 0.5) * 24,
+      z:        -2 - Math.random() * 8,
+      scale:    0.04 + Math.random() * 0.18,
+      vy:       0.25 + Math.random() * 0.55,   // drift upward
+      vx:       (Math.random() - 0.5) * 0.15,  // gentle sideways wobble
+      rotZ:     Math.random() * Math.PI * 2,
+      rotSpeed: (Math.random() - 0.5) * 1.2,
+    };
+    _hColor.setHex(_hPalette[Math.floor(Math.random() * _hPalette.length)]);
+    heartCloud.setColorAt(i, _hColor);
+    _hDummy.position.set(d.x, d.y, d.z);
+    _hDummy.rotation.z = d.rotZ;
+    _hDummy.scale.setScalar(d.scale);
+    _hDummy.updateMatrix();
+    heartCloud.setMatrixAt(i, _hDummy.matrix);
+    return d;
+  });
+  if (heartCloud.instanceColor) heartCloud.instanceColor.needsUpdate = true;
+  heartCloud.instanceMatrix.needsUpdate = true;
+  scene.add(heartCloud);
+
+  // ─── IMPACT PARTICLES ─────────────────────────────────────────────────────
+  let impactParticles = [];
+
+  function spawnImpact() {
+    // Spawn particles at the heart center (where the arrow pierces through)
+    const impactPos = new THREE.Vector3(0, 0.15, 0.0);
+    for (let i = 0; i < 70; i++) {
+      const size = 0.04 + Math.random() * 0.05;
+      const g = new THREE.SphereGeometry(size, 5, 5);
+      const color = Math.random() < 0.65 ? 0xff0044 : 0xffcc00;
+      const m = new THREE.MeshPhongMaterial({ color, emissive: color, transparent: true, opacity: 1 });
+      const p = new THREE.Mesh(g, m);
+      p.position.copy(impactPos).addScaledVector(
+        new THREE.Vector3(Math.random()-0.5, Math.random()-0.5, Math.random()-0.5), 0.4
+      );
+      p._vel = new THREE.Vector3(
+        (Math.random()-0.5) * 4,
+        (Math.random()-0.5) * 4 + 1.5,
+        (Math.random()-0.5) * 4
+      );
+      p._life = 1.0;
+      scene.add(p);
+      impactParticles.push(p);
+    }
+  }
+
+  // ─── ANIMATION STATE ──────────────────────────────────────────────────────
+  const PHASE = { INTRO: 0, FLY: 1, IMPACT: 2, ROTATE: 3 };
+  let phase = PHASE.INTRO;
+  let phaseT = 0;
+  let totalT = 0;
+  const clock = new THREE.Clock();
+
+  // Easing helpers
+  const easeOutBack = t => {
+    const c = 1.70158 + 1;
+    return 1 + c * Math.pow(t - 1, 3) + 1.70158 * Math.pow(t - 1, 2);
+  };
+  const easeInQuint = t => t * t * t * t * t;
+
+  const BASE_SCALE = 1.25;
+  const INTRO_DUR  = 1.4;
+  const FLY_DUR    = 2.0;
+  const IMPACT_DUR = 1.1;
+
+  let textShown = false;
+  function showText() {
+    if (textShown) return;
+    textShown = true;
+    setTimeout(() => document.getElementById('topText').classList.add('text-visible'), 100);
+    setTimeout(() => document.getElementById('bottomText').classList.add('text-visible'), 700);
+  }
+
+  let arrowAttached  = false;  // true once arrow is reparented to heartGroup in ROTATE
+  let rotateStartT   = 0;      // totalT when ROTATE began (for breathing / light orbit)
+  let lightOrbitAngle0 = 0;    // light orbit angle at ROTATE start, matched to current pos
+
+  function tick() {
+    requestAnimationFrame(tick);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    totalT  += dt;
+    phaseT  += dt;
+
+    // ── INTRO: heart scales in with bouncy ease ───────────────────────────
+    if (phase === PHASE.INTRO) {
+      const p = Math.min(phaseT / INTRO_DUR, 1);
+      heartGroup.scale.setScalar(easeOutBack(p) * BASE_SCALE);
+      if (p >= 1) {
+        heartGroup.scale.setScalar(BASE_SCALE);
+        phase = PHASE.FLY;
+        phaseT = 0;
+      }
+    }
+
+    // ── FLY: arrow accelerates toward heart ───────────────────────────────
+    else if (phase === PHASE.FLY) {
+      const p = Math.min(phaseT / FLY_DUR, 1);
+      arrow.position.lerpVectors(ARROW_START, ARROW_END, easeInQuint(p));
+      if (p >= 1) {
+        arrow.position.copy(ARROW_END);
+        phase = PHASE.IMPACT;
+        phaseT = 0;
+        spawnImpact();
+        showText();
+        // Flash the lights
+        pinkLight.intensity = 120;
+        fillLight.intensity = 40;
+      }
+    }
+
+    // ── IMPACT: heart pulses, particles fly, lights settle ────────────────
+    else if (phase === PHASE.IMPACT) {
+      const pulse = 1 + 0.28 * Math.exp(-phaseT * 7) * Math.abs(Math.sin(phaseT * 22));
+      heartGroup.scale.setScalar(BASE_SCALE * pulse);
+      pinkLight.intensity = Math.max(30, 120 * Math.exp(-phaseT * 6));
+      fillLight.intensity = Math.max(8, 40 * Math.exp(-phaseT * 5));
+
+      if (phaseT >= IMPACT_DUR) {
+        heartGroup.scale.setScalar(BASE_SCALE);
+        pinkLight.intensity = 30;
+        fillLight.intensity = 8;
+        phase = PHASE.ROTATE;
+        phaseT = 0;
+      }
+    }
+
+    // ── ROTATE: heart+arrow spin smoothly ────────────────────────────────
+    else if (phase === PHASE.ROTATE) {
+      // First frame: reparent arrow into heartGroup preserving world transform,
+      // so it spins with the heart automatically with no position/orientation drift
+      if (!arrowAttached) {
+        arrowAttached    = true;
+        heartGroup.attach(arrow);
+        rotateStartT     = totalT;
+        lightOrbitAngle0 = Math.atan2(pinkLight.position.z - 3, pinkLight.position.x);
+      }
+
+      heartGroup.rotation.y += 0.007;
+
+      // Breathing starts at sin(0) so there's no scale jump at transition
+      const elapsed = totalT - rotateStartT;
+      heartGroup.scale.setScalar(BASE_SCALE * (1 + 0.018 * Math.sin(elapsed * 1.6)));
+
+      // Orbit light from its exact position at transition (no snap)
+      const orbitAngle = lightOrbitAngle0 + elapsed * 0.4;
+      pinkLight.position.x = 4 * Math.cos(orbitAngle);
+      pinkLight.position.z = 4 * Math.sin(orbitAngle) + 3;
+    }
+
+    // ── UPDATE IMPACT PARTICLES ───────────────────────────────────────────
+    impactParticles = impactParticles.filter(p => {
+      p._life -= dt * 1.4;
+      if (p._life <= 0) { scene.remove(p); return false; }
+      p.position.addScaledVector(p._vel, dt);
+      p._vel.y -= 2.5 * dt; // gravity
+      p.material.opacity = p._life;
+      p.scale.setScalar(0.5 + p._life * 0.5);
+      return true;
+    });
+
+    // Drift floating heart particles upward, wrap when off-screen
+    _hData.forEach((d, i) => {
+      d.y    += d.vy * dt;
+      d.x    += d.vx * dt;
+      d.rotZ += d.rotSpeed * dt;
+      if (d.y > 13)  { d.y = -13; d.x = (Math.random() - 0.5) * 34; }
+      if (d.x >  18) d.x = -18;
+      if (d.x < -18) d.x =  18;
+      _hDummy.position.set(d.x, d.y, d.z);
+      _hDummy.rotation.z = d.rotZ;
+      _hDummy.scale.setScalar(d.scale);
+      _hDummy.updateMatrix();
+      heartCloud.setMatrixAt(i, _hDummy.matrix);
+    });
+    heartCloud.instanceMatrix.needsUpdate = true;
+
+    renderer.render(scene, camera);
+  }
+
+  tick();
+  </script>
+</body>
+</html>
