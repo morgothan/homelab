@@ -1,0 +1,15 @@
+http:
+  middlewares:
+    catchall-to-404:
+      replacePath:
+        path: /404.html
+
+  routers:
+    catchall:
+      rule: "PathPrefix(`/`)"
+      priority: 1
+      entryPoints:
+        - https
+      middlewares:
+        - catchall-to-404
+      service: error-pages@file
