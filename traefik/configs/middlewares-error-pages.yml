@@ -1,4 +1,10 @@
 http:
+  services:
+    error-pages:
+      loadBalancer:
+        servers:
+          - url: "http://error-pages:80"
+
   middlewares:
     test-errors:
       errors:
@@ -14,5 +20,5 @@ http:
           - "502"
           - "503"
           - "504"
-        service: error-pages@docker
+        service: error-pages
         query: "/{status}.html"

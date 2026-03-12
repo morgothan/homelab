@@ -18,6 +18,7 @@ services:
       - TUNNEL_TOKEN=${CLOUDFLARED_TOKEN}
       - TUNNEL_LOGLEVEL=warn
       - TUNNEL_METRICS=0.0.0.0:60123
+      - TUNNEL_TRANSPORT_PROTOCOL=http2
     networks:
       #- cftunnel-transport
       - ${DOCKERNET}
@@ -92,14 +93,14 @@ services:
 # Serves custom error pages for Traefik (4xx/5xx)
   error-pages:
     volumes:
-      - ${DOCKERDIR}/error-pages:/var/www/
-    image: busybox:latest
+      - ${DOCKERDIR}/error-pages:/var/www/:ro
+      - ${DOCKERDIR}/error-pages/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    image: nginx:alpine
     container_name: error-pages
-    command: httpd -f -h /var/www/
     restart: unless-stopped
     logging: *logging
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost/404.html || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/404.html || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -910,6 +911,31 @@ services:
 
 
 
+
+########## Steph Birthday
+# Static WebGL birthday site, public, no auth
+  steph:
+    container_name: "steph"
+    image: "nginx:alpine"
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    volumes:
+      - ${DOCKERDIR}/steph/:/usr/share/nginx/html:ro
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.steph-https.entrypoints=https
+      - traefik.http.routers.steph-https.rule=Host(`steph.${DOMAIN}`) || Host(`steph.${HEYSHUTUP}`)
+      - traefik.http.routers.steph-https.middlewares=chain-no-auth@file
+      - traefik.http.routers.steph-https.service=steph
+      - traefik.http.services.steph.loadbalancer.server.port=80
 
 ########## HeyShutUp
 # Public Node.js/Express website, no auth, rate limited via chain-no-auth
