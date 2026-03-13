@@ -288,10 +288,11 @@ services:
     environment:
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
-      - GF_INSTALL_PLUGINS=grafana-clock-panel,natel-discrete-panel,grafana-piechart-panel
+      - GF_INSTALL_PLUGINS=grafana-clock-panel
       - GF_SERVER_ROOT_URL=https://grafana.${DOMAIN}
       - GF_PUBLIC_DASHBOARDS_ENABLED=false
       - GF_FEATURE_TOGGLES_PUBLIC_DASHBOARDS=true
+      - GF_LOG_LEVEL=warn
     labels:
       - traefik.enable=true
         #external access  
