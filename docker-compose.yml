@@ -640,10 +640,10 @@ services:
 
 
 ########## ttyd
-# ttyd-nat: privileged host shell via nsenter — not exposed directly, only via ttyd-router
-  ttyd-nat:
+# ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
+  ttyd-user:
     image: tsl0922/ttyd:latest
-    container_name: ttyd-nat
+    container_name: ttyd-user
     restart: unless-stopped
     logging: *logging
     healthcheck:
@@ -655,7 +655,7 @@ services:
     privileged: true
     pid: host
     volumes:
-      - /home/nat/bin/ttyd-shell:/shell:ro
+      - ${USERDIR}/bin/ttyd-shell:/shell:ro
     networks:
       - ${DOCKERNET}
 
@@ -667,7 +667,7 @@ services:
     restart: unless-stopped
     logging: *logging
     depends_on:
-      - ttyd-nat
+      - ttyd-user
     healthcheck:
       test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/health || exit 1"]
       interval: 30s
@@ -770,7 +770,7 @@ services:
     command: serve
     volumes:
       - "${DOCKERDIR}/data:/data"
-      - "/home/nat/.docker/config.json:/root/.docker/config.json:ro"
+      - "${USERDIR}/.docker/config.json:/root/.docker/config.json:ro"
       - "/var/run/docker.sock:/var/run/docker.sock"
     environment:
       - "DIUN_WATCH_WORKERS=20"
