@@ -652,6 +652,8 @@ services:
       timeout: 5s
       retries: 3
     command: ttyd -W /shell
+    environment:
+      - TINI_SUBREAPER=1
     privileged: true
     pid: host
     volumes:
