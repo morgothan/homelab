@@ -13,12 +13,12 @@ layout:
       icon: mdi-play-circle
     Media Aquisition:
       style: row
-      columns: 3
+      columns: 5
       icon: mdi-download
   
   Home Services:
     style: row
-    columns: 4
+    columns: 5
     header: true
     icon: mdi-home
   
