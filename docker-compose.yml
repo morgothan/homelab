@@ -640,10 +640,10 @@ services:
 
 
 ########## ttyd
-# Web terminal — host shell via nsenter into host PID namespace, protected by Authelia 2FA
-  ttyd:
+# ttyd-nat: privileged host shell via nsenter — not exposed directly, only via ttyd-router
+  ttyd-nat:
     image: tsl0922/ttyd:latest
-    container_name: ttyd
+    container_name: ttyd-nat
     restart: unless-stopped
     logging: *logging
     healthcheck:
@@ -658,13 +658,32 @@ services:
       - /home/nat/bin/ttyd-shell:/shell:ro
     networks:
       - ${DOCKERNET}
+
+# ttyd-router: nginx that routes to the right ttyd instance based on Remote-User header
+# set by Authelia. Unknown users get 403. Add new users in ttyd/nginx.conf.
+  ttyd-router:
+    image: nginx:alpine
+    container_name: ttyd-router
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - ttyd-nat
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    volumes:
+      - ${DOCKERDIR}/ttyd/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - ${DOCKERNET}
     labels:
       - traefik.enable=true
       - traefik.http.routers.ttyd-https.entryPoints=https
       - traefik.http.routers.ttyd-https.rule=Host(`ttyd.${DOMAIN}`)
       - traefik.http.routers.ttyd-https.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.ttyd-https.tls=true
-      - traefik.http.services.ttyd.loadBalancer.server.port=7681
+      - traefik.http.services.ttyd.loadBalancer.server.port=80
 
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
 #       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
