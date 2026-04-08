@@ -32,6 +32,7 @@ services:
     logging: *logging
     networks:
       - ${DOCKERNET}
+      - ${DMZNET}
       #- cftunnel-transport
     ports:
       - 80:80
@@ -989,9 +990,10 @@ services:
     volumes:
       - ${DOCKERDIR}/steph/:/usr/share/nginx/html:ro
     networks:
-      - ${DOCKERNET}
+      - ${DMZNET}
     labels:
       - traefik.enable=true
+      - traefik.docker.network=${DMZNET}
       - traefik.http.routers.steph-https.entrypoints=https
       - traefik.http.routers.steph-https.rule=Host(`steph.${DOMAIN}`) || Host(`steph.${HEYSHUTUP}`)
       - traefik.http.routers.steph-https.middlewares=chain-no-auth@file
@@ -1018,15 +1020,15 @@ services:
     volumes:
       - ${DOCKERDIR}/heyshutup/:/home/node/app
     networks:
-      - ${DOCKERNET} 
+      - ${DMZNET}
     command: "npm start"
     labels:
       - traefik.enable=true
-      #external access  
+      - traefik.docker.network=${DMZNET}
+      #external access
       - traefik.http.routers.heyshutup-http.entrypoints=https
       - traefik.http.routers.heyshutup-http.rule=Host(`${HEYSHUTUP}`)
       - traefik.http.routers.heyshutup-http.middlewares=chain-no-auth@file
-        #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.heyshutup-http.service=heyshutup
       - traefik.http.services.heyshutup.loadbalancer.server.port=3000
 
@@ -1150,7 +1152,9 @@ services:
 networks:
   proxy:  #create with docker network create proxy
     external: {}
-  cftunnel-transport:    
+  dmz:          # Isolated network for public-facing containers with no auth (heyshutup, steph)
+    external: {}
+  cftunnel-transport:
 
 secrets:
   #  oauth_secrets:
