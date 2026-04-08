@@ -73,6 +73,7 @@ session:
   redis:
     host: redis
     port: 6379
+    password: '{{ env "REDIS_PASSWORD" }}'
  
 # https://www.authelia.com/configuration/security/regulation/
 regulation:
