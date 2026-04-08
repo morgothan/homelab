@@ -20,9 +20,8 @@ services:
       - TUNNEL_METRICS=0.0.0.0:60123
       - TUNNEL_TRANSPORT_PROTOCOL=http2
     networks:
-      #- cftunnel-transport
-      - ${DOCKERNET}
-        
+      - cftunnel-transport
+
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
@@ -33,7 +32,7 @@ services:
     networks:
       - ${DOCKERNET}
       - ${DMZNET}
-      #- cftunnel-transport
+      - cftunnel-transport
     ports:
       - 80:80
       - 443:443
