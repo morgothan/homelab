@@ -915,6 +915,41 @@ services:
       - traefik.http.routers.overseerr-http-local.service=overseerr
 
 
+########## trigarr  (TODO: currently has hard links to be on http, when it can move to https reset up
+#  triggarr:
+#    image: ghcr.io/thejuran/triggarr:latest
+#    container_name: triggarr
+#    environment:
+#      - PUID=1000    # Your user ID (run `id -u` to find)
+#      - PGID=1000    # Your group ID (run `id -g` to find)
+#    networks:
+#      - ${DOCKERNET}
+#    volumes:
+#      - /etc/localtime:/etc/localtime:ro
+#      - /etc/timezone:/etc/timezone:ro
+#      - ${DOCKERDIR}/trigarr:/config
+##    ports:
+##      - "127.0.0.1:8484:8484"  # Localhost only -- use Tailscale or reverse proxy for remote access
+#    restart: unless-stopped
+#    logging: *logging
+#    cap_drop:
+#      - ALL
+#    cap_add:
+#      - CHOWN
+#      - DAC_OVERRIDE
+#      - FOWNER
+#      - SETUID
+#      - SETGID
+#    labels:
+#      - traefik.enable=true
+#      - traefik.http.routers.triggarr-http.entrypoints=https
+#      - traefik.http.routers.triggarr-http.rule=Host(`triggarr.${DOMAIN}`)
+#      - traefik.http.routers.triggarr-http.middlewares=chain-authelia@file
+#      - traefik.http.routers.triggarr-http.service=triggarr
+#      - traefik.http.services.triggarr.loadbalancer.server.port=8484
+#
+#
+#
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
