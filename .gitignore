@@ -84,6 +84,7 @@ resume-claude
 authelia/db.sqlite3
 *.sqlite3
 *.db
+*.v0-backup
 
 # =============================================================================
 # LOGS
