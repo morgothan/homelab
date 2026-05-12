@@ -8,6 +8,7 @@ http:
           - robotstxt
           - middlewares-rate-limit
           - middlewares-secure-headers
+          - fail2ban
           - middlewares-authelia
             #          - coraza-waf
             #          - crowdsec
