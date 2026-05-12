@@ -10,5 +10,6 @@ http:
           - middlewares-rate-limit
             #          - crowdsec
             #          - coraza-waf
+          - fail2ban
           - waf
           - middlewares-authelia
