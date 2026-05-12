@@ -14,6 +14,7 @@ from typing import Optional
 import docker
 import httpx
 from fastapi import FastAPI, Response
+from fastapi.responses import RedirectResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -481,7 +482,7 @@ def _nav_bar(active: str) -> str:
         '<div class="np-nav">'
         + _item("/", "Front Page", "front")
         + " &nbsp;&middot;&nbsp; "
-        + _item("/detailed", "Current Events", "detail")
+        + _item("/current", "Current Events", "current")
         + " &nbsp;&middot;&nbsp; "
         + _item("/archive", "Archive", "archive")
         + '</div>'
@@ -498,6 +499,21 @@ def _masthead(now_str: str) -> str:
         f'<div class="mast-meta">Generated {_h(now_str)}'
         f' &nbsp;&middot;&nbsp; Refresh {REFRESH_INTERVAL // 60}m'
         f' &nbsp;&middot;&nbsp; Log window {LOG_HOURS}h</div>'
+        '<hr class="rule-sng" style="margin-top:10px">'
+        '</header>'
+    )
+
+
+def _masthead_today() -> str:
+    today_str = datetime.now(timezone.utc).strftime("%A, %B %-d, %Y")
+    return (
+        '<header class="mast">'
+        '<hr class="rule-dbl">'
+        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2024</div>'
+        '<hr class="rule-sng" style="margin:10px 0">'
+        f'<div class="mast-meta">Today\'s Edition &mdash; {_h(today_str)}'
+        f' &nbsp;&middot;&nbsp; Updated hourly</div>'
         '<hr class="rule-sng" style="margin-top:10px">'
         '</header>'
     )
@@ -743,19 +759,19 @@ def _render_archive_day(rec: dict) -> str:
     return _page_wrap(body, refresh=None)  # static page, no auto-refresh
 
 
-def _render_newspaper(
-    now_str: str,
+def _render_today_front_page(
     n_running: int,
     unhealthy: list,
     update_hosts: dict,
-    docker_issues: list[dict],
-    loki_issues: list[dict],
-    newspaper: Optional[list[dict]],
+    today_data: dict,
 ) -> str:
+    newspaper    = today_data.get("newspaper")
+    docker_issues = today_data.get("docker_issues") or []
+    loki_issues   = today_data.get("loki_issues") or []
     still_checking = any(h["status"] in ("pending", "checking") for h in update_hosts.values())
-    # None  = analysis not yet started  → poll fast
-    # []    = analysis ran but JSON failed → stop polling, show error
-    # [...] = articles ready             → stop polling, show articles
+    # None  = not yet generated → poll fast
+    # []    = generation failed → stop fast-polling
+    # [...] = articles ready
     page_refresh = 30 if (still_checking or newspaper is None) else REFRESH_INTERVAL
 
     if newspaper:
@@ -768,23 +784,20 @@ def _render_newspaper(
             '</div>'
         )
     else:
-        # [] — analysis ran but model returned unparseable JSON; next cycle will retry
         articles_html = (
             '<div class="np-pending">'
-            'Edition unavailable — next edition in '
-            f'{REFRESH_INTERVAL // 60} min<br>'
+            f'Edition unavailable — next update in {UPDATE_INTERVAL // 60} min<br>'
             '<small style="font-size:0.75rem">'
-            '<a href="/detailed" style="color:var(--gold2)">View detailed report</a>'
+            '<a href="/current" style="color:var(--gold2)">View rolling report</a>'
             '</small>'
             '</div>'
         )
 
-    # Quick-stats status bar
     n_updates = sum(
         len([r for r in h["results"] if r["status"] == "update_available"])
         for h in update_hosts.values()
     )
-    n_issues = len(docker_issues) + len(loki_issues)
+    n_issues   = len(docker_issues) + len(loki_issues)
     n_unhealthy = len(unhealthy)
 
     def _dot(cls: str, text: str) -> str:
@@ -801,22 +814,16 @@ def _render_newspaper(
     else:
         status_parts.append(_dot("c-ok", "all images current"))
     if n_issues:
-        status_parts.append(f"<span>{n_issues} log issues (last {LOG_HOURS}h)</span>")
+        status_parts.append(f"<span>{n_issues} log issues today</span>")
     else:
-        status_parts.append(_dot("c-ok", "no log issues"))
+        status_parts.append(_dot("c-ok", "no log issues today"))
 
     status_bar = '<div class="np-status">' + "".join(status_parts) + '</div>'
-
-    body = (
-        _masthead(now_str)
-        + _nav_bar("front")
-        + articles_html
-        + status_bar
-    )
+    body = _masthead_today() + _nav_bar("front") + articles_html + status_bar
     return _page_wrap(body, refresh=page_refresh)
 
 
-def _render_page(
+def _render_current_events(
     now_str: str,
     n_running: int,
     unhealthy: list,
@@ -826,25 +833,39 @@ def _render_page(
     docker_analysis: Optional[str],
     loki_issues: list[dict],
     loki_analysis: Optional[str],
+    newspaper: Optional[list[dict]],
 ) -> str:
     still_checking = any(h["status"] in ("pending", "checking") for h in update_hosts.values())
-    page_refresh = 30 if still_checking else REFRESH_INTERVAL
+    page_refresh = 30 if (still_checking or newspaper is None) else REFRESH_INTERVAL
+
+    if newspaper:
+        articles_html = _render_articles_html(newspaper)
+    elif newspaper is None:
+        articles_html = (
+            '<div class="np-pending">'
+            "Preparing live report&#x2026;<br>"
+            '<small style="font-size:0.75rem">Check back in a few minutes</small>'
+            '</div>'
+        )
+    else:
+        articles_html = (
+            '<div class="np-pending">'
+            f'Report unavailable — refreshing in {REFRESH_INTERVAL // 60} min'
+            '</div>'
+        )
+
     body = (
         _masthead(now_str)
-        + _nav_bar("detail")
-        + '<div class="grid">'
+        + _nav_bar("current")
+        + articles_html
+        + '<div class="grid" style="margin-top:24px">'
         + _containers_card(unhealthy, starting, n_running)
         + _updates_card(update_hosts)
-        + _log_card(
-            "Docker Container Logs",
-            f"Last {LOG_HOURS}h",
-            docker_issues, docker_analysis,
-        )
-        + _log_card(
-            "Network &amp; Syslog",
-            f"Last {LOG_HOURS}h &nbsp;&middot;&nbsp; via Loki",
-            loki_issues, loki_analysis,
-        )
+        + _log_card("Docker Container Logs", f"Last {LOG_HOURS}h",
+                    docker_issues, docker_analysis)
+        + _log_card("Network &amp; Syslog",
+                    f"Last {LOG_HOURS}h &nbsp;&middot;&nbsp; via Loki",
+                    loki_issues, loki_analysis)
         + '</div>'
     )
     return _page_wrap(body, refresh=page_refresh)
@@ -874,7 +895,15 @@ def _blank_host_state(status: str = "pending") -> dict:
     return {"status": status, "ts": None, "results": []}
 
 _state: dict = {
-    "log_data": {
+    "log_data": {           # rolling window (last LOG_HOURS) — drives Current Events page
+        "built_at": None,
+        "docker_issues": [],
+        "docker_analysis": None,
+        "loki_issues": [],
+        "loki_analysis": None,
+        "newspaper": None,
+    },
+    "today_data": {         # midnight-to-now — drives Front Page
         "built_at": None,
         "docker_issues": [],
         "docker_analysis": None,
@@ -1382,7 +1411,7 @@ async def _generate_newspaper(
         lines.append("CONTAINER HEALTH: all containers running normally")
 
     for label, host in update_hosts.items():
-        if host["status"] != "done":
+        if host.get("status", "done") != "done":
             continue
         for r in host["results"]:
             if r["status"] != "update_available":
@@ -1468,7 +1497,7 @@ async def _generate_newspaper(
 
             if isinstance(articles, list):
                 valid = [
-                    a for a in articles[:5]
+                    a for a in articles[:10]
                     if isinstance(a, dict) and "headline" in a and "blurb" in a
                 ]
                 if valid:
@@ -1515,6 +1544,40 @@ async def _refresh_log_data() -> None:
     log.info("Log data updated, queuing analysis")
     # Analysis runs independently — doesn't delay the next refresh cycle
     asyncio.create_task(_run_analysis(docker_issues, loki_issues))
+
+
+async def _run_today_analysis(docker_issues: list[dict], loki_issues: list[dict]) -> None:
+    """Run LLM analysis for today's data and generate the front-page newspaper."""
+    docker_analysis = await _llm_analysis(docker_issues, "Docker container (today)")
+    async with _lock:
+        _state["today_data"]["docker_analysis"] = docker_analysis
+    loki_analysis = await _llm_analysis(loki_issues, "network/syslog (from Loki, today)")
+    async with _lock:
+        _state["today_data"]["loki_analysis"] = loki_analysis
+    log.info("Today LLM analysis complete — generating front page newspaper")
+    loop = asyncio.get_running_loop()
+    unhealthy, _, _ = await loop.run_in_executor(None, _get_container_status)
+    async with _lock:
+        update_hosts = dict(_state["update_hosts"])
+    newspaper = await _generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy)
+    async with _lock:
+        _state["today_data"]["newspaper"] = newspaper if newspaper is not None else []
+    log.info("Front page complete (%d articles)", len(newspaper) if newspaper else 0)
+
+
+async def _refresh_today_data() -> None:
+    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    since_ts = int(midnight.timestamp())
+    log.info("Refreshing today's front page (since %s UTC)", midnight.strftime("%Y-%m-%d"))
+    docker_issues, loki_issues = await asyncio.gather(
+        check_docker_logs(since_ts=since_ts),
+        check_loki(start=midnight),
+    )
+    async with _lock:
+        _state["today_data"]["built_at"] = datetime.now(timezone.utc)
+        _state["today_data"]["docker_issues"] = docker_issues
+        _state["today_data"]["loki_issues"] = loki_issues
+    asyncio.create_task(_run_today_analysis(docker_issues, loki_issues))
 
 
 # ── Container status (fast, per-request) ──────────────────────────────────────
@@ -1628,11 +1691,21 @@ async def _refresh_loop():
         await asyncio.sleep(REFRESH_INTERVAL)
 
 
+async def _today_data_loop():
+    while True:
+        try:
+            await _refresh_today_data()
+        except Exception as e:
+            log.error("Today data loop error: %s", e)
+        await asyncio.sleep(UPDATE_INTERVAL)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     _state["archive"] = _load_archive()
     asyncio.create_task(_refresh_loop())
     asyncio.create_task(_update_loop())
+    asyncio.create_task(_today_data_loop())
     asyncio.create_task(_daily_archive_loop())
     yield
 
@@ -1643,36 +1716,31 @@ app = FastAPI(lifespan=lifespan)
 @app.get("/")
 async def index():
     loop = asyncio.get_running_loop()
-    unhealthy, starting, n_running = await loop.run_in_executor(None, _get_container_status)
+    unhealthy, _, n_running = await loop.run_in_executor(None, _get_container_status)
 
     async with _lock:
-        log_data = dict(_state["log_data"])
+        today_data   = dict(_state["today_data"])
         update_hosts = dict(_state["update_hosts"])
 
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
-    if log_data["built_at"] is None:
+    if today_data["built_at"] is None:
         html = _init_page()
     else:
-        html = _render_newspaper(
-            now_str=now_str,
+        html = _render_today_front_page(
             n_running=n_running,
             unhealthy=unhealthy,
             update_hosts=update_hosts,
-            docker_issues=log_data["docker_issues"],
-            loki_issues=log_data["loki_issues"],
-            newspaper=log_data["newspaper"],
+            today_data=today_data,
         )
     return Response(content=html, media_type="text/html; charset=utf-8")
 
 
-@app.get("/detailed")
-async def detailed():
+@app.get("/current")
+async def current_events():
     loop = asyncio.get_running_loop()
     unhealthy, starting, n_running = await loop.run_in_executor(None, _get_container_status)
 
     async with _lock:
-        log_data = dict(_state["log_data"])
+        log_data     = dict(_state["log_data"])
         update_hosts = dict(_state["update_hosts"])
 
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
@@ -1680,7 +1748,7 @@ async def detailed():
     if log_data["built_at"] is None:
         html = _init_page()
     else:
-        html = _render_page(
+        html = _render_current_events(
             now_str=now_str,
             n_running=n_running,
             unhealthy=unhealthy,
@@ -1690,8 +1758,14 @@ async def detailed():
             docker_analysis=log_data["docker_analysis"],
             loki_issues=log_data["loki_issues"],
             loki_analysis=log_data["loki_analysis"],
+            newspaper=log_data["newspaper"],
         )
     return Response(content=html, media_type="text/html; charset=utf-8")
+
+
+@app.get("/detailed")
+async def detailed():
+    return RedirectResponse(url="/current", status_code=301)
 
 
 @app.get("/archive")
