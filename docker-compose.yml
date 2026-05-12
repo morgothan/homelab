@@ -1154,7 +1154,7 @@ services:
 ########## Homelab Monitor
 # Plain-text status page — container health, image updates, Docker + syslog analysis
   lab-monitor:
-    build: ./homelab-monitor
+    build: ./homelab-news
     container_name: lab-monitor
     restart: unless-stopped
     logging: *logging
@@ -1164,7 +1164,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${USERDIR}/.docker/config.json:/root/.docker/config.json:ro
       - ${USERDIR}/.ssh:/root/.ssh:ro
-      - ${USERDIR}/docker/homelab-monitor/data:/data
+      - ${USERDIR}/docker/homelab-news/data:/data
     environment:
       - LOKI_URL=${LOKI_URL}
       - OLLAMA_URL=${OLLAMA_URL}
