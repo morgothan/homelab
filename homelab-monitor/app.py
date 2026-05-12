@@ -890,6 +890,7 @@ def _init_page() -> str:
 # ── State ─────────────────────────────────────────────────────────────────────
 
 _lock = asyncio.Lock()
+_ollama_lock = asyncio.Lock()  # serialise all Ollama calls — CPU-only server handles one at a time
 
 def _blank_host_state(status: str = "pending") -> dict:
     return {"status": status, "ts": None, "results": []}
@@ -1186,18 +1187,19 @@ async def _llm_changelog_analysis(container: str, image: str, tag: str, notes: s
         f"RELEASE NOTES ({tag}):\n{notes[:2500]}"
     )
     try:
-        async with httpx.AsyncClient(timeout=180.0) as client:
-            resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 300},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+        async with _ollama_lock:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                resp = await client.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 300},
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["message"]["content"].strip()
     except Exception as e:
         log.warning("Changelog LLM failed for %s: %s", container, e)
         return None
@@ -1379,18 +1381,19 @@ async def _llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         f"ENTRIES ({context}):\n{entries}"
     )
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 500},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+        async with _ollama_lock:
+            async with httpx.AsyncClient(timeout=600.0) as client:
+                resp = await client.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 500},
+                    },
+                )
+                resp.raise_for_status()
+                return resp.json()["message"]["content"].strip()
     except Exception as e:
         log.warning("Ollama analysis failed (%s): %s", type(e).__name__, e)
         return None
@@ -1451,57 +1454,58 @@ async def _generate_newspaper(
         f"CURRENT HOMELAB STATUS:\n{situation}"
     )
     try:
-        async with httpx.AsyncClient(timeout=300.0) as client:
-            resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
-                json={
-                    "model": OLLAMA_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 1500},
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["message"]["content"].strip()
-            # Strip markdown fences the model sometimes adds despite instructions
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content.strip())
+        async with _ollama_lock:
+            async with httpx.AsyncClient(timeout=900.0) as client:
+                resp = await client.post(
+                    f"{OLLAMA_URL}/api/chat",
+                    json={
+                        "model": OLLAMA_MODEL,
+                        "messages": [{"role": "user", "content": prompt}],
+                        "stream": False,
+                        "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 1500},
+                    },
+                )
+                resp.raise_for_status()
+                content = resp.json()["message"]["content"].strip()
+                # Strip markdown fences the model sometimes adds despite instructions
+                content = re.sub(r"^```(?:json)?\n?", "", content)
+                content = re.sub(r"\n?```$", "", content.strip())
 
-            articles = None
+                articles = None
 
-            # Attempt 1: direct parse
-            try:
-                articles = json.loads(content)
-            except json.JSONDecodeError:
-                pass
+                # Attempt 1: direct parse
+                try:
+                    articles = json.loads(content)
+                except json.JSONDecodeError:
+                    pass
 
-            # Attempt 2: extract the outermost [...] array and retry
-            if not isinstance(articles, list):
-                m = re.search(r'\[[\s\S]*\]', content)
-                if m:
-                    try:
-                        articles = json.loads(m.group(0))
-                    except json.JSONDecodeError:
-                        pass
+                # Attempt 2: extract the outermost [...] array and retry
+                if not isinstance(articles, list):
+                    m = re.search(r'\[[\s\S]*\]', content)
+                    if m:
+                        try:
+                            articles = json.loads(m.group(0))
+                        except json.JSONDecodeError:
+                            pass
 
-            # Attempt 3: extract individual {...} objects with regex
-            if not isinstance(articles, list):
-                articles = []
-                for m in re.finditer(r'\{[^{}]+\}', content, re.DOTALL):
-                    try:
-                        obj = json.loads(m.group(0))
-                        if "headline" in obj and "blurb" in obj:
-                            articles.append(obj)
-                    except json.JSONDecodeError:
-                        pass
+                # Attempt 3: extract individual {...} objects with regex
+                if not isinstance(articles, list):
+                    articles = []
+                    for m in re.finditer(r'\{[^{}]+\}', content, re.DOTALL):
+                        try:
+                            obj = json.loads(m.group(0))
+                            if "headline" in obj and "blurb" in obj:
+                                articles.append(obj)
+                        except json.JSONDecodeError:
+                            pass
 
-            if isinstance(articles, list):
-                valid = [
-                    a for a in articles[:10]
-                    if isinstance(a, dict) and "headline" in a and "blurb" in a
-                ]
-                if valid:
-                    return valid
+                if isinstance(articles, list):
+                    valid = [
+                        a for a in articles[:10]
+                        if isinstance(a, dict) and "headline" in a and "blurb" in a
+                    ]
+                    if valid:
+                        return valid
     except Exception as e:
         log.warning("Newspaper generation failed (%s): %s", type(e).__name__, e)
     return None
