@@ -185,6 +185,7 @@ services:
       - ${DOCKERDIR}/homepage/icons:/app/public/icons
     environment:
       - HOMEPAGE_ALLOWED_HOSTS=home.${DOMAIN},homepage.${DOMAIN}
+      - NODE_TLS_REJECT_UNAUTHORIZED=0
     restart: unless-stopped
     logging: *logging
     labels:
