@@ -27,7 +27,7 @@ LOG_HOURS        = int(os.getenv("LOG_HOURS", "6"))
 DOCKER_AUTH      = os.getenv("DOCKER_AUTH_FILE", "/root/.docker/config.json")
 SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
-OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
+OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")  # optional, raises API rate limit from 60 to 5000/hr
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 ARCHIVE_FILE     = os.getenv("ARCHIVE_FILE", "/data/archive.json")
@@ -390,6 +390,34 @@ body {
   line-height: 1.7;
   color: #999999;
 }
+.np-briefs {
+  border-top: 1px solid var(--bdr);
+  padding: 14px 0 0;
+  margin-top: 0;
+}
+.np-briefs-head {
+  font-size: 0.62rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--gold2);
+  font-family: "Courier New", monospace;
+  margin-bottom: 10px;
+}
+.np-brief {
+  padding: 7px 0;
+  border-bottom: 1px solid var(--dim);
+}
+.np-brief:last-child { border-bottom: none; }
+.np-brief-hl {
+  font-size: 0.85rem;
+  font-weight: bold;
+  color: var(--text);
+}
+.np-brief-blurb {
+  font-size: 0.78rem;
+  color: #888888;
+  line-height: 1.5;
+}
 .np-pending {
   text-align: center;
   padding: 56px 20px;
@@ -657,6 +685,8 @@ def _render_articles_html(articles: list[dict]) -> str:
     if not articles:
         return '<div class="np-pending">No articles available for this edition.</div>'
     lead, *rest = articles
+    columns = rest[:3]   # articles 2-4 → column grid
+    briefs  = rest[3:]   # articles 5+ → "In Brief" strip
     html = (
         '<div class="np-lead">'
         '<div class="np-lead-kicker">Lead Story</div>'
@@ -664,17 +694,26 @@ def _render_articles_html(articles: list[dict]) -> str:
         f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
         '</div>'
     )
-    if rest:
-        kickers = ["In Brief", "Also", "Elsewhere", "Update"]
+    if columns:
+        kickers = ["Also", "Elsewhere", "Update"]
         cols = "".join(
             '<div class="np-article">'
             f'<div class="np-article-kicker">{kickers[idx % len(kickers)]}</div>'
             f'<div class="np-hl">{_h(a["headline"])}</div>'
             f'<div class="np-blurb">{_h(a["blurb"])}</div>'
             '</div>'
-            for idx, a in enumerate(rest)
+            for idx, a in enumerate(columns)
         )
         html += f'<div class="np-cols">{cols}</div>'
+    if briefs:
+        items = "".join(
+            f'<div class="np-brief">'
+            f'<span class="np-brief-hl">{_h(a["headline"])}</span>'
+            f' &mdash; <span class="np-brief-blurb">{_h(a["blurb"])}</span>'
+            f'</div>'
+            for a in briefs
+        )
+        html += f'<div class="np-briefs"><div class="np-briefs-head">In Brief</div>{items}</div>'
     return html
 
 
@@ -1367,14 +1406,17 @@ async def _generate_newspaper(
 
     situation = "\n".join(lines)
     prompt = (
-        "You are the editor of a homelab status newspaper. "
-        "Write exactly 4 short newspaper articles about the most noteworthy things right now.\n\n"
+        "You are the editor of a homelab status newspaper covering a full day of events.\n"
+        "Write 4 to 10 articles — enough to cover everything noteworthy, no more.\n\n"
         "Rules:\n"
+        "- Group related items into one article. 'Five *arr apps have routine updates' = 1 article, not 5.\n"
+        "- Order by importance: breaking changes and errors first, routine updates last.\n"
         "- Headline: punchy, specific, real-newspaper style. Name the service and the issue.\n"
         "  Good: 'Traefik Logs 847 Failed Redis Auth Attempts'\n"
         "  Bad: 'System Experiencing Connectivity Issues'\n"
-        "- Blurb: 2-3 sentences, AP wire style. Be specific — name counts, service names, what it means.\n"
-        "- Cover the most actionable items first. If everything is fine on one front, say so briefly.\n"
+        "- Articles 1–4: blurb is 2-3 sentences, AP wire style, specific counts and service names.\n"
+        "- Articles 5+: blurb is 1 sentence only — these run as brief notes below the fold.\n"
+        "- If something is completely fine, skip it — don't pad with 'all clear' articles.\n"
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\"}]\n\n"
         f"CURRENT HOMELAB STATUS:\n{situation}"
@@ -1387,7 +1429,7 @@ async def _generate_newspaper(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 900},
+                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 1500},
                 },
             )
             resp.raise_for_status()
