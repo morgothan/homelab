@@ -127,19 +127,24 @@ services:
       start_period: 10s
     environment:
       - PARANOIA=1
-      - ANOMALY_INBOUND=10
+      - ANOMALY_INBOUND=5
       - ANOMALY_OUTBOUND=5
       - BACKEND=http://dummy
       - REPORTING_LEVEL=2
       - MODSEC_AUDIT_LOG_FORMAT=JSON
       - MODSEC_RULE_ENGINE=On
       - UID=1000
+      - SET_REAL_IP_FROM=172.18.0.0/16
+      - REAL_IP_HEADER=X-Forwarded-For
+      - REAL_IP_PROXY_HEADER=X-Forwarded-For
+      - REAL_IP_RECURSIVE=on
     networks:
       - ${DOCKERNET}
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/waf_logs:/var/log/nginx:rw
+      - ${DOCKERDIR}/waf/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
 
 ########## Whoami (WAF Dummy Backend)
 # Dummy HTTP 200 backend required by the WAF sidecar container
