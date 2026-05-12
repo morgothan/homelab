@@ -9,6 +9,7 @@ http:
           - geoblock-badies
           - middlewares-rate-limit
           - middlewares-secure-headers
+          - fail2ban
           - waf
             #          - coraza-waf
             #          - crowdsec

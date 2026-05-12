@@ -1,0 +1,13 @@
+http:
+  middlewares:
+    fail2ban:
+      plugin:
+        fail2ban:
+          sourceCriterion:
+            requestHeaderName: "Cf-Connecting-Ip"
+          rules:
+            enabled: true
+            bantime: "24h"
+            findtime: "10m"
+            maxretry: 10
+            statuscode: "403"
