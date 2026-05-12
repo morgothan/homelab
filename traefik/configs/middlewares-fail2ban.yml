@@ -5,6 +5,7 @@ http:
         fail2ban:
           sourceCriterion:
             requestHeaderName: "Cf-Connecting-Ip"
+          logLevel: "WARN"
           rules:
             enabled: true
             bantime: "24h"

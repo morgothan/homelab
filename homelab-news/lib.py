@@ -151,6 +151,31 @@ def _extract_text(line: str) -> str:
         return line
 
 
+_IP_RE = re.compile(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b')
+
+
+def _group_by_ip(issues: list[dict]) -> list[dict]:
+    """Collapse multiple issues sharing the same source IP into one aggregated entry."""
+    groups: dict[tuple, list[int]] = defaultdict(list)
+    for idx, issue in enumerate(issues):
+        m = _IP_RE.search(issue["message"])
+        if m:
+            groups[(issue["source"], issue["level"], m.group(1))].append(idx)
+
+    to_remove: set[int] = set()
+    for (_, _, ip), indices in groups.items():
+        if len(indices) < 3:
+            continue
+        total = sum(issues[i]["count"] for i in indices)
+        n = len(indices)
+        rep = issues[indices[0]]["message"][:180]
+        issues[indices[0]]["count"] = total
+        issues[indices[0]]["message"] = f"[{n} patterns from {ip}, \xd7{total} total] {rep}"[:300]
+        to_remove.update(indices[1:])
+
+    return [issue for idx, issue in enumerate(issues) if idx not in to_remove]
+
+
 def _collect_issues(source: str, lines: list[str]) -> tuple[list[dict], dict[str, int]]:
     issues: list[dict] = []
     seen: dict[str, int] = defaultdict(int)
@@ -223,13 +248,15 @@ async def check_docker_logs(
 
     for i in all_issues:
         i["count"] = all_seen[i.pop("_key")]
-    return all_issues[:60]
+    all_issues = _group_by_ip(all_issues)
+    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:60]
 
 # ── Loki log fetching ─────────────────────────────────────────────────────────
 
 async def check_loki(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
+    limit: int = 2000,
 ) -> list[dict]:
     if end is None:
         end = datetime.now(timezone.utc)
@@ -244,8 +271,8 @@ async def check_loki(
                     "query": query,
                     "start": str(int(start.timestamp() * 1_000_000_000)),
                     "end": str(int(end.timestamp() * 1_000_000_000)),
-                    "limit": "500",
-                    "direction": "backward",
+                    "limit": str(limit),
+                    "direction": "forward",
                 },
             )
             resp.raise_for_status()
@@ -272,7 +299,8 @@ async def check_loki(
 
     for i in all_issues:
         i["count"] = all_seen[i.pop("_key")]
-    return all_issues[:60]
+    all_issues = _group_by_ip(all_issues)
+    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:60]
 
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
