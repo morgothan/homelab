@@ -5,8 +5,8 @@
 server:
   address: tcp://0.0.0.0:9091/
   buffers:
-    read: 4096
-    write: 4096
+    read: 16384
+    write: 16384
   endpoints:
     enable_pprof: false
     enable_expvars: false

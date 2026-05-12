@@ -863,6 +863,8 @@ services:
       - nut
     networks:
       - ${DOCKERNET}
+    environment:
+      - AUTH_DISABLED=true
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
@@ -1088,16 +1090,15 @@ services:
       - --server-username=${KOPIA_USER}
       - --server-password=${KOPIA_PASS}
       - --password=${KOPIA_REPO_PW}
-      - --insecure
     labels:
       - traefik.enable=true
       #external access
       - traefik.http.routers.kopia-ui-http.entrypoints=https
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
       - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia@file,kopia-auth@file
-#      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
+      - traefik.http.services.kopia-ui.loadbalancer.server.scheme=https
 
   
 ########## Mealie
@@ -1146,6 +1147,40 @@ services:
 #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.mealie-http.service=mealie
       - traefik.http.services.mealie.loadbalancer.server.port=9000
+
+
+########## Homelab Monitor
+# Plain-text status page — container health, image updates, Docker + syslog analysis
+  lab-monitor:
+    build: ./homelab-monitor
+    container_name: lab-monitor
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${USERDIR}/.docker/config.json:/root/.docker/config.json:ro
+      - ${USERDIR}/.ssh:/root/.ssh:ro
+      - ${USERDIR}/docker/homelab-monitor/data:/data
+    environment:
+      - LOKI_URL=${LOKI_URL}
+      - OLLAMA_URL=${OLLAMA_URL}
+      - OLLAMA_MODEL=${OLLAMA_MODEL}
+      - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
+      - SSH_KEY=${SSH_KEY}
+    labels:
+      - traefik.enable=true
+      # external
+      - traefik.http.routers.lab-monitor-https.entrypoints=https
+      - traefik.http.routers.lab-monitor-https.rule=Host(`news.${DOMAIN}`)
+      - traefik.http.routers.lab-monitor-https.middlewares=chain-authelia@file
+      - traefik.http.routers.lab-monitor-https.service=lab-monitor
+      - traefik.http.services.lab-monitor.loadbalancer.server.port=8080
+      # local
+      - traefik.http.routers.lab-monitor-local.entrypoints=http
+      - traefik.http.routers.lab-monitor-local.rule=Host(`news.${LOCAL}`)
+      - traefik.http.routers.lab-monitor-local.service=lab-monitor
 
 
 networks:
