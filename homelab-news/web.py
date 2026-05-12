@@ -9,7 +9,7 @@ from fastapi.responses import RedirectResponse
 
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS,
-    TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE,
+    TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
@@ -221,6 +221,50 @@ async def archive_day(date_str: str):
         + '</div>'
     )
     return Response(content=page_wrap(body, refresh=None),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/trends")
+async def trends():
+    from html import escape as _h
+    periodic = load_json(PERIODIC_FILE) or {}
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    sections: list[str] = []
+
+    def _section(title: str, items: list[dict], label_key: str, empty_msg: str) -> str:
+        html = f'<div class="arch-section-head">{_h(title)}</div>'
+        if not items:
+            return html + f'<div class="np-pending">{_h(empty_msg)}</div>'
+        parts = []
+        for item in items:
+            label = item.get(label_key, "")
+            articles = item.get("articles") or []
+            headline = _h(articles[0]["headline"]) if articles else '<span class="c-dim">No articles</span>'
+            parts.append(
+                f'<div class="arch-period">'
+                f'<span class="arch-date">{_h(label)}</span>'
+                f'<span class="arch-headline">{headline}</span>'
+                f'<span class="arch-meta">{len(articles)} articles</span></div>'
+                + render_articles_html(articles)
+            )
+        return html + "".join(parts)
+
+    sections.append(_section(
+        "Annual Reports", periodic.get("yearly", []), "year",
+        "No annual reports yet — first one on January 1st.",
+    ))
+    sections.append(_section(
+        "Monthly Reviews", periodic.get("monthly", []), "period",
+        "No monthly reviews yet — first one on the 1st of next month.",
+    ))
+    sections.append(_section(
+        "Weekly Digests", periodic.get("weekly", []), "period",
+        "No weekly digests yet — first one this Sunday at midnight UTC.",
+    ))
+
+    body = masthead_rolling(now_str) + nav_bar("trends") + "".join(sections)
+    return Response(content=page_wrap(body, refresh=3600),
                     media_type="text/html; charset=utf-8")
 
 

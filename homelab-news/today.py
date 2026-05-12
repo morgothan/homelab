@@ -23,25 +23,30 @@ async def run() -> None:
         check_docker_logs(since_ts=since_ts),
         check_loki(start=midnight),
     )
-    # Save issues immediately so the page shows something while LLM runs
+    # Update issues data immediately but preserve existing newspaper so the
+    # page keeps showing the last good edition while the LLM rerenders.
+    existing = load_json(TODAY_FILE) or {}
     save_json(TODAY_FILE, {
         "built_at": datetime.now(timezone.utc).isoformat(),
-        "newspaper": None,
+        "newspaper": existing.get("newspaper"),
         "docker_issues": docker_issues,
-        "docker_analysis": None,
+        "docker_analysis": existing.get("docker_analysis"),
         "loki_issues": loki_issues,
-        "loki_analysis": None,
+        "loki_analysis": existing.get("loki_analysis"),
     })
-
-    docker_analysis = await llm_analysis(docker_issues, "Docker container (today)")
-    loki_analysis   = await llm_analysis(loki_issues, "network/syslog (today)")
 
     unhealthy, _, _ = await get_container_status_async()
     unhealthy_names = [c.name for c in unhealthy]
     updates_raw  = load_json(UPDATES_FILE) or {}
     update_hosts = updates_raw.get("hosts", {})
 
-    newspaper = await generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names)
+    (docker_analysis, loki_analysis), newspaper = await asyncio.gather(
+        asyncio.gather(
+            llm_analysis(docker_issues, "Docker container (today)"),
+            llm_analysis(loki_issues, "network/syslog (today)"),
+        ),
+        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names),
+    )
     log.info("Today's front page complete (%d articles)", len(newspaper) if newspaper else 0)
 
     save_json(TODAY_FILE, {
