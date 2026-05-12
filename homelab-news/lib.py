@@ -256,42 +256,77 @@ async def check_docker_logs(
 async def check_loki(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
-    limit: int = 2000,
 ) -> list[dict]:
     if end is None:
         end = datetime.now(timezone.utc)
     if start is None:
         start = end - timedelta(hours=LOG_HOURS)
+
     query = '{job=~".+"} |~ `(?i)(error|critical|fatal|fail|refused|denied|timeout|warn)`'
-    try:
-        async with httpx.AsyncClient(timeout=30) as client:
-            resp = await client.get(
-                f"{LOKI_URL}/loki/api/v1/query_range",
-                params={
-                    "query": query,
-                    "start": str(int(start.timestamp() * 1_000_000_000)),
-                    "end": str(int(end.timestamp() * 1_000_000_000)),
-                    "limit": str(limit),
-                    "direction": "forward",
-                },
+    PAGE_SIZE = 5000   # Loki server default max_entries_limit_per_query
+    MAX_PAGES = 20     # safety cap: 20 × 5 000 = 100 000 entries max
+    start_ns = int(start.timestamp() * 1_000_000_000)
+    end_ns   = int(end.timestamp()   * 1_000_000_000)
+
+    raw_lines: dict[str, list[str]] = defaultdict(list)
+
+    for page in range(MAX_PAGES):
+        try:
+            async with httpx.AsyncClient(timeout=30) as client:
+                resp = await client.get(
+                    f"{LOKI_URL}/loki/api/v1/query_range",
+                    params={
+                        "query":     query,
+                        "start":     str(start_ns),
+                        "end":       str(end_ns),
+                        "limit":     str(PAGE_SIZE),
+                        "direction": "forward",
+                    },
+                )
+                resp.raise_for_status()
+                data = resp.json()
+        except Exception as e:
+            if page == 0:
+                return [{"source": "loki", "level": "warn",
+                         "message": f"Could not reach Loki at {LOKI_URL}: {e}", "count": 1}]
+            log.warning("Loki page %d fetch failed: %s", page, e)
+            break
+
+        result = data.get("data", {}).get("result", [])
+        page_count = 0
+        max_ts_ns  = 0
+
+        for stream in result:
+            labels = stream.get("stream", {})
+            source = (
+                labels.get("host") or labels.get("hostname") or
+                labels.get("container_name") or labels.get("app") or
+                labels.get("job") or "unknown"
             )
-            resp.raise_for_status()
-            data = resp.json()
-    except Exception as e:
-        return [{"source": "loki", "level": "warn",
-                 "message": f"Could not reach Loki at {LOKI_URL}: {e}", "count": 1}]
+            for ts_str, line in stream.get("values", []):
+                ts_ns = int(ts_str)
+                page_count += 1
+                if ts_ns > max_ts_ns:
+                    max_ts_ns = ts_ns
+                raw_lines[source].append(line)
+
+        if page_count < PAGE_SIZE or max_ts_ns == 0:
+            break  # last page — window exhausted
+
+        if page == MAX_PAGES - 1:
+            log.warning("Loki pagination hit MAX_PAGES=%d; some entries may be missing", MAX_PAGES)
+            break
+
+        start_ns = max_ts_ns + 1
+        if start_ns >= end_ns:
+            break
+        log.info("Loki page %d returned %d entries; fetching next page from ts %d",
+                 page, page_count, start_ns)
 
     all_issues: list[dict] = []
     all_seen: dict[str, int] = defaultdict(int)
 
-    for stream in data.get("data", {}).get("result", []):
-        labels = stream.get("stream", {})
-        source = (
-            labels.get("host") or labels.get("hostname") or
-            labels.get("container_name") or labels.get("app") or
-            labels.get("job") or "unknown"
-        )
-        lines = [line for _ts, line in stream.get("values", [])]
+    for source, lines in raw_lines.items():
         issues, seen = _collect_issues(source, lines)
         all_issues.extend(issues)
         for k, v in seen.items():

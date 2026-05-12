@@ -21,7 +21,7 @@ async def run() -> None:
 
     docker_issues, loki_issues = await asyncio.gather(
         check_docker_logs(since_ts=since_ts),
-        check_loki(start=midnight, limit=5000),
+        check_loki(start=midnight),
     )
     # Update issues data immediately but preserve existing newspaper so the
     # page keeps showing the last good edition while the LLM rerenders.
