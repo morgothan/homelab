@@ -37,7 +37,11 @@ DATA_DIR     = os.getenv("DATA_DIR", "/data")
 TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
 ROLLING_FILE = os.path.join(DATA_DIR, "rolling.json")
 ARCHIVE_FILE = os.path.join(DATA_DIR, "archive.json")
-UPDATES_FILE = os.path.join(DATA_DIR, "updates.json")
+UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
+PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
+
+MAX_WEEKLY  = int(os.getenv("MAX_WEEKLY",  "16"))  # ~4 months of weeklies
+MAX_MONTHLY = int(os.getenv("MAX_MONTHLY", "24"))  # 2 years of monthlies
 
 
 def _parse_remote_hosts() -> list[tuple[str, str]]:
@@ -404,6 +408,79 @@ async def generate_newspaper(
     return None
 
 
+async def generate_periodic_summary(
+    scope: str,           # "week" | "month" | "year"
+    period_label: str,    # human-readable, e.g. "May 2026" or "2026-05-11 to 2026-05-17"
+    entries: list[dict],  # [{"period": str, "articles": [{headline, blurb}, ...]}]
+) -> Optional[list[dict]]:
+    lines: list[str] = []
+    for entry in entries:
+        lines.append(f"=== {entry['period']} ===")
+        for a in entry.get("articles") or []:
+            lines.append(f"• {a.get('headline', '')}: {a.get('blurb', '')[:200]}")
+    body = "\n".join(lines)
+
+    scope_map = {
+        "week":  ("weekly digest",  "daily editions"),
+        "month": ("monthly review", "weekly digests"),
+        "year":  ("annual report",  "monthly reviews"),
+    }
+    title, source = scope_map.get(scope, ("digest", "editions"))
+
+    prompt = (
+        f"You are the editor writing the {title} for a homelab status newspaper.\n"
+        f"Below are summaries from the {source} covering: {period_label}.\n\n"
+        "Identify TRENDS and PATTERNS across this period:\n"
+        "- Issues that recurred multiple times (state how often)\n"
+        "- Things that got better or were resolved\n"
+        "- Things that got worse or are persisting\n"
+        "- Periodic patterns (e.g. 'every weekend', 'Tuesdays consistently')\n"
+        "- One-time significant events worth remembering\n\n"
+        "Rules:\n"
+        "- Write 3–6 articles. Skip anything minor that appeared only once.\n"
+        "- Headlines: name the service and the trend, not vague phrases.\n"
+        "- Blurbs: 2–3 sentences, quantify recurrence where possible.\n"
+        "- Output ONLY a valid JSON array. No markdown, no preamble.\n"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\"}]\n\n"
+        f"SOURCE DATA ({period_label}):\n{body}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+            resp = await client.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 1500},
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["message"]["content"].strip()
+            content = re.sub(r"^```(?:json)?\n?", "", content)
+            content = re.sub(r"\n?```$", "", content.strip())
+            articles = None
+            try:
+                articles = json.loads(content)
+            except json.JSONDecodeError:
+                pass
+            if not isinstance(articles, list):
+                m = re.search(r'\[[\s\S]*\]', content)
+                if m:
+                    try:
+                        articles = json.loads(m.group(0))
+                    except json.JSONDecodeError:
+                        pass
+            if isinstance(articles, list):
+                valid = [a for a in articles[:10]
+                         if isinstance(a, dict) and "headline" in a and "blurb" in a]
+                if valid:
+                    return valid
+    except Exception as e:
+        log.warning("Periodic summary failed (%s): %s", type(e).__name__, e)
+    return None
+
+
 async def llm_changelog_analysis(container: str, image: str, tag: str, notes: str) -> Optional[str]:
     if not notes:
         return None
@@ -682,6 +759,15 @@ body {
 .arch-headline { font-size: 0.88rem; color: var(--text); }
 .arch-meta { font-size: 0.72rem; color: var(--muted); font-family: "Courier New", monospace; text-align: right; }
 .arch-empty { text-align:center; padding:48px 20px; color:var(--muted); font-style:italic; }
+.arch-section-head {
+  font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace;
+  margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--bdr);
+}
+.arch-period {
+  display: grid; grid-template-columns: 10em 1fr 7em; gap: 12px; padding: 10px 0 6px;
+  border-bottom: 1px solid var(--dim); align-items: baseline;
+}
 .changelog {
   margin: 2px 0 8px 14px; padding: 5px 10px; border-left: 2px solid var(--warn);
   background: rgba(200, 136, 64, 0.05); font-size: 11px; color: #aaaaaa; white-space: pre-wrap; line-height: 1.6;
@@ -769,6 +855,8 @@ def nav_bar(active: str) -> str:
         + _item("/current", "Current Events", "current")
         + " &nbsp;&middot;&nbsp; "
         + _item("/archive", "Archive", "archive")
+        + " &nbsp;&middot;&nbsp; "
+        + _item("/trends", "Trends", "trends")
         + '</div>'
     )
 
