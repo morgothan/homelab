@@ -689,7 +689,7 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                     "paths":        paths,
                     "category":     _classify_ban(paths),
                 })
-            bans = sorted(result, key=lambda x: x["hit_count"], reverse=True)
+            bans = sorted(result, key=lambda x: (-x["hit_count"], ipaddress.ip_address(x["ip"])))
             banned_ips = {b["ip"] for b in bans}
             probes = _build_probes(access_hits, banned_ips, now)
             return bans, probes
@@ -730,7 +730,7 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
             "paths":        paths,
             "category":     _classify_ban(paths),
         })
-    bans = sorted(result, key=lambda x: x["hit_count"], reverse=True)
+    bans = sorted(result, key=lambda x: (-x["hit_count"], ipaddress.ip_address(x["ip"])))
     banned_ips = {b["ip"] for b in bans}
     probes = _build_probes(access_hits, banned_ips, now)
     return bans, probes
