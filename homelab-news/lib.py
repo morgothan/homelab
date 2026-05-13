@@ -47,7 +47,7 @@ BANTIME_HOURS       = 24    # must match traefik/configs/middlewares-fail2ban.ym
 FINDTIME_MINUTES    = 10    # must match fail2ban findtime
 FAIL2BAN_MAXRETRY   = 10    # must match fail2ban maxretry
 TRAEFIK_ACCESS_LOG  = os.getenv("TRAEFIK_ACCESS_LOG",  "/traefik/access.log")
-CF_FAIL2BAN_STATE   = os.getenv("CF_FAIL2BAN_STATE",   "/traefik/fail2ban-state.json")
+CF_FAIL2BAN_STATE   = os.getenv("CF_FAIL2BAN_STATE",   "/traefik/monitor/fail2ban-state.json")
 ACCESS_LOG_TAIL_MB  = 60    # bytes to read from end of access log (~26h of traffic)
 
 FAIL2BAN_ALLOWLIST = [
