@@ -4,3 +4,11 @@ http:
       rateLimit:
         average: 1000
         burst: 2000
+
+    authelia-brute-force-limit:
+      rateLimit:
+        average: 5
+        period: 5m
+        burst: 10
+        sourceCriterion:
+          requestHeaderName: "Cf-Connecting-Ip"
