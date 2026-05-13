@@ -1235,6 +1235,7 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
       - SSH_KEY=${SSH_KEY}
+      - PROMETHEUS_URL=http://prometheus:9090
     labels:
       - traefik.enable=true
       # external
