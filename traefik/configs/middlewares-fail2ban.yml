@@ -16,3 +16,24 @@ http:
             findtime: "10m"
             maxretry: 10
             statuscode: "403"
+
+    # Separate fail2ban instance for auth endpoint brute-force / credential stuffing.
+    # Counts 429s (from authelia-brute-force-limit) rather than 403s.
+    # Low maxretry: hitting the rate limit 3 times in 5 min is unambiguous abuse.
+    # cf-fail2ban picks up its "Plugin: FailToBan: IP blocked" log automatically.
+    fail2ban-auth:
+      plugin:
+        fail2ban:
+          sourceCriterion:
+            requestHeaderName: "Cf-Connecting-Ip"
+          allowlist:
+            ip:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
+          rules:
+            enabled: true
+            bantime: "24h"
+            findtime: "5m"
+            maxretry: 3
+            statuscode: "429"
