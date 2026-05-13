@@ -1057,6 +1057,27 @@ body {
   display: flex; flex-wrap: wrap; gap: 6px 24px; padding: 12px 0 0;
   font-family: "Courier New", monospace; font-size: 0.68rem; color: var(--muted);
 }
+.has-tip { position: relative; cursor: default; }
+.has-tip::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-card);
+  border: 1px solid var(--bdr);
+  color: var(--text);
+  font-size: 0.72rem;
+  line-height: 1.7;
+  padding: 7px 12px;
+  border-radius: 4px;
+  white-space: pre;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.15s;
+  z-index: 100;
+}
+.has-tip:hover::after { opacity: 1; }
 .ban-row {
   display: grid; grid-template-columns: 9em 8em 9em 4em 1fr;
   gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--dim); align-items: baseline;

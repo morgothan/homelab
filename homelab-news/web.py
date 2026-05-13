@@ -45,10 +45,14 @@ def _status_bar(
     issues_label: str,
 ) -> str:
     hosts = {k: v for k, v in update_hosts.items() if k != "_checked_at"}
-    n_updates = sum(
-        len([r for r in h.get("results", []) if r["status"] == "update_available"])
-        for h in hosts.values()
-    )
+    pending: list[str] = []
+    for host, hdata in hosts.items():
+        for r in hdata.get("results", []):
+            if r["status"] != "update_available":
+                continue
+            ver = f" → {r['new_version']}" if r.get("new_version") else ""
+            pending.append(f"{host}/{r['container']}{ver}")
+    n_updates = len(pending)
     n_unhealthy = len(unhealthy)
 
     def _dot(cls: str, text: str) -> str:
@@ -59,7 +63,9 @@ def _status_bar(
     if n_unhealthy:
         parts.append(_dot("c-err", f"⚠ {n_unhealthy} unhealthy"))
     if n_updates:
-        parts.append(_dot("c-warn", f"{n_updates} image updates available"))
+        from html import escape as _h
+        tip = _h("\n".join(pending))
+        parts.append(f'<span class="c-warn has-tip" data-tip="{tip}">{n_updates} image updates available</span>')
     else:
         parts.append(_dot("c-ok", "all images current"))
     if n_issues:
