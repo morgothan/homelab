@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from html import escape as _h
@@ -29,6 +30,8 @@ OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 MAX_ARCHIVE_DAYS = int(os.getenv("MAX_ARCHIVE_DAYS", "90"))
+PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
+NODE_EXPORTER_INSTANCE = os.getenv("NODE_EXPORTER_INSTANCE", "traefik.hirschnet:9100")
 
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -43,6 +46,17 @@ PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
+
+SECTION_ORDER = [
+    "Front Page",
+    "City Hall",
+    "Public Safety",
+    "Weather",
+    "City Archives",
+    "Arts & Entertainment",
+    "Public Works",
+]
+
 BANTIME_HOURS       = 24    # must match traefik/configs/middlewares-fail2ban.yml bantime
 FINDTIME_MINUTES    = 10    # must match fail2ban findtime
 FAIL2BAN_MAXRETRY   = 10    # must match fail2ban maxretry
@@ -736,6 +750,188 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
     return bans, probes
 
 
+# ── Prometheus metrics ────────────────────────────────────────────────────────
+
+async def _prom_query(client: httpx.AsyncClient, query: str) -> list[dict]:
+    """Run a Prometheus instant query; return result list (empty on failure)."""
+    try:
+        resp = await client.get(
+            f"{PROMETHEUS_URL}/api/v1/query",
+            params={"query": query},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") == "success":
+            return data["data"]["result"]
+    except Exception as e:
+        log.debug("Prometheus query failed (%s): %s", query[:50], e)
+    return []
+
+
+def _prom_val(result: list[dict], default: float = 0.0) -> float:
+    """Extract scalar value from a single-result Prometheus query."""
+    if result:
+        try:
+            return float(result[0]["value"][1])
+        except (KeyError, IndexError, ValueError):
+            pass
+    return default
+
+
+async def check_prometheus() -> dict:
+    """Query Prometheus for infrastructure health metrics.
+
+    Returns {"alerts": [...], "info": [...]} — alerts are noteworthy conditions,
+    info lines are always-on statistics for the LLM prompt context.
+    """
+    out: dict = {"alerts": [], "info": []}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            # ── UPS ──────────────────────────────────────────────────────────
+            (charge_r, runtime_r, load_r,
+             ob_r, lb_r) = await asyncio.gather(
+                _prom_query(client, "nut_battery_charge"),
+                _prom_query(client, "nut_battery_runtime_seconds"),
+                _prom_query(client, "nut_load"),
+                _prom_query(client, 'nut_ups_status{status="OB"}'),
+                _prom_query(client, 'nut_ups_status{status="LB"}'),
+            )
+            charge  = _prom_val(charge_r)
+            runtime_s = _prom_val(runtime_r)
+            load    = _prom_val(load_r)
+            on_batt = _prom_val(ob_r) == 1.0
+            low_bat = _prom_val(lb_r) == 1.0
+            ups_name = charge_r[0]["metric"].get("ups", "ups") if charge_r else "ups"
+
+            if charge_r:
+                runtime_m = int(runtime_s / 60)
+                out["info"].append(
+                    f"UPS ({ups_name}): {'ON BATTERY — ' if on_batt else ''}"
+                    f"battery {charge*100:.0f}%, runtime {runtime_m}m, load {load*100:.0f}%"
+                )
+                if on_batt:
+                    out["alerts"].append(
+                        f"UPS ON BATTERY: {ups_name} running on battery power, "
+                        f"{charge*100:.0f}% charge, {runtime_m}m runtime remaining"
+                    )
+                elif low_bat:
+                    out["alerts"].append(
+                        f"UPS LOW BATTERY: {ups_name} at {charge*100:.0f}%, {runtime_m}m remaining"
+                    )
+                elif charge < 0.5:
+                    out["alerts"].append(
+                        f"UPS WARNING: {ups_name} battery at {charge*100:.0f}%"
+                    )
+
+            # ── Disk ─────────────────────────────────────────────────────────
+            avail_r, size_r = await asyncio.gather(
+                _prom_query(client,
+                    f"node_filesystem_avail_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
+                _prom_query(client,
+                    f"node_filesystem_size_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
+            )
+            avail_by_mp = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in avail_r}
+            size_by_mp  = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in size_r}
+            for mp, avail in avail_by_mp.items():
+                size = size_by_mp.get(mp, 1)
+                avail_gb  = avail / 1e9
+                used_pct  = (1 - avail / size) * 100 if size else 0
+                out["info"].append(
+                    f"Disk {mp} ({NODE_EXPORTER_INSTANCE.split(':')[0]}): "
+                    f"{avail_gb:.1f} GB free ({used_pct:.0f}% used)"
+                )
+                if avail_gb < 5:
+                    out["alerts"].append(
+                        f"DISK CRITICAL: {mp} on {NODE_EXPORTER_INSTANCE.split(':')[0]} "
+                        f"has {avail_gb:.1f} GB free ({used_pct:.0f}% used)"
+                    )
+                elif avail_gb < 15:
+                    out["alerts"].append(
+                        f"DISK WARNING: {mp} on {NODE_EXPORTER_INSTANCE.split(':')[0]} "
+                        f"at {used_pct:.0f}% used, {avail_gb:.1f} GB remaining"
+                    )
+
+            # ── TLS certs ────────────────────────────────────────────────────
+            certs_r = await _prom_query(client, "traefik_tls_certs_not_after")
+            now_ts  = time.time()
+            seen_cns: set[str] = set()
+            for r in sorted(certs_r, key=lambda x: float(x["value"][1])):
+                days_left = (float(r["value"][1]) - now_ts) / 86400
+                if days_left >= 21:
+                    continue
+                cn   = r["metric"].get("cn", "unknown")
+                sans = r["metric"].get("sans", "")
+                key  = f"{cn}|{sans}"
+                if key in seen_cns:
+                    continue
+                seen_cns.add(key)
+                label = cn if not sans or cn == sans else f"{cn} ({sans})"
+                if days_left < 7:
+                    out["alerts"].append(f"CERT CRITICAL: {label} expires in {days_left:.0f} days")
+                else:
+                    out["alerts"].append(f"CERT WARNING: {label} expires in {days_left:.0f} days")
+
+            # ── AdGuard DNS ──────────────────────────────────────────────────
+            queries_r, blocked_r, prot_r = await asyncio.gather(
+                _prom_query(client, "adguard_queries"),
+                _prom_query(client, "adguard_queries_blocked"),
+                _prom_query(client, "adguard_protection_enabled"),
+            )
+            for r in prot_r:
+                if float(r["value"][1]) == 0:
+                    server = r["metric"].get("server", "adguard")
+                    out["alerts"].append(f"ADGUARD CRITICAL: protection disabled on {server}")
+
+            queries_by  = {r["metric"]["server"]: float(r["value"][1]) for r in queries_r}
+            blocked_by  = {r["metric"]["server"]: float(r["value"][1]) for r in blocked_r}
+            for server, total in sorted(queries_by.items(), key=lambda x: -x[1]):
+                blocked   = blocked_by.get(server, 0)
+                block_pct = (blocked / total * 100) if total > 0 else 0
+                label     = server.replace("http://", "").replace("https://", "")
+                out["info"].append(
+                    f"AdGuard ({label}): {total/1e6:.1f}M lifetime queries, {block_pct:.1f}% blocked"
+                )
+
+            # ── Media pipeline ────────────────────────────────────────────────
+            (sq_r, se_r, sm_r,
+             rq_r, re_r, rm_r) = await asyncio.gather(
+                _prom_query(client, "sonarr_queue_count"),
+                _prom_query(client, "sonarr_queue_error"),
+                _prom_query(client, "sonarr_missing_episodes"),
+                _prom_query(client, "radarr_queue_count"),
+                _prom_query(client, "radarr_queue_error"),
+                _prom_query(client, "radarr_missing_movies"),
+            )
+            sonarr_q    = int(_prom_val(sq_r))
+            sonarr_err  = int(_prom_val(se_r))
+            sonarr_miss = int(_prom_val(sm_r))
+            radarr_q    = int(_prom_val(rq_r))
+            radarr_err  = int(_prom_val(re_r))
+            radarr_miss = int(_prom_val(rm_r))
+
+            if sq_r:
+                out["info"].append(
+                    f"Sonarr: {sonarr_q} downloads in queue, "
+                    f"{sonarr_err} errors, {sonarr_miss} missing episodes"
+                )
+            if rq_r:
+                out["info"].append(
+                    f"Radarr: {radarr_q} downloads in queue, "
+                    f"{radarr_err} errors, {radarr_miss} missing movies"
+                )
+            if sonarr_err > 0:
+                out["alerts"].append(f"Sonarr: {sonarr_err} queue error(s)")
+            if radarr_err > 0:
+                out["alerts"].append(f"Radarr: {radarr_err} queue error(s)")
+
+    except Exception as e:
+        log.warning("check_prometheus failed: %s", e)
+
+    return out
+
+
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
@@ -777,6 +973,7 @@ async def generate_newspaper(
     unhealthy_names: list[str],
     bans: Optional[list[dict]] = None,
     probes: Optional[list[dict]] = None,
+    prometheus: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -816,6 +1013,17 @@ async def generate_newspaper(
 
     lines.append("\n" + _security_prompt_block(bans or [], probes or []))
 
+    if prometheus:
+        prom_lines: list[str] = []
+        if prometheus.get("alerts"):
+            prom_lines.append("PROMETHEUS ALERTS:")
+            prom_lines.extend(f"  {a}" for a in prometheus["alerts"])
+        if prometheus.get("info"):
+            prom_lines.append("PROMETHEUS METRICS:")
+            prom_lines.extend(f"  {i}" for i in prometheus["info"])
+        if prom_lines:
+            lines.append("\n" + "\n".join(prom_lines))
+
     situation = "\n".join(lines)
     prompt = (
         "You are the editor of a homelab status newspaper covering a full day of events.\n"
@@ -839,8 +1047,17 @@ async def generate_newspaper(
         "- Articles 1-4: blurb is 2-3 sentences, AP wire style, specific counts and service names.\n"
         "- Articles 5+: blurb is 1 sentence only — these run as brief notes below the fold.\n"
         "- If something is completely fine, skip it — don't pad with 'all clear' articles.\n"
+        "- Assign each article a section. Use exactly one of:\n"
+        "    Front Page       — critical failures or emergency-level alerts only\n"
+        "    City Hall        — container health, image updates, service restarts\n"
+        "    Public Safety    — security attacks, IP bans, scanner activity\n"
+        "    Weather          — UPS/power events, system performance\n"
+        "    City Archives    — backup and storage health\n"
+        "    Arts & Entertainment — Sonarr, Radarr, Tautulli, Jellyfin, media pipeline\n"
+        "    Public Works     — DNS, networking, Traefik configuration\n"
+        "  Default to City Hall if unsure. Most articles will be City Hall or Public Safety.\n"
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
-        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\"}]\n\n"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
         f"CURRENT HOMELAB STATUS:\n{situation}"
     )
     try:
@@ -965,7 +1182,7 @@ async def generate_periodic_summary(
         "- Headlines: name the service and the trend, not vague phrases.\n"
         "- Blurbs: 2–3 sentences, quantify recurrence where possible.\n"
         "- Output ONLY a valid JSON array. No markdown, no preamble.\n"
-        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\"}]\n\n"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
         f"SOURCE DATA ({period_label}):\n{body}"
     )
     try:
@@ -1393,6 +1610,15 @@ details.np-section[open] > summary::after { content: " ▴"; }
 .ban-details > summary::-webkit-details-marker { display: none; }
 .ban-details > summary .card-meta::after { content: " ▾"; }
 .ban-details[open] > summary .card-meta::after { content: " ▴"; }
+/* Section dividers */
+.np-section-divider {
+  font-size: 0.64rem; letter-spacing: 0.26em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace;
+  border-top: 3px double var(--bdr); border-bottom: 1px solid var(--bdr);
+  padding: 8px 0; margin: 24px 0 0; cursor: pointer; user-select: none; display: block;
+}
+.np-section-divider::after { content: " ▾"; }
+details.np-section[open] > .np-section-divider::after { content: " ▴"; }
 """
 
 _FAVICON_SVG = (
@@ -1632,10 +1858,8 @@ def updates_card(update_hosts: dict) -> str:
 def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None) -> str:
     if not articles:
         return '<div class="np-pending">No articles available for this edition.</div>'
-    lead, *rest = articles
-    columns = rest[:3]
-    briefs  = rest[3:]
 
+    lead, *rest = articles
     html = (
         '<details class="np-lead np-section" open>'
         '<summary class="np-lead-kicker">Lead Story</summary>'
@@ -1643,33 +1867,47 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
         f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
         '</details>'
     )
-    if columns:
-        kickers = ["Also", "Elsewhere", "Update"]
-        cols = "".join(
+
+    # Group remaining articles by section, preserving within-section order
+    by_section: dict[str, list[dict]] = defaultdict(list)
+    for a in rest:
+        section = a.get("section", "").strip()
+        if section not in SECTION_ORDER:
+            section = "City Hall"
+        by_section[section].append(a)
+
+    kickers = ["Also", "Elsewhere", "Update", "Developing"]
+    for section in SECTION_ORDER:
+        arts = by_section.get(section)
+        if not arts:
+            continue
+        cols = arts[:3]
+        briefs = arts[3:]
+
+        col_html = "".join(
             '<div class="np-article">'
             f'<div class="np-article-kicker">{kickers[idx % len(kickers)]}</div>'
             f'<div class="np-hl">{_h(a["headline"])}</div>'
             f'<div class="np-blurb">{_h(a["blurb"])}</div></div>'
-            for idx, a in enumerate(columns)
+            for idx, a in enumerate(cols)
         )
+        brief_html = ""
+        if briefs:
+            brief_items = "".join(
+                f'<div class="np-brief"><span class="np-brief-hl">{_h(a["headline"])}</span>'
+                f' &mdash; <span class="np-brief-blurb">{_h(a["blurb"])}</span></div>'
+                for a in briefs
+            )
+            brief_html = f'<div class="np-briefs" style="margin-top:0">{brief_items}</div>'
+
         html += (
             '<details class="np-section" open>'
-            '<summary class="np-cols-head">Full Coverage</summary>'
-            f'<div class="np-cols">{cols}</div>'
+            f'<summary class="np-section-divider">{_h(section)}</summary>'
+            f'<div class="np-cols">{col_html}</div>'
+            f'{brief_html}'
             '</details>'
         )
-    if briefs:
-        items = "".join(
-            f'<div class="np-brief"><span class="np-brief-hl">{_h(a["headline"])}</span>'
-            f' &mdash; <span class="np-brief-blurb">{_h(a["blurb"])}</span></div>'
-            for a in briefs
-        )
-        html += (
-            '<details class="np-briefs np-section" open>'
-            '<summary class="np-briefs-head">In Brief</summary>'
-            f'{items}'
-            '</details>'
-        )
+
     if bans:
         entries = "".join(
             f'<div class="np-blotter-item">'
