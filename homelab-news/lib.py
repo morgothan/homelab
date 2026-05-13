@@ -61,6 +61,23 @@ ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-
 
 _AUTH_ENDPOINT = re.compile(r'/api/(?:firstfactor|secondfactor)', re.I)
 
+# Fail2ban / WAF log lines that appear in docker/loki issues but are already
+# captured (accurately) in the structured security block. Filtering these before
+# the LLM sees them prevents it from misreading scanner 403 blocks as
+# "authentication failures" or "credential attacks".
+_SECURITY_NOISE = re.compile(
+    r'FailToBan'
+    r'|IP\s+blocked'
+    r'|status\s+code\s+ban'
+    r'|anomaly\s+score'
+    r'|ModSecurity'
+    r'|OWASP\s+CRS'
+    r'|Coraza'
+    r'|scanner.block'
+    r'|block.scanner',
+    re.I,
+)
+
 _ATTACK_SIGNATURES: list[tuple[re.Pattern, str]] = [
     # Checked top-to-bottom; each path gets the first matching label.
     (re.compile(r'/api/(?:firstfactor|secondfactor)', re.I),
@@ -521,14 +538,110 @@ def _parse_access_log_hits(raw: str, cutoff: datetime) -> dict[str, list[tuple[d
     return ip_hits
 
 
-async def check_fail2ban_bans() -> list[dict]:
-    """Return currently active fail2ban bans.
+def _build_probes(
+    access_hits: dict[str, list[tuple[datetime, str]]],
+    banned_ips: set[str],
+    now: datetime,
+) -> list[dict]:
+    """Return IPs generating scanner 403s in the last 2h that haven't been banned yet."""
+    window = timedelta(hours=2)
+    probes = []
+    for ip, hits in access_hits.items():
+        if ip in banned_ips:
+            continue
+        # Auth-path 401s are brute-force attempts, not path probes — exclude them here
+        recent = [
+            (ts, p) for ts, p in hits
+            if ts > now - window and p and not _AUTH_ENDPOINT.search(p)
+        ]
+        if len(recent) < 3:
+            continue
+        paths: list[str] = []
+        for _, p in recent:
+            if p not in paths:
+                paths.append(p)
+            if len(paths) >= 5:
+                break
+        probes.append({
+            "ip":        ip,
+            "hit_count": len(recent),
+            "paths":     paths,
+            "category":  _classify_ban(paths),
+        })
+    return sorted(probes, key=lambda x: x["hit_count"], reverse=True)[:10]
+
+
+def _security_prompt_block(bans: list[dict], probes: list[dict]) -> str:
+    """Build a pre-classified security section for the LLM prompt.
+
+    Separates credential attacks from path scanners so the LLM cannot conflate
+    scanner 403 blocks with login failures.
+    """
+    if not bans and not probes:
+        return "SECURITY: No active IP bans, no active probing detected."
+
+    parts: list[str] = []
+
+    if bans:
+        auth_bans    = [b for b in bans if b.get("category") == "credential stuffing"]
+        scanner_bans = [b for b in bans if b.get("category") != "credential stuffing"]
+
+        parts.append(f"SECURITY — {len(bans)} IPs Cloudflare-blocked (24h ban):")
+
+        if auth_bans:
+            parts.append(
+                f"  CREDENTIAL ATTACKS ({len(auth_bans)} IP{'s' if len(auth_bans)>1 else ''}):"
+                f" brute-force on Authelia login endpoint (/api/firstfactor)"
+            )
+            for b in auth_bans[:5]:
+                parts.append(
+                    f"    {b['ip']}: {b['hit_count']} login attempts,"
+                    f" banned {b['blocked_for']} ago, expires in {b['expires_in']}"
+                )
+
+        if scanner_bans:
+            cat_counts: dict[str, int] = defaultdict(int)
+            for b in scanner_bans:
+                cat_counts[b.get("category", "unknown")] += 1
+            cat_str = ", ".join(
+                f"{cat} \xd7{n}" for cat, n in sorted(cat_counts.items(), key=lambda x: -x[1])
+            )
+            parts.append(
+                f"  PATH SCANNERS ({len(scanner_bans)} IP{'s' if len(scanner_bans)>1 else ''}):"
+                f" automated bots probing for vulnerable files (.env, .git, wp-admin, etc.)"
+                f" — NOT login attempts. Categories: {cat_str}"
+            )
+            top = sorted(scanner_bans, key=lambda x: x.get("hit_count", 0), reverse=True)[:5]
+            for b in top:
+                parts.append(
+                    f"    {b['ip']}: {b['hit_count']} probe hits"
+                    f" ({b.get('category', 'scan')}), banned {b['blocked_for']} ago"
+                )
+
+    if probes:
+        parts.append(
+            f"  ACTIVE PROBING — {len(probes)} IP{'s' if len(probes)>1 else ''}"
+            f" generating scanner hits (not yet at ban threshold):"
+        )
+        for p in probes[:5]:
+            sample = ", ".join(p["paths"][:3])
+            parts.append(
+                f"    {p['ip']}: {p['hit_count']} hits"
+                f" ({p.get('category', 'scan')}) — {sample}"
+            )
+
+    return "\n".join(parts)
+
+
+async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
+    """Return (active_bans, active_probes).
+
+    active_bans: IPs in cf-fail2ban state file (Cloudflare-blocked), enriched
+      with hit counts and paths from the Traefik access log.
+    active_probes: IPs generating scanner 403s in the last 2h but not yet banned.
 
     Primary source: cf-fail2ban state file (authoritative, matches Cloudflare blocks).
     Fallback: reconstruct from Traefik access log (403+429 sliding window).
-    Both sources are enriched with paths from the access log.
-
-    Each entry: {ip, banned_since, expires_at, blocked_for, expires_in, hit_count, paths}
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=BANTIME_HOURS + 2)
@@ -576,14 +689,17 @@ async def check_fail2ban_bans() -> list[dict]:
                     "paths":        paths,
                     "category":     _classify_ban(paths),
                 })
-            return sorted(result, key=lambda x: x["hit_count"], reverse=True)
+            bans = sorted(result, key=lambda x: x["hit_count"], reverse=True)
+            banned_ips = {b["ip"] for b in bans}
+            probes = _build_probes(access_hits, banned_ips, now)
+            return bans, probes
         except Exception as e:
             log.warning("Failed to read cf-fail2ban state file, falling back to access log: %s", e)
 
     # ── Fallback: reconstruct from access log (403+429 sliding window) ────────
     if not access_hits:
         log.warning("No access log data and no state file — cannot determine active bans")
-        return []
+        return [], []
 
     result = []
     for ip, hits in access_hits.items():
@@ -614,7 +730,10 @@ async def check_fail2ban_bans() -> list[dict]:
             "paths":        paths,
             "category":     _classify_ban(paths),
         })
-    return sorted(result, key=lambda x: x["hit_count"], reverse=True)
+    bans = sorted(result, key=lambda x: x["hit_count"], reverse=True)
+    banned_ips = {b["ip"] for b in bans}
+    probes = _build_probes(access_hits, banned_ips, now)
+    return bans, probes
 
 
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
@@ -657,7 +776,15 @@ async def generate_newspaper(
     update_hosts: dict,
     unhealthy_names: list[str],
     bans: Optional[list[dict]] = None,
+    probes: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
+    # Strip fail2ban/WAF noise from raw log issues — these events are already
+    # captured accurately in the structured security block below. Leaving them
+    # in causes the LLM to re-interpret scanner 403 blocks as "authentication
+    # failures" or "credential attacks".
+    clean_docker = [i for i in docker_issues if not _SECURITY_NOISE.search(i.get("message", ""))]
+    clean_loki   = [i for i in loki_issues   if not _SECURITY_NOISE.search(i.get("message", ""))]
+
     lines: list[str] = []
     if unhealthy_names:
         lines.append("UNHEALTHY CONTAINERS: " + ", ".join(unhealthy_names))
@@ -677,34 +804,38 @@ async def generate_newspaper(
                 line += f" — CHANGELOG: {cl[:200]}"
             lines.append(line)
 
-    if docker_issues:
+    if clean_docker:
         lines.append("\nTOP DOCKER LOG ISSUES:")
-        for i in sorted(docker_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
+        for i in sorted(clean_docker, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
             lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {i['message'][:120]}")
 
-    if loki_issues:
+    if clean_loki:
         lines.append("\nTOP NETWORK/SYSLOG ISSUES:")
-        for i in sorted(loki_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
+        for i in sorted(clean_loki, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
             lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {i['message'][:120]}")
 
-    if bans:
-        lines.append(f"\nACTIVE FAIL2BAN BANS ({len(bans)} IPs blocked):")
-        for b in bans[:5]:
-            lines.append(
-                f"  {b['ip']} — blocked {b['blocked_for']}, "
-                f"{b['hit_count']} blocked hits, type: {b.get('category', 'vulnerability scan')}"
-            )
+    lines.append("\n" + _security_prompt_block(bans or [], probes or []))
 
     situation = "\n".join(lines)
     prompt = (
         "You are the editor of a homelab status newspaper covering a full day of events.\n"
         "Write 4 to 10 articles — enough to cover everything noteworthy, no more.\n\n"
+        "SECURITY INTERPRETATION GUIDE — read before writing any security article:\n"
+        "- PATH SCANNERS = automated bots probing for vulnerable files (.env, .git, wp-admin, etc.).\n"
+        "  These are NOT login failures. Write as 'scanning', 'probing', or 'vulnerability sweep'.\n"
+        "  A scanner hitting 50 paths is not 'attempting to access protected resources'.\n"
+        "- CREDENTIAL ATTACKS = actual brute-force on the Authelia login endpoint (/api/firstfactor).\n"
+        "  Only use 'authentication attack', 'credential stuffing', or 'login brute-force' for this.\n"
+        "- HTTP 403 in raw logs = a bot was blocked by the scanner-block router, NOT a failed login.\n"
+        "- The SECURITY block is pre-classified and authoritative. Base all security articles on it.\n"
+        "  Do not write security articles from raw FailToBan or WAF log lines — those are already\n"
+        "  summarised in the SECURITY block and will cause misclassification if used directly.\n\n"
         "Rules:\n"
         "- Group related items into one article. 'Five *arr apps have routine updates' = 1 article, not 5.\n"
         "- Order by importance: breaking changes and errors first, routine updates last.\n"
-        "- Headline: punchy, specific, real-newspaper style. Name the service and the issue.\n"
-        "  Good: 'Traefik Logs 847 Failed Redis Auth Attempts'\n"
-        "  Bad: 'System Experiencing Connectivity Issues'\n"
+        "- Headline: punchy, specific, real-newspaper style. Name the attack type and scale.\n"
+        "  Good: 'Scanner Sweeps 56 .env Paths, Earns 24h Cloudflare Block'\n"
+        "  Bad: 'System Experiencing Authentication Failures'\n"
         "- Articles 1-4: blurb is 2-3 sentences, AP wire style, specific counts and service names.\n"
         "- Articles 5+: blurb is 1 sentence only — these run as brief notes below the fold.\n"
         "- If something is completely fine, skip it — don't pad with 'all clear' articles.\n"
