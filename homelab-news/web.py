@@ -13,7 +13,7 @@ from lib import (
     _FAVICON_SVG, _CSS,
     load_json, get_container_status,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
-    render_articles_html, log_card, containers_card, updates_card, render_bans_card,
+    render_articles_html, log_card, containers_card, updates_card,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -87,7 +87,7 @@ async def index():
     bans          = today.get("bans") or []
 
     if newspaper:
-        articles_html = render_articles_html(newspaper)
+        articles_html = render_articles_html(newspaper, bans=bans)
         page_refresh  = REFRESH_INTERVAL
     elif newspaper == []:
         articles_html = (
@@ -113,7 +113,6 @@ async def index():
         masthead_today()
         + nav_bar("front")
         + articles_html
-        + render_bans_card(bans)
         + status
     )
     return Response(content=page_wrap(body, refresh=page_refresh),
@@ -142,7 +141,7 @@ async def current_events():
     now_str  = built_at[0:16].replace("T", " ") + " UTC" if built_at else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     if newspaper:
-        articles_html = render_articles_html(newspaper)
+        articles_html = render_articles_html(newspaper, bans=bans)
         page_refresh  = REFRESH_INTERVAL
     elif newspaper == []:
         articles_html = f'<div class="np-pending">Report unavailable — refreshing in {REFRESH_INTERVAL // 60} min</div>'
@@ -161,7 +160,6 @@ async def current_events():
         + '<div class="grid" style="margin-top:24px">'
         + containers_card(unhealthy, starting, n_running)
         + updates_card(update_hosts)
-        + render_bans_card(bans)
         + log_card("Docker Container Logs", f"Last {LOG_HOURS}h", docker_issues, docker_analysis)
         + log_card("Network &amp; Syslog", f"Last {LOG_HOURS}h &nbsp;&middot;&nbsp; via Loki", loki_issues, loki_analysis)
         + '</div>'
@@ -217,7 +215,7 @@ async def archive_day(date_str: str):
         return Response(content=f"No archive found for {date_str}.", status_code=404,
                         media_type="text/plain")
 
-    articles_html = render_articles_html(rec.get("newspaper") or [])
+    articles_html = render_articles_html(rec.get("newspaper") or [], bans=rec.get("bans") or [])
     body = (
         masthead_archive(date_str)
         + nav_bar("archive")

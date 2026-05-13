@@ -1039,6 +1039,16 @@ body {
 .np-brief:last-child { border-bottom: none; }
 .np-brief-hl { font-size: 0.85rem; font-weight: bold; color: var(--text); }
 .np-brief-blurb { font-size: 0.78rem; color: #888888; line-height: 1.5; }
+.np-blotter { border-top: 1px solid var(--bdr); padding: 14px 0 0; margin-top: 0; }
+.np-blotter-head {
+  font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace; margin-bottom: 10px;
+}
+.np-blotter-item { padding: 6px 0; border-bottom: 1px solid var(--dim); display: flex; gap: 14px; align-items: baseline; flex-wrap: wrap; }
+.np-blotter-item:last-child { border-bottom: none; }
+.np-blotter-ip { font-size: 0.85rem; font-weight: bold; font-family: "Courier New", monospace; }
+.np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
+.np-blotter-meta { font-size: 0.78rem; color: #888888; }
 .np-pending {
   text-align: center; padding: 56px 20px; color: var(--muted);
   font-style: italic; font-size: 0.88rem; border-bottom: 1px solid var(--bdr);
@@ -1292,7 +1302,7 @@ def updates_card(update_hosts: dict) -> str:
     )
 
 
-def render_articles_html(articles: list[dict]) -> str:
+def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None) -> str:
     if not articles:
         return '<div class="np-pending">No articles available for this edition.</div>'
     lead, *rest = articles
@@ -1320,4 +1330,16 @@ def render_articles_html(articles: list[dict]) -> str:
             for a in briefs
         )
         html += f'<div class="np-briefs"><div class="np-briefs-head">In Brief</div>{items}</div>'
+    if bans:
+        entries = "".join(
+            f'<div class="np-blotter-item">'
+            f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
+            f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
+            f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
+            f' &middot; blocked {_h(b["blocked_for"])}'
+            f' &middot; expires in {_h(b["expires_in"])}</span>'
+            f'</div>'
+            for b in bans
+        )
+        html += f'<div class="np-blotter"><div class="np-blotter-head">Police Blotter</div>{entries}</div>'
     return html
