@@ -1,6 +1,7 @@
 """Shared library: config, log fetching, LLM calls, HTML rendering, file I/O."""
 
 import asyncio
+import ipaddress
 import json
 import logging
 import os
@@ -42,7 +43,20 @@ PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
-BANTIME_HOURS = 24   # must match traefik/configs/middlewares-fail2ban.yml bantime
+BANTIME_HOURS       = 24    # must match traefik/configs/middlewares-fail2ban.yml bantime
+FINDTIME_MINUTES    = 10    # must match fail2ban findtime
+FAIL2BAN_MAXRETRY   = 10    # must match fail2ban maxretry
+TRAEFIK_ACCESS_LOG  = os.getenv("TRAEFIK_ACCESS_LOG",  "/traefik/access.log")
+CF_FAIL2BAN_STATE   = os.getenv("CF_FAIL2BAN_STATE",   "/traefik/fail2ban-state.json")
+ACCESS_LOG_TAIL_MB  = 60    # bytes to read from end of access log (~26h of traffic)
+
+FAIL2BAN_ALLOWLIST = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+]
+
 ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-events view
 
 _ATTACK_SIGNATURES: list[tuple[re.Pattern, str]] = [
@@ -424,70 +438,168 @@ async def check_loki(
 
 # ── fail2ban ban tracking ─────────────────────────────────────────────────────
 
-async def check_fail2ban_bans() -> list[dict]:
-    """Return currently active fail2ban bans parsed from Traefik container logs.
-
-    Each entry: {ip, banned_since, expires_at, blocked_for, expires_in, hit_count, paths}
-    """
-    now = datetime.now(timezone.utc)
-    since_ts = int((now - timedelta(hours=BANTIME_HOURS + 2)).timestamp())
-
+def _is_allowlisted(ip_str: str) -> bool:
     try:
-        dc = docker.from_env()
-        traefik = dc.containers.get("traefik")
-        loop = asyncio.get_running_loop()
-        raw = await asyncio.wait_for(
-            loop.run_in_executor(None, _fetch_logs_sync, traefik, since_ts),
-            timeout=30.0,
-        )
-    except Exception as e:
-        log.warning("Failed to fetch Traefik logs for fail2ban: %s", e)
-        return []
+        addr = ipaddress.ip_address(ip_str)
+        return any(addr in net for net in FAIL2BAN_ALLOWLIST)
+    except ValueError:
+        return False
 
-    bans: dict[str, dict] = {}
-    for line in raw:
-        line = line.strip()
-        if '"reason":"banned"' not in line:
+
+def _extract_real_ip(client_host: str) -> str:
+    """Return the real external IP from a potentially comma-separated ClientHost field.
+
+    Traefik sometimes logs ClientHost as 'internal_ip,external_ip' when multiple
+    proxies are in the chain (e.g. '127.0.0.1,185.177.72.17'). Take the last
+    non-private IP, falling back to the first segment.
+    """
+    if "," not in client_host:
+        return client_host
+    for part in reversed(client_host.split(",")):
+        part = part.strip()
+        if part and not _is_allowlisted(part):
+            try:
+                ipaddress.ip_address(part)
+                return part
+            except ValueError:
+                continue
+    return client_host.split(",")[0].strip()
+
+
+def _read_access_log_tail(path: str, max_bytes: int) -> str:
+    size = os.path.getsize(path)
+    offset = max(0, size - max_bytes)
+    with open(path, "r", errors="replace") as f:
+        if offset > 0:
+            f.seek(offset)
+            f.readline()  # skip partial first line
+        return f.read()
+
+
+def _parse_access_log_hits(raw: str, cutoff: datetime) -> dict[str, list[tuple[datetime, str]]]:
+    """Parse access log lines, returning {ip: [(timestamp, path), ...]} for 403/429 responses."""
+    ip_hits: dict[str, list[tuple[datetime, str]]] = defaultdict(list)
+    for line in raw.splitlines():
+        if '"DownstreamStatus":403' not in line and '"DownstreamStatus":429' not in line:
             continue
         try:
             obj = json.loads(line)
         except Exception:
             continue
-        if obj.get("reason") != "banned":
+        if obj.get("DownstreamStatus") not in (403, 429):
             continue
-        ip = obj.get("ip", "")
-        if not ip:
+        raw_host = obj.get("ClientHost", "")
+        if not raw_host:
             continue
-        ts_str = obj.get("time", "")
-        path = obj.get("path", "")
-        if ip not in bans:
-            bans[ip] = {"first_seen": ts_str, "paths": [], "count": 0}
-        bans[ip]["count"] += 1
-        if ts_str and ts_str < bans[ip]["first_seen"]:
-            bans[ip]["first_seen"] = ts_str
-        if path and path not in bans[ip]["paths"] and len(bans[ip]["paths"]) < 5:
-            bans[ip]["paths"].append(path)
-
-    result = []
-    for ip, d in bans.items():
+        ip = _extract_real_ip(raw_host)
+        if _is_allowlisted(ip):
+            continue
+        ts_str = obj.get("StartUTC") or obj.get("time", "")
+        if not ts_str:
+            continue
         try:
-            first = datetime.fromisoformat(d["first_seen"].replace("Z", "+00:00"))
+            ts = datetime.fromisoformat(ts_str.replace("Z", "+00:00"))
         except Exception:
             continue
-        expires = first + timedelta(hours=BANTIME_HOURS)
+        if ts < cutoff:
+            continue
+        ip_hits[ip].append((ts, obj.get("RequestPath", "")))
+    return ip_hits
+
+
+async def check_fail2ban_bans() -> list[dict]:
+    """Return currently active fail2ban bans.
+
+    Primary source: cf-fail2ban state file (authoritative, matches Cloudflare blocks).
+    Fallback: reconstruct from Traefik access log (403+429 sliding window).
+    Both sources are enriched with paths from the access log.
+
+    Each entry: {ip, banned_since, expires_at, blocked_for, expires_in, hit_count, paths}
+    """
+    now = datetime.now(timezone.utc)
+    cutoff = now - timedelta(hours=BANTIME_HOURS + 2)
+
+    # Load access log tail for path/hit-count enrichment (used by both paths)
+    access_hits: dict[str, list[tuple[datetime, str]]] = {}
+    if os.path.exists(TRAEFIK_ACCESS_LOG):
+        try:
+            loop = asyncio.get_running_loop()
+            raw = await asyncio.wait_for(
+                loop.run_in_executor(
+                    None, _read_access_log_tail, TRAEFIK_ACCESS_LOG, ACCESS_LOG_TAIL_MB * 1024 * 1024
+                ),
+                timeout=30.0,
+            )
+            access_hits = _parse_access_log_hits(raw, cutoff)
+        except Exception as e:
+            log.warning("Failed to read Traefik access log: %s", e)
+
+    # ── Primary: cf-fail2ban state file ───────────────────────────────────────
+    if os.path.exists(CF_FAIL2BAN_STATE):
+        try:
+            with open(CF_FAIL2BAN_STATE) as f:
+                state = json.load(f)
+            result = []
+            for ip, info in state.get("banned", {}).items():
+                expires_ts = info.get("expires_at", 0)
+                banned_ts  = info.get("banned_at",  0)
+                if expires_ts <= now.timestamp():
+                    continue  # expired (cf-fail2ban cleanup may be pending)
+                ban_start = datetime.fromtimestamp(banned_ts, tz=timezone.utc)
+                expires   = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
+                hits = access_hits.get(ip, [])
+                paths: list[str] = []
+                for _, p in hits:
+                    if p and p not in paths and len(paths) < 5:
+                        paths.append(p)
+                result.append({
+                    "ip":           ip,
+                    "banned_since": ban_start.strftime("%Y-%m-%d %H:%M UTC"),
+                    "expires_at":   expires.strftime("%Y-%m-%d %H:%M UTC"),
+                    "blocked_for":  _fmt_duration((now - ban_start).total_seconds()),
+                    "expires_in":   _fmt_duration((expires - now).total_seconds()),
+                    "hit_count":    len(hits),
+                    "paths":        paths,
+                    "category":     _classify_ban(paths),
+                })
+            return sorted(result, key=lambda x: x["hit_count"], reverse=True)
+        except Exception as e:
+            log.warning("Failed to read cf-fail2ban state file, falling back to access log: %s", e)
+
+    # ── Fallback: reconstruct from access log (403+429 sliding window) ────────
+    if not access_hits:
+        log.warning("No access log data and no state file — cannot determine active bans")
+        return []
+
+    result = []
+    for ip, hits in access_hits.items():
+        hits.sort(key=lambda x: x[0])
+        ban_start: Optional[datetime] = None
+        for i in range(len(hits)):
+            window_end = hits[i][0] + timedelta(minutes=FINDTIME_MINUTES)
+            window = [h for h in hits[i:] if h[0] <= window_end]
+            if len(window) >= FAIL2BAN_MAXRETRY:
+                ban_start = window[FAIL2BAN_MAXRETRY - 1][0]
+                break
+        if ban_start is None:
+            continue
+        expires = ban_start + timedelta(hours=BANTIME_HOURS)
         if expires <= now:
             continue
+        paths: list[str] = []
+        for _, p in hits:
+            if p and p not in paths and len(paths) < 5:
+                paths.append(p)
         result.append({
-            "ip":          ip,
-            "banned_since": first.strftime("%Y-%m-%d %H:%M UTC"),
-            "expires_at":  expires.strftime("%Y-%m-%d %H:%M UTC"),
-            "blocked_for": _fmt_duration((now - first).total_seconds()),
-            "expires_in":  _fmt_duration((expires - now).total_seconds()),
-            "hit_count":   d["count"],
-            "paths":       d["paths"],
-            "category":    _classify_ban(d["paths"]),
+            "ip":           ip,
+            "banned_since": ban_start.strftime("%Y-%m-%d %H:%M UTC"),
+            "expires_at":   expires.strftime("%Y-%m-%d %H:%M UTC"),
+            "blocked_for":  _fmt_duration((now - ban_start).total_seconds()),
+            "expires_in":   _fmt_duration((expires - now).total_seconds()),
+            "hit_count":    len(hits),
+            "paths":        paths,
+            "category":     _classify_ban(paths),
         })
-
     return sorted(result, key=lambda x: x["hit_count"], reverse=True)
 
 
@@ -634,6 +746,37 @@ async def generate_newspaper(
     return None
 
 
+def _ban_summary(bans: list[dict]) -> list[str]:
+    """Summarise a ban list into compact strings for LLM context.
+
+    Returns a list of strings like:
+      ["22 IPs banned", "top attackers: 185.177.72.17 (env file sweep ×1162),
+       185.177.72.38 (env file sweep ×1162), ...", "categories: env file sweep×18,
+       PHP exploit probe×2, git exposure scan×1, ..."]
+    """
+    if not bans:
+        return []
+    cat_counts: dict[str, int] = defaultdict(int)
+    for b in bans:
+        cat_counts[b.get("category", "unknown")] += 1
+
+    top = sorted(bans, key=lambda x: x.get("hit_count", 0), reverse=True)[:10]
+    top_str = ", ".join(
+        f"{b['ip']} ({b.get('category', 'scan')} \xd7{b.get('hit_count', 0)})"
+        for b in top
+    )
+    cat_str = ", ".join(
+        f"{cat}\xd7{n}"
+        for cat, n in sorted(cat_counts.items(), key=lambda x: -x[1])
+    )
+    parts = [f"{len(bans)} IPs banned"]
+    if top_str:
+        parts.append(f"top attackers: {top_str}")
+    if len(bans) > 1:
+        parts.append(f"categories: {cat_str}")
+    return parts
+
+
 async def generate_periodic_summary(
     scope: str,           # "week" | "month" | "year"
     period_label: str,    # human-readable, e.g. "May 2026" or "2026-05-11 to 2026-05-17"
@@ -644,13 +787,14 @@ async def generate_periodic_summary(
         lines.append(f"=== {entry['period']} ===")
         for a in entry.get("articles") or []:
             lines.append(f"• {a.get('headline', '')}: {a.get('blurb', '')[:200]}")
-        entry_bans = entry.get("bans") or []
+        entry_bans = entry.get("ban_summary") or []
+        if not entry_bans:
+            # Fallback: build from raw bans list (daily archive entries)
+            raw_bans = entry.get("bans") or []
+            if raw_bans:
+                entry_bans = _ban_summary(raw_bans)
         if entry_bans:
-            ban_parts = ", ".join(
-                f"{b['ip']} ({b.get('category', 'scan')}, {b['hit_count']} hits)"
-                for b in entry_bans[:5]
-            )
-            lines.append(f"  Banned IPs ({len(entry_bans)} total): {ban_parts}")
+            lines.append(f"  Security: {'; '.join(entry_bans)}")
     body = "\n".join(lines)
 
     scope_map = {

@@ -1172,6 +1172,8 @@ services:
       - ${USERDIR}/.docker/config.json:/root/.docker/config.json:ro
       - ${USERDIR}/.ssh:/root/.ssh:ro
       - ${USERDIR}/docker/homelab-news/data:/data
+      - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
+      - ${USERDIR}/docker/traefik/fail2ban-state.json:/traefik/fail2ban-state.json:ro
     environment:
       - LOKI_URL=${LOKI_URL}
       - OLLAMA_URL=${OLLAMA_URL}
