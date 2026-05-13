@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 
 from lib import (
     UPDATE_INTERVAL, TODAY_FILE,
-    check_docker_logs, check_loki, llm_analysis, generate_newspaper,
+    check_docker_logs, check_loki, check_fail2ban_bans,
+    llm_analysis, generate_newspaper,
     get_container_status_async, load_json, save_json, UPDATES_FILE,
 )
 
@@ -19,9 +20,10 @@ async def run() -> None:
     since_ts = int(midnight.timestamp())
     log.info("Refreshing today's front page (since %s UTC)", midnight.strftime("%Y-%m-%d"))
 
-    docker_issues, loki_issues = await asyncio.gather(
+    docker_issues, loki_issues, bans = await asyncio.gather(
         check_docker_logs(since_ts=since_ts),
         check_loki(start=midnight),
+        check_fail2ban_bans(),
     )
     # Update issues data immediately but preserve existing newspaper so the
     # page keeps showing the last good edition while the LLM rerenders.
@@ -33,6 +35,7 @@ async def run() -> None:
         "docker_analysis": existing.get("docker_analysis"),
         "loki_issues": loki_issues,
         "loki_analysis": existing.get("loki_analysis"),
+        "bans": bans,
     })
 
     unhealthy, _, _ = await get_container_status_async()
@@ -45,9 +48,10 @@ async def run() -> None:
             llm_analysis(docker_issues, "Docker container (today)"),
             llm_analysis(loki_issues, "network/syslog (today)"),
         ),
-        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names),
+        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names, bans),
     )
-    log.info("Today's front page complete (%d articles)", len(newspaper) if newspaper else 0)
+    log.info("Today's front page complete (%d articles, %d bans)",
+             len(newspaper) if newspaper else 0, len(bans))
 
     save_json(TODAY_FILE, {
         "built_at": datetime.now(timezone.utc).isoformat(),
@@ -56,6 +60,7 @@ async def run() -> None:
         "docker_analysis": docker_analysis,
         "loki_issues": loki_issues,
         "loki_analysis": loki_analysis,
+        "bans": bans,
     })
 
 
