@@ -8,7 +8,7 @@ from fastapi import FastAPI, Response
 from fastapi.responses import RedirectResponse
 
 from lib import (
-    REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS,
+    REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status,
@@ -167,12 +167,14 @@ async def current_events():
         masthead_rolling(now_str)
         + nav_bar("current")
         + articles_html
-        + '<div class="grid" style="margin-top:24px">'
+        + '<details class="np-section" open>'
+        + '<summary class="np-dispatch-head">Field Dispatches</summary>'
+        + '<div class="grid" style="margin-top:16px">'
         + containers_card(unhealthy, starting, n_running)
         + updates_card(update_hosts)
-        + log_card("Docker Container Logs", f"Last {LOG_HOURS}h", docker_issues, docker_analysis)
-        + log_card("Network &amp; Syslog", f"Last {LOG_HOURS}h &nbsp;&middot;&nbsp; via Loki", loki_issues, loki_analysis)
-        + '</div>'
+        + log_card("Docker Container Logs", f"Last {ROLLING_HOURS}h", docker_issues, docker_analysis)
+        + log_card("Network &amp; Syslog", f"Last {ROLLING_HOURS}h &nbsp;&middot;&nbsp; via Loki", loki_issues, loki_analysis)
+        + '</div></details>'
     )
     return Response(content=page_wrap(body, refresh=page_refresh),
                     media_type="text/html; charset=utf-8")
