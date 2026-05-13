@@ -59,8 +59,12 @@ FAIL2BAN_ALLOWLIST = [
 
 ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-events view
 
+_AUTH_ENDPOINT = re.compile(r'/api/(?:firstfactor|secondfactor)', re.I)
+
 _ATTACK_SIGNATURES: list[tuple[re.Pattern, str]] = [
     # Checked top-to-bottom; each path gets the first matching label.
+    (re.compile(r'/api/(?:firstfactor|secondfactor)', re.I),
+     "credential stuffing"),
     (re.compile(r'\.aws/|\.s3cfg|gcloud/credentials|\.digitalocean/|\.azure/', re.I),
      "cloud credential sweep"),
     (re.compile(r'\.env(?:[./\-]|$)|/\.env$', re.I),
@@ -477,16 +481,26 @@ def _read_access_log_tail(path: str, max_bytes: int) -> str:
 
 
 def _parse_access_log_hits(raw: str, cutoff: datetime) -> dict[str, list[tuple[datetime, str]]]:
-    """Parse access log lines, returning {ip: [(timestamp, path), ...]} for 403/429 responses."""
+    """Parse access log lines, returning {ip: [(timestamp, path), ...]} for suspicious responses.
+
+    Collects 403/429 (scanner blocks) and 401s on auth endpoints (brute-force login attempts,
+    since Authelia returns 401 for bad credentials rather than 403).
+    """
     ip_hits: dict[str, list[tuple[datetime, str]]] = defaultdict(list)
     for line in raw.splitlines():
-        if '"DownstreamStatus":403' not in line and '"DownstreamStatus":429' not in line:
+        if ('"DownstreamStatus":403' not in line
+                and '"DownstreamStatus":429' not in line
+                and '"DownstreamStatus":401' not in line):
             continue
         try:
             obj = json.loads(line)
         except Exception:
             continue
-        if obj.get("DownstreamStatus") not in (403, 429):
+        status = obj.get("DownstreamStatus")
+        if status not in (401, 403, 429):
+            continue
+        path = obj.get("RequestPath", "")
+        if status == 401 and not _AUTH_ENDPOINT.search(path):
             continue
         raw_host = obj.get("ClientHost", "")
         if not raw_host:
@@ -503,7 +517,7 @@ def _parse_access_log_hits(raw: str, cutoff: datetime) -> dict[str, list[tuple[d
             continue
         if ts < cutoff:
             continue
-        ip_hits[ip].append((ts, obj.get("RequestPath", "")))
+        ip_hits[ip].append((ts, path))
     return ip_hits
 
 
