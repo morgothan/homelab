@@ -77,7 +77,7 @@ services:
         # https access
       - traefik.http.routers.traefik-https.entrypoints=https
       - traefik.http.routers.traefik-https.rule=Host(`traefik.${DOMAIN}`)
-      - traefik.http.routers.traefik-https.middlewares=chain-authelia@file
+      - traefik.http.routers.traefik-https.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.traefik-https.service=api@internal
       - traefik.http.routers.traefik-https.tls.certresolver=letsencrypt
       - traefik.http.routers.traefik-https.tls.domains[0].main=${DOMAIN}
@@ -162,7 +162,7 @@ services:
       #external access  
       - traefik.http.routers.whoami-http.entrypoints=https
       - traefik.http.routers.whoami-http.rule=Host(`whoami.${DOMAIN}`)
-      - traefik.http.routers.whoami-http.middlewares=chain-authelia@file
+      - traefik.http.routers.whoami-http.middlewares=chain-authelia-nowaf@file
         #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.whoami-http.service=whoami
       #local access
@@ -200,7 +200,7 @@ services:
       - traefik.http.routers.homepage-http.entrypoints=https
       - traefik.http.routers.homepage-http.rule=Host(`home.${DOMAIN}`)
         #- traefik.http.routers.heimdall-http.middlewares=chain-oauth@file
-      - traefik.http.routers.homepage-http.middlewares=chain-authelia@file
+      - traefik.http.routers.homepage-http.middlewares=chain-authelia-nowaf@file
         #      - traefik.http.routers.heimdall-http.middlewares=modsecurity@file
       - traefik.http.routers.homepage-http.service=homepage
       - traefik.http.services.homepage.loadbalancer.server.port=3000
@@ -257,7 +257,7 @@ services:
         #external access  
       - traefik.http.routers.prometheus-http.entrypoints=https
       - traefik.http.routers.prometheus-http.rule=Host(`prometheus.${DOMAIN}`)
-      - traefik.http.routers.prometheus-http.middlewares=chain-authelia@file
+      - traefik.http.routers.prometheus-http.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.influx2-http.middlewares=chain-oauth@file
       - traefik.http.routers.prometheus-http.service=prometheus
       - traefik.http.services.prometheus.loadbalancer.server.port=9090
@@ -427,7 +427,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.tautulli-http.entrypoints=https
       - traefik.http.routers.tautulli-http.rule=Host(`tautulli.${DOMAIN}`)
-      - traefik.http.routers.tautulli-http.middlewares=chain-authelia@file
+      - traefik.http.routers.tautulli-http.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.tautulli-http.middlewares=chain-oauth@file
       - traefik.http.routers.tautulli-http.service=tautulli
       - traefik.http.services.tautulli.loadbalancer.server.port=8181
@@ -920,7 +920,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.overseerr-http.entrypoints=https
       - traefik.http.routers.overseerr-http.rule=Host(`overseerr.${DOMAIN}`)
-      - traefik.http.routers.overseerr-http.middlewares=chain-authelia@file
+      - traefik.http.routers.overseerr-http.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.overseerr-http.service=overseerr
       - traefik.http.services.overseerr.loadbalancer.server.port=5055
         #local access
@@ -1104,7 +1104,7 @@ services:
       #external access
       - traefik.http.routers.kopia-ui-http.entrypoints=https
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
-      - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia@file,kopia-auth@file
+      - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,kopia-auth@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
       - traefik.http.services.kopia-ui.loadbalancer.server.scheme=https
@@ -1152,7 +1152,7 @@ services:
       #external access
       - traefik.http.routers.mealie-http.entrypoints=https
       - traefik.http.routers.mealie-http.rule=Host(`mealie.${DOMAIN}`)
-      - traefik.http.routers.mealie-http.middlewares=chain-authelia@file
+      - traefik.http.routers.mealie-http.middlewares=chain-authelia-nowaf@file
 #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.mealie-http.service=mealie
       - traefik.http.services.mealie.loadbalancer.server.port=9000
@@ -1183,7 +1183,7 @@ services:
       # external
       - traefik.http.routers.lab-monitor-https.entrypoints=https
       - traefik.http.routers.lab-monitor-https.rule=Host(`news.${DOMAIN}`)
-      - traefik.http.routers.lab-monitor-https.middlewares=chain-authelia@file
+      - traefik.http.routers.lab-monitor-https.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.lab-monitor-https.service=lab-monitor
       - traefik.http.services.lab-monitor.loadbalancer.server.port=8080
       # local

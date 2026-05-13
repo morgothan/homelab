@@ -4,8 +4,12 @@ http:
       plugin:
         fail2ban:
           sourceCriterion:
-            ipStrategy:
-              depth: 1
+            requestHeaderName: "Cf-Connecting-Ip"
+          allowlist:
+            ip:
+              - "10.0.0.0/8"
+              - "172.16.0.0/12"
+              - "192.168.0.0/16"
           logLevel: "WARN"
           rules:
             enabled: true
