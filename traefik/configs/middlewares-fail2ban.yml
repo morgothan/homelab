@@ -4,7 +4,8 @@ http:
       plugin:
         fail2ban:
           sourceCriterion:
-            requestHeaderName: "Cf-Connecting-Ip"
+            ipStrategy:
+              depth: 1
           logLevel: "WARN"
           rules:
             enabled: true
