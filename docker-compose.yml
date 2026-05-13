@@ -135,8 +135,8 @@ services:
       - MODSEC_RULE_ENGINE=On
       - UID=1000
       - SET_REAL_IP_FROM=172.18.0.0/16
-      - REAL_IP_HEADER=X-Forwarded-For
-      - REAL_IP_PROXY_HEADER=X-Forwarded-For
+      - REAL_IP_HEADER=X-Real-Ip
+      - REAL_IP_PROXY_HEADER=X-Real-Ip
       - REAL_IP_RECURSIVE=on
     networks:
       - ${DOCKERNET}
@@ -145,6 +145,7 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/waf_logs:/var/log/nginx:rw
       - ${DOCKERDIR}/waf/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
+      - ${DOCKERDIR}/waf/logging.conf.template:/etc/nginx/templates/conf.d/logging.conf.template:ro
 
 ########## Whoami (WAF Dummy Backend)
 # Dummy HTTP 200 backend required by the WAF sidecar container
