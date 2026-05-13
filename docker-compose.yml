@@ -1238,6 +1238,8 @@ services:
       - PROMETHEUS_URL=http://prometheus:9090
       - KOPIA_USER=${KOPIA_USER}
       - KOPIA_PASS=${KOPIA_PASS}
+      - BESZEL_EMAIL=morgothan@gmail.com
+      - BESZEL_PASS=${BESZEL_PASS}
     labels:
       - traefik.enable=true
       # external
