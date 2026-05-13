@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 
 from lib import (
     REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS,
-    check_docker_logs, check_loki, check_fail2ban_bans, check_prometheus,
+    check_docker_logs, check_loki, check_fail2ban_bans, check_prometheus, check_kopia,
     llm_analysis, generate_newspaper,
     get_container_status_async, load_json, save_json, UPDATES_FILE,
 )
@@ -21,11 +21,12 @@ async def run() -> None:
     since = now - timedelta(hours=ROLLING_HOURS)
     since_ts = int(since.timestamp())
 
-    docker_issues, loki_issues, (bans, probes), prometheus = await asyncio.gather(
+    docker_issues, loki_issues, (bans, probes), prometheus, kopia = await asyncio.gather(
         check_docker_logs(since_ts=since_ts),
         check_loki(start=since),
         check_fail2ban_bans(),
         check_prometheus(),
+        check_kopia(),
     )
     existing = load_json(ROLLING_FILE) or {}
     save_json(ROLLING_FILE, {
@@ -48,7 +49,7 @@ async def run() -> None:
             llm_analysis(docker_issues, "Docker container"),
             llm_analysis(loki_issues, "network/syslog (from Loki)"),
         ),
-        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names, bans, probes, prometheus),
+        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names, bans, probes, prometheus, kopia),
     )
     log.info("Rolling view complete (%d articles, %d bans)",
              len(newspaper) if newspaper else 0, len(bans))

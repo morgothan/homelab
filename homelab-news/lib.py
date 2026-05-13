@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import ssl
 import time
 from collections import defaultdict
 from datetime import datetime, timedelta, timezone
@@ -32,6 +33,9 @@ SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 MAX_ARCHIVE_DAYS = int(os.getenv("MAX_ARCHIVE_DAYS", "90"))
 PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
 NODE_EXPORTER_INSTANCE = os.getenv("NODE_EXPORTER_INSTANCE", "traefik.hirschnet:9100")
+KOPIA_URL        = os.getenv("KOPIA_URL", "https://kopia-webui:5151")
+KOPIA_USER       = os.getenv("KOPIA_USER", "admin")
+KOPIA_PASS       = os.getenv("KOPIA_PASS", "")
 
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -932,6 +936,99 @@ async def check_prometheus() -> dict:
     return out
 
 
+# ── Kopia backup health ───────────────────────────────────────────────────────
+
+def _kopia_ssl_ctx() -> ssl.SSLContext:
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+    return ctx
+
+
+async def check_kopia() -> dict:
+    """Query the Kopia WebUI API for backup source health.
+
+    Returns {"alerts": [...], "info": [...]} where:
+    - alerts: sources with missed backups (> 36h since last snapshot) or errors
+    - info: brief summary of all active sources
+    """
+    out: dict = {"alerts": [], "info": []}
+
+    if not KOPIA_PASS:
+        return out
+
+    try:
+        ctx = _kopia_ssl_ctx()
+        async with httpx.AsyncClient(
+            verify=ctx, timeout=20, auth=(KOPIA_USER, KOPIA_PASS)
+        ) as client:
+            r = await client.get(f"{KOPIA_URL}/api/v1/sources")
+            r.raise_for_status()
+            sources = r.json().get("sources", [])
+
+        now = datetime.now(timezone.utc)
+        # Active = last snapshot within 30 days (stale/decommissioned sources are silent)
+        active_cutoff = now - timedelta(days=30)
+        warn_cutoff   = now - timedelta(hours=36)
+        crit_cutoff   = now - timedelta(days=7)
+
+        ok_count   = 0
+        warn_srcs  = []
+        crit_srcs  = []
+
+        for src_entry in sources:
+            src  = src_entry.get("source", {})
+            last = src_entry.get("lastSnapshot")
+            label = f"{src.get('userName','?')}@{src.get('host','?')}:{src.get('path','?')}"
+
+            if not last:
+                continue
+
+            err = last.get("error", "")
+            ts_raw = last.get("startTime", "")
+            try:
+                ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            except Exception:
+                continue
+
+            if ts < active_cutoff:
+                continue  # decommissioned/inactive source — don't alert
+
+            if err:
+                crit_srcs.append(f"{label}: {err[:100]}")
+            elif ts < crit_cutoff:
+                age_d = int((now - ts).total_seconds() / 86400)
+                crit_srcs.append(f"{label}: no backup in {age_d} days")
+            elif ts < warn_cutoff:
+                age_h = int((now - ts).total_seconds() / 3600)
+                warn_srcs.append(f"{label}: no backup in {age_h}h")
+            else:
+                ok_count += 1
+
+        total_active = ok_count + len(warn_srcs) + len(crit_srcs)
+        if total_active == 0:
+            return out
+
+        for msg in crit_srcs:
+            out["alerts"].append(f"BACKUP CRITICAL: {msg}")
+        for msg in warn_srcs:
+            out["alerts"].append(f"BACKUP WARNING: {msg}")
+
+        if ok_count == total_active:
+            out["info"].append(f"Kopia backups: all {ok_count} active sources current")
+        else:
+            out["info"].append(
+                f"Kopia backups: {ok_count}/{total_active} sources current"
+                + (f", {len(warn_srcs)} warned" if warn_srcs else "")
+                + (f", {len(crit_srcs)} critical" if crit_srcs else "")
+            )
+
+    except Exception as e:
+        log.warning("check_kopia failed: %s", e)
+
+    return out
+
+
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
@@ -974,6 +1071,7 @@ async def generate_newspaper(
     bans: Optional[list[dict]] = None,
     probes: Optional[list[dict]] = None,
     prometheus: Optional[dict] = None,
+    kopia: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -1023,6 +1121,16 @@ async def generate_newspaper(
             prom_lines.extend(f"  {i}" for i in prometheus["info"])
         if prom_lines:
             lines.append("\n" + "\n".join(prom_lines))
+
+    if kopia:
+        kopia_lines: list[str] = []
+        if kopia.get("alerts"):
+            kopia_lines.append("BACKUP ALERTS:")
+            kopia_lines.extend(f"  {a}" for a in kopia["alerts"])
+        if kopia.get("info"):
+            kopia_lines.extend(f"  {i}" for i in kopia["info"])
+        if kopia_lines:
+            lines.append("\n" + "\n".join(kopia_lines))
 
     situation = "\n".join(lines)
     prompt = (
