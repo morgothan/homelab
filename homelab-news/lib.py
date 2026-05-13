@@ -187,6 +187,41 @@ def _dedup_key(source: str, msg: str) -> str:
     return f"{source}|{msg.strip()[:180]}"
 
 
+_RFC1918 = re.compile(
+    r'^(?:10\.|172\.(?:1[6-9]|2\d|3[01])\.|192\.168\.|127\.)'
+)
+
+
+def _fix_waf_client_ip(line: str) -> str:
+    """Replace ModSecurity client_ip with real IP from request headers.
+
+    ModSecurity reads client_ip from the raw TCP socket, so it always sees
+    Traefik's internal Docker IP.  The real client IP is present in the
+    request headers forwarded by the traefik-modsecurity-plugin.
+    """
+    if '"transaction"' not in line or '"client_ip"' not in line:
+        return line
+    try:
+        obj = json.loads(line)
+        t = obj.get("transaction", {})
+        ip = t.get("client_ip", "")
+        if not ip or not _RFC1918.match(ip):
+            return line
+        hdrs = (t.get("request", {}) or {}).get("headers", {}) or {}
+        real_ip = (
+            hdrs.get("Cf-Connecting-Ip")
+            or hdrs.get("X-Real-Ip")
+            or (hdrs.get("X-Forwarded-For", "").split(",")[0].strip())
+        )
+        if real_ip and real_ip != ip:
+            t["client_ip"] = real_ip
+            obj["transaction"] = t
+            return json.dumps(obj)
+    except Exception:
+        pass
+    return line
+
+
 def _extract_text(line: str) -> str:
     if not line.startswith("{"):
         return line
@@ -229,7 +264,7 @@ def _collect_issues(source: str, lines: list[str]) -> tuple[list[dict], dict[str
     issues: list[dict] = []
     seen: dict[str, int] = defaultdict(int)
     for raw in lines:
-        line = _strip_ansi(_extract_text(raw.strip()))
+        line = _strip_ansi(_extract_text(_fix_waf_client_ip(raw.strip())))
         if not line or len(line) < 8:
             continue
         if not CONCERNING.search(line):
