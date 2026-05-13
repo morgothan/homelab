@@ -1,0 +1,24 @@
+http:
+  middlewares:
+    block-path-rewrite:
+      replacePathRegex:
+        regex: ".*"
+        replacement: "/block"
+
+    chain-block-paths:
+      chain:
+        middlewares:
+          - realip
+          - fail2ban
+          - test-errors
+          - block-path-rewrite
+
+  routers:
+    block-scanner-paths:
+      entryPoints:
+        - https
+      rule: 'HostRegexp(`.+\.sketchyasfuckistan\.net`) && PathRegexp(`^/(\.(env|git|svn|hg|htaccess|htpasswd|DS_Store|bash_history|ssh)|wp-admin|wp-login\.php|xmlrpc\.php|wp-config\.php|wp-includes|phpmyadmin|pma|myadmin|adminer|phpinfo\.php|info\.php|server-status|server-info)(/|$|\.)`)'
+      priority: 500
+      middlewares:
+        - chain-block-paths
+      service: error-pages@file
