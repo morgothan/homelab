@@ -36,6 +36,9 @@ NODE_EXPORTER_INSTANCE = os.getenv("NODE_EXPORTER_INSTANCE", "traefik.hirschnet:
 KOPIA_URL        = os.getenv("KOPIA_URL", "https://kopia-webui:5151")
 KOPIA_USER       = os.getenv("KOPIA_USER", "admin")
 KOPIA_PASS       = os.getenv("KOPIA_PASS", "")
+BESZEL_URL       = os.getenv("BESZEL_URL", "http://beszel.hirschnet:8090")
+BESZEL_EMAIL     = os.getenv("BESZEL_EMAIL", "")
+BESZEL_PASS      = os.getenv("BESZEL_PASS", "")
 
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -1029,6 +1032,80 @@ async def check_kopia() -> dict:
     return out
 
 
+# ── Beszel host metrics ───────────────────────────────────────────────────────
+
+async def check_beszel() -> dict:
+    """Query Beszel for per-host CPU, memory, disk, and uptime status.
+
+    Returns {"alerts": [...], "info": [...]} — alerts for hosts that are down
+    or have critically high resource usage; info gives a compact summary.
+    """
+    out: dict = {"alerts": [], "info": []}
+
+    if not BESZEL_EMAIL or not BESZEL_PASS:
+        return out
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            auth_r = await client.post(
+                f"{BESZEL_URL}/api/collections/users/auth-with-password",
+                json={"identity": BESZEL_EMAIL, "password": BESZEL_PASS},
+            )
+            auth_r.raise_for_status()
+            token = auth_r.json().get("token", "")
+
+            sys_r = await client.get(
+                f"{BESZEL_URL}/api/collections/systems/records",
+                headers={"Authorization": token},
+                params={"perPage": 100},
+            )
+            sys_r.raise_for_status()
+            systems = sys_r.json().get("items", [])
+
+        down, high_disk, high_mem, ok = [], [], [], []
+        for s in systems:
+            name   = s.get("name", "unknown")
+            status = s.get("status", "unknown")
+            info   = s.get("info") or {}
+            cpu    = info.get("cpu", 0)
+            mp     = info.get("mp", 0)   # memory %
+            dp     = info.get("dp", 0)   # disk %
+
+            if status != "up":
+                down.append(f"{name} ({status})")
+            elif dp > 90:
+                high_disk.append(f"{name}: disk {dp:.0f}%")
+            elif mp > 92:
+                high_mem.append(f"{name}: mem {mp:.0f}%")
+            else:
+                ok.append(f"{name} cpu={cpu:.0f}% mem={mp:.0f}% disk={dp:.0f}%")
+
+        for h in down:
+            out["alerts"].append(f"HOST DOWN: {h}")
+        for h in high_disk:
+            out["alerts"].append(f"DISK WARNING: {h}")
+        for h in high_mem:
+            out["alerts"].append(f"MEMORY WARNING: {h}")
+
+        total = len(systems)
+        if down:
+            out["info"].append(
+                f"Beszel: {len(ok)}/{total} hosts up; DOWN: {', '.join(down)}"
+            )
+        elif high_disk or high_mem:
+            flagged = [h.split(":")[0] for h in high_disk + high_mem]
+            out["info"].append(
+                f"Beszel: all {total} hosts up; resource alerts: {', '.join(flagged)}"
+            )
+        else:
+            out["info"].append(f"Beszel: all {total} hosts up, resources nominal")
+
+    except Exception as e:
+        log.warning("check_beszel failed: %s", e)
+
+    return out
+
+
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
@@ -1072,6 +1149,7 @@ async def generate_newspaper(
     probes: Optional[list[dict]] = None,
     prometheus: Optional[dict] = None,
     kopia: Optional[dict] = None,
+    beszel: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -1131,6 +1209,16 @@ async def generate_newspaper(
             kopia_lines.extend(f"  {i}" for i in kopia["info"])
         if kopia_lines:
             lines.append("\n" + "\n".join(kopia_lines))
+
+    if beszel:
+        beszel_lines: list[str] = []
+        if beszel.get("alerts"):
+            beszel_lines.append("HOST ALERTS:")
+            beszel_lines.extend(f"  {a}" for a in beszel["alerts"])
+        if beszel.get("info"):
+            beszel_lines.extend(f"  {i}" for i in beszel["info"])
+        if beszel_lines:
+            lines.append("\n" + "\n".join(beszel_lines))
 
     situation = "\n".join(lines)
     prompt = (
