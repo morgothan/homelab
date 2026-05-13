@@ -1052,6 +1052,10 @@ body {
   gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--dim); align-items: baseline;
 }
 .ban-row:last-child { border-bottom: none; }
+.ban-details > summary { list-style: none; display: flex; justify-content: space-between; align-items: center; cursor: pointer; user-select: none; }
+.ban-details > summary::-webkit-details-marker { display: none; }
+.ban-details > summary .card-meta::after { content: " ▾"; }
+.ban-details[open] > summary .card-meta::after { content: " ▴"; }
 """
 
 _FAVICON_SVG = (
@@ -1176,25 +1180,33 @@ def render_bans_card(bans: list[dict]) -> str:
     n = len(bans)
     meta = f'{n} active ban{"s" if n != 1 else ""} &nbsp;&middot;&nbsp; 24h bantime'
     if not bans:
-        body = '<span class="c-ok">&#x2713;&nbsp; No active IP bans.</span>'
-    else:
-        rows = []
-        for b in bans:
-            rows.append(
-                '<div class="ban-row">'
-                f'<span class="c-err">{_h(b["ip"])}</span>'
-                f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
-                f'<span class="c-warn">expires in {_h(b["expires_in"])}</span>'
-                f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
-                f'<span class="c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
-                '</div>'
-            )
-        body = "".join(rows)
+        return (
+            '<div class="card full"><div class="card-head">'
+            '<span class="card-title">Blocked IPs</span>'
+            f'<span class="card-meta">{meta}</span>'
+            '</div><div class="card-body">'
+            '<span class="c-ok">&#x2713;&nbsp; No active IP bans.</span>'
+            '</div></div>'
+        )
+    rows = "".join(
+        '<div class="ban-row">'
+        f'<span class="c-err">{_h(b["ip"])}</span>'
+        f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
+        f'<span class="c-warn">expires in {_h(b["expires_in"])}</span>'
+        f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
+        f'<span class="c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
+        '</div>'
+        for b in bans
+    )
     return (
-        '<div class="card full"><div class="card-head">'
+        '<div class="card full">'
+        '<details class="ban-details">'
+        '<summary class="card-head ban-summary">'
         '<span class="card-title">Blocked IPs</span>'
         f'<span class="card-meta">{meta}</span>'
-        f'</div><div class="card-body">{body}</div></div>'
+        '</summary>'
+        f'<div class="card-body">{rows}</div>'
+        '</details></div>'
     )
 
 
