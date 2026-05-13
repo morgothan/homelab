@@ -145,6 +145,7 @@ services:
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/waf_logs:/var/log/nginx:rw
       - ${DOCKERDIR}/waf/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:/etc/modsecurity.d/owasp-crs/rules/REQUEST-900-EXCLUSION-RULES-BEFORE-CRS.conf:ro
+      - ${DOCKERDIR}/waf/LOCAL-EXCLUSIONS.conf:/etc/modsecurity.d/owasp-crs/rules/LOCAL-EXCLUSIONS.conf:ro
       - ${DOCKERDIR}/waf/logging.conf.template:/etc/nginx/templates/conf.d/logging.conf.template:ro
 
 ########## Whoami (WAF Dummy Backend)
