@@ -52,7 +52,10 @@ async def build_weekly() -> None:
         log.warning("No daily archives with content available for weekly digest")
         return
 
-    entries = [{"period": r["date"], "articles": r["newspaper"]} for r in days]
+    entries = [
+        {"period": r["date"], "articles": r["newspaper"], "bans": r.get("bans") or []}
+        for r in days
+    ]
     dates = [e["period"] for e in entries]
     week_start = dates[-1]
     period = f"{week_start} to {dates[0]}"

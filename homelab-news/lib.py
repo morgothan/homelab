@@ -42,6 +42,17 @@ PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 
 MAX_WEEKLY  = int(os.getenv("MAX_WEEKLY",  "16"))  # ~4 months of weeklies
 MAX_MONTHLY = int(os.getenv("MAX_MONTHLY", "24"))  # 2 years of monthlies
+BANTIME_HOURS = 24  # must match traefik/configs/middlewares-fail2ban.yml bantime
+
+
+def _fmt_duration(seconds: float) -> str:
+    """Return human-readable duration like '2h 15m' or '45m'."""
+    seconds = max(0, int(seconds))
+    h, rem = divmod(seconds, 3600)
+    m = rem // 60
+    if h:
+        return f"{h}h {m}m" if m else f"{h}h"
+    return f"{m}m" if m else "<1m"
 
 
 def _parse_remote_hosts() -> list[tuple[str, str]]:
@@ -337,6 +348,74 @@ async def check_loki(
     all_issues = _group_by_ip(all_issues)
     return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:60]
 
+# ── fail2ban ban tracking ─────────────────────────────────────────────────────
+
+async def check_fail2ban_bans() -> list[dict]:
+    """Return currently active fail2ban bans parsed from Traefik container logs.
+
+    Each entry: {ip, banned_since, expires_at, blocked_for, expires_in, hit_count, paths}
+    """
+    now = datetime.now(timezone.utc)
+    since_ts = int((now - timedelta(hours=BANTIME_HOURS + 2)).timestamp())
+
+    try:
+        dc = docker.from_env()
+        traefik = dc.containers.get("traefik")
+        loop = asyncio.get_running_loop()
+        raw = await asyncio.wait_for(
+            loop.run_in_executor(None, _fetch_logs_sync, traefik, since_ts),
+            timeout=30.0,
+        )
+    except Exception as e:
+        log.warning("Failed to fetch Traefik logs for fail2ban: %s", e)
+        return []
+
+    bans: dict[str, dict] = {}
+    for line in raw:
+        line = line.strip()
+        if '"reason":"banned"' not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        if obj.get("reason") != "banned":
+            continue
+        ip = obj.get("ip", "")
+        if not ip:
+            continue
+        ts_str = obj.get("time", "")
+        path = obj.get("path", "")
+        if ip not in bans:
+            bans[ip] = {"first_seen": ts_str, "paths": [], "count": 0}
+        bans[ip]["count"] += 1
+        if ts_str and ts_str < bans[ip]["first_seen"]:
+            bans[ip]["first_seen"] = ts_str
+        if path and path not in bans[ip]["paths"] and len(bans[ip]["paths"]) < 5:
+            bans[ip]["paths"].append(path)
+
+    result = []
+    for ip, d in bans.items():
+        try:
+            first = datetime.fromisoformat(d["first_seen"].replace("Z", "+00:00"))
+        except Exception:
+            continue
+        expires = first + timedelta(hours=BANTIME_HOURS)
+        if expires <= now:
+            continue
+        result.append({
+            "ip":          ip,
+            "banned_since": first.strftime("%Y-%m-%d %H:%M UTC"),
+            "expires_at":  expires.strftime("%Y-%m-%d %H:%M UTC"),
+            "blocked_for": _fmt_duration((now - first).total_seconds()),
+            "expires_in":  _fmt_duration((expires - now).total_seconds()),
+            "hit_count":   d["count"],
+            "paths":       d["paths"],
+        })
+
+    return sorted(result, key=lambda x: x["hit_count"], reverse=True)
+
+
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
@@ -376,6 +455,7 @@ async def generate_newspaper(
     loki_issues: list[dict],
     update_hosts: dict,
     unhealthy_names: list[str],
+    bans: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
     lines: list[str] = []
     if unhealthy_names:
@@ -405,6 +485,15 @@ async def generate_newspaper(
         lines.append("\nTOP NETWORK/SYSLOG ISSUES:")
         for i in sorted(loki_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
             lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {i['message'][:120]}")
+
+    if bans:
+        lines.append(f"\nACTIVE FAIL2BAN BANS ({len(bans)} IPs blocked):")
+        for b in bans[:5]:
+            paths = ", ".join(b["paths"][:3])
+            lines.append(
+                f"  {b['ip']} — blocked {b['blocked_for']}, "
+                f"{b['hit_count']} blocked hits, scanning: {paths}"
+            )
 
     situation = "\n".join(lines)
     prompt = (
@@ -481,6 +570,12 @@ async def generate_periodic_summary(
         lines.append(f"=== {entry['period']} ===")
         for a in entry.get("articles") or []:
             lines.append(f"• {a.get('headline', '')}: {a.get('blurb', '')[:200]}")
+        entry_bans = entry.get("bans") or []
+        if entry_bans:
+            ban_parts = ", ".join(
+                f"{b['ip']} ({b['hit_count']} hits)" for b in entry_bans[:5]
+            )
+            lines.append(f"  Banned IPs ({len(entry_bans)} total): {ban_parts}")
     body = "\n".join(lines)
 
     scope_map = {
@@ -498,7 +593,9 @@ async def generate_periodic_summary(
         "- Things that got better or were resolved\n"
         "- Things that got worse or are persisting\n"
         "- Periodic patterns (e.g. 'every weekend', 'Tuesdays consistently')\n"
-        "- One-time significant events worth remembering\n\n"
+        "- One-time significant events worth remembering\n"
+        "- Security: repeat-offender IPs banned across multiple days, trends in scan volume,\n"
+        "  common attack patterns (e.g. credential stuffing, .env scanning)\n\n"
         "Rules:\n"
         "- Write 3–6 articles. Skip anything minor that appeared only once.\n"
         "- Headlines: name the service and the trend, not vague phrases.\n"
@@ -876,6 +973,11 @@ body {
   display: flex; flex-wrap: wrap; gap: 6px 24px; padding: 12px 0 0;
   font-family: "Courier New", monospace; font-size: 0.68rem; color: var(--muted);
 }
+.ban-row {
+  display: grid; grid-template-columns: 9em 8em 9em 4em 1fr;
+  gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--dim); align-items: baseline;
+}
+.ban-row:last-child { border-bottom: none; }
 """
 
 _FAVICON_SVG = (
@@ -991,6 +1093,33 @@ def log_card(title: str, meta: str, issues: list[dict], analysis: Optional[str])
     return (
         '<div class="card full"><div class="card-head">'
         f'<span class="card-title">{title}</span>'
+        f'<span class="card-meta">{meta}</span>'
+        f'</div><div class="card-body">{body}</div></div>'
+    )
+
+
+def render_bans_card(bans: list[dict]) -> str:
+    n = len(bans)
+    meta = f'{n} active ban{"s" if n != 1 else ""} &nbsp;&middot;&nbsp; 24h bantime'
+    if not bans:
+        body = '<span class="c-ok">&#x2713;&nbsp; No active IP bans.</span>'
+    else:
+        rows = []
+        for b in bans:
+            paths = ", ".join(_h(p) for p in b["paths"][:3])
+            rows.append(
+                '<div class="ban-row">'
+                f'<span class="c-err">{_h(b["ip"])}</span>'
+                f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
+                f'<span class="c-warn">expires in {_h(b["expires_in"])}</span>'
+                f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
+                f'<span class="c-gold">{paths}</span>'
+                '</div>'
+            )
+        body = "".join(rows)
+    return (
+        '<div class="card full"><div class="card-head">'
+        '<span class="card-title">Blocked IPs</span>'
         f'<span class="card-meta">{meta}</span>'
         f'</div><div class="card-body">{body}</div></div>'
     )

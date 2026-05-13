@@ -42,6 +42,7 @@ def snapshot(date_str: str) -> None:
         "docker_analysis": today.get("docker_analysis"),
         "loki_issues":     (today.get("loki_issues") or [])[:50],
         "loki_analysis":   today.get("loki_analysis"),
+        "bans":            today.get("bans") or [],
         "newspaper":       newspaper,
     }
 

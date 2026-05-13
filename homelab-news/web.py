@@ -13,7 +13,7 @@ from lib import (
     _FAVICON_SVG, _CSS,
     load_json, get_container_status,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
-    render_articles_html, log_card, containers_card, updates_card,
+    render_articles_html, log_card, containers_card, updates_card, render_bans_card,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -84,6 +84,7 @@ async def index():
     newspaper = today.get("newspaper")
     docker_issues = today.get("docker_issues") or []
     loki_issues   = today.get("loki_issues") or []
+    bans          = today.get("bans") or []
 
     if newspaper:
         articles_html = render_articles_html(newspaper)
@@ -108,7 +109,13 @@ async def index():
 
     n_issues = len(docker_issues) + len(loki_issues)
     status = _status_bar(n_running, unhealthy, update_hosts, n_issues, "log issues today")
-    body = masthead_today() + nav_bar("front") + articles_html + status
+    body = (
+        masthead_today()
+        + nav_bar("front")
+        + articles_html
+        + render_bans_card(bans)
+        + status
+    )
     return Response(content=page_wrap(body, refresh=page_refresh),
                     media_type="text/html; charset=utf-8")
 
@@ -130,6 +137,7 @@ async def current_events():
     loki_issues   = rolling.get("loki_issues") or []
     docker_analysis = rolling.get("docker_analysis")
     loki_analysis   = rolling.get("loki_analysis")
+    bans            = rolling.get("bans") or []
     built_at = rolling.get("built_at", "")
     now_str  = built_at[0:16].replace("T", " ") + " UTC" if built_at else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -153,6 +161,7 @@ async def current_events():
         + '<div class="grid" style="margin-top:24px">'
         + containers_card(unhealthy, starting, n_running)
         + updates_card(update_hosts)
+        + render_bans_card(bans)
         + log_card("Docker Container Logs", f"Last {LOG_HOURS}h", docker_issues, docker_analysis)
         + log_card("Network &amp; Syslog", f"Last {LOG_HOURS}h &nbsp;&middot;&nbsp; via Loki", loki_issues, loki_analysis)
         + '</div>'
