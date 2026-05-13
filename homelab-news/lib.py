@@ -547,7 +547,7 @@ async def generate_newspaper(
             line = f"UPDATE on {label}: {r['container']} ({r['image']}{ver})"
             cl = r.get("changelog_analysis")
             if cl:
-                line += f" — BREAKING/NOTABLE: {cl[:200]}"
+                line += f" — CHANGELOG: {cl[:200]}"
             lines.append(line)
 
     if docker_issues:
@@ -719,15 +719,16 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
     if not notes:
         return None
     prompt = (
-        f"Release notes for Docker image '{image}' (new version: {tag}) running in a homelab.\n"
-        "Stack: Traefik, Authelia, Jellyfin, Prometheus, Grafana, Redis, Home Assistant.\n\n"
-        "List ONLY items a homelab operator must act on:\n"
-        "- Breaking changes or required config/migration steps\n"
-        "- Security vulnerabilities fixed\n"
-        "- Deprecated settings that need updating\n"
-        "If there is nothing requiring action, respond with exactly: No action required.\n"
-        "Be terse — 1-3 bullet points max. No preamble, no markdown headers.\n\n"
-        f"RELEASE NOTES ({tag}):\n{notes[:2500]}"
+        f"You are summarising a Docker image update for a homelab operator.\n"
+        f"Image: {image}  New tag: {tag}\n\n"
+        f"RELEASE NOTES:\n{notes[:2500]}\n\n"
+        "Write exactly 1-2 sentences describing what changed. Rules:\n"
+        "- You MUST output something — never leave the response blank.\n"
+        "- If the notes describe real changes (features, bug fixes, security patches), summarise them.\n"
+        "- If the notes are sparse or this is just a base-image/container rebuild, say so: "
+        "e.g. 'Container rebuild (ls456→ls457); qbittorrent application version unchanged at 5.2.0.'\n"
+        "- Lead with any breaking changes or required migration steps if present.\n"
+        "Output only the 1-2 sentence summary. No headers, no bullet points, no preamble."
     )
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
@@ -737,7 +738,7 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 300},
+                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 1500},
                 },
             )
             resp.raise_for_status()
