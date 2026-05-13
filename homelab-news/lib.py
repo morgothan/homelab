@@ -40,9 +40,10 @@ ARCHIVE_FILE = os.path.join(DATA_DIR, "archive.json")
 UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
 PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 
-MAX_WEEKLY  = int(os.getenv("MAX_WEEKLY",  "16"))  # ~4 months of weeklies
-MAX_MONTHLY = int(os.getenv("MAX_MONTHLY", "24"))  # 2 years of monthlies
-BANTIME_HOURS = 24  # must match traefik/configs/middlewares-fail2ban.yml bantime
+MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
+MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
+BANTIME_HOURS = 24   # must match traefik/configs/middlewares-fail2ban.yml bantime
+ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-events view
 
 _ATTACK_SIGNATURES: list[tuple[re.Pattern, str]] = [
     # Checked top-to-bottom; each path gets the first matching label.
@@ -1050,6 +1051,21 @@ body {
 .np-blotter-ip { font-size: 0.85rem; font-weight: bold; font-family: "Courier New", monospace; }
 .np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
 .np-blotter-meta { font-size: 0.78rem; color: #888888; }
+/* Collapsible newspaper sections */
+details.np-section > summary { list-style: none; cursor: pointer; user-select: none; display: block; }
+details.np-section > summary::-webkit-details-marker { display: none; }
+details.np-section > summary::after { content: " ▾"; color: var(--gold2); font-size: 0.65rem; }
+details.np-section[open] > summary::after { content: " ▴"; }
+.np-cols-head {
+  font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace; padding: 12px 0 0;
+}
+.np-dispatch-head {
+  font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace;
+  border-top: 1px solid var(--bdr); border-bottom: 1px solid var(--bdr);
+  padding: 10px 0; margin-top: 24px;
+}
 .np-pending {
   text-align: center; padding: 56px 20px; color: var(--muted);
   font-style: italic; font-size: 0.88rem; border-bottom: 1px solid var(--bdr);
@@ -1330,10 +1346,13 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
     lead, *rest = articles
     columns = rest[:3]
     briefs  = rest[3:]
+
     html = (
-        '<div class="np-lead"><div class="np-lead-kicker">Lead Story</div>'
+        '<details class="np-lead np-section" open>'
+        '<summary class="np-lead-kicker">Lead Story</summary>'
         f'<div class="np-lead-hl">{_h(lead["headline"])}</div>'
-        f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div></div>'
+        f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
+        '</details>'
     )
     if columns:
         kickers = ["Also", "Elsewhere", "Update"]
@@ -1344,14 +1363,24 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
             f'<div class="np-blurb">{_h(a["blurb"])}</div></div>'
             for idx, a in enumerate(columns)
         )
-        html += f'<div class="np-cols">{cols}</div>'
+        html += (
+            '<details class="np-section" open>'
+            '<summary class="np-cols-head">Full Coverage</summary>'
+            f'<div class="np-cols">{cols}</div>'
+            '</details>'
+        )
     if briefs:
         items = "".join(
             f'<div class="np-brief"><span class="np-brief-hl">{_h(a["headline"])}</span>'
             f' &mdash; <span class="np-brief-blurb">{_h(a["blurb"])}</span></div>'
             for a in briefs
         )
-        html += f'<div class="np-briefs"><div class="np-briefs-head">In Brief</div>{items}</div>'
+        html += (
+            '<details class="np-briefs np-section" open>'
+            '<summary class="np-briefs-head">In Brief</summary>'
+            f'{items}'
+            '</details>'
+        )
     if bans:
         entries = "".join(
             f'<div class="np-blotter-item">'
@@ -1363,5 +1392,10 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
             f'</div>'
             for b in bans
         )
-        html += f'<div class="np-blotter"><div class="np-blotter-head">Police Blotter</div>{entries}</div>'
+        html += (
+            '<details class="np-blotter np-section" open>'
+            '<summary class="np-blotter-head">Police Blotter</summary>'
+            f'{entries}'
+            '</details>'
+        )
     return html
