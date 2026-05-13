@@ -101,10 +101,8 @@ async def run() -> None:
             if tag:
                 r["new_version"] = tag
             raw = await llm_changelog_analysis(r["container"], r["image"], tag, notes)
-            if raw and raw.strip().lower().rstrip(".") != "no action required":
-                r["changelog_analysis"] = raw
-            log.info("Changelog %s/%s: %s", label, r["container"],
-                     "action needed" if r.get("changelog_analysis") else "no action")
+            r["changelog_analysis"] = raw.strip() if raw and raw.strip() else f"Updated to {tag}."
+            log.info("Changelog %s/%s: %s", label, r["container"], r["changelog_analysis"][:80])
 
     save_json(UPDATES_FILE, {
         "checked_at": datetime.now(timezone.utc).isoformat(),
