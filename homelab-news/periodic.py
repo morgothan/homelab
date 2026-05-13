@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from lib import (
     PERIODIC_FILE, ARCHIVE_FILE,
     MAX_WEEKLY, MAX_MONTHLY,
-    generate_periodic_summary, load_json, save_json,
+    generate_periodic_summary, _ban_summary, load_json, save_json,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -53,7 +53,12 @@ async def build_weekly() -> None:
         return
 
     entries = [
-        {"period": r["date"], "articles": r["newspaper"], "bans": r.get("bans") or []}
+        {
+            "period":      r["date"],
+            "articles":    r["newspaper"],
+            "bans":        r.get("bans") or [],
+            "ban_summary": _ban_summary(r.get("bans") or []),
+        }
         for r in days
     ]
     dates = [e["period"] for e in entries]
@@ -71,12 +76,22 @@ async def build_weekly() -> None:
         log.warning("Weekly digest generation returned no articles")
         return
 
+    # Aggregate ban data across the week so monthly/yearly can see it
+    all_week_bans: list[dict] = []
+    seen_ips: set[str] = set()
+    for e in entries:
+        for b in e.get("bans") or []:
+            if b["ip"] not in seen_ips:
+                all_week_bans.append(b)
+                seen_ips.add(b["ip"])
+
     weekly = periodic.get("weekly", [])
     weekly.insert(0, {
         "week_start": week_start,
-        "period": period,
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "articles": articles,
+        "period":     period,
+        "built_at":   datetime.now(timezone.utc).isoformat(),
+        "articles":   articles,
+        "ban_summary": _ban_summary(all_week_bans),
     })
     periodic["weekly"] = weekly[:MAX_WEEKLY]
     save_json(PERIODIC_FILE, periodic)
@@ -90,7 +105,14 @@ async def build_monthly() -> None:
         log.warning("No weekly digests available for monthly review")
         return
 
-    entries = [{"period": w["period"], "articles": w["articles"]} for w in weekly[:5]]
+    entries = [
+        {
+            "period":      w["period"],
+            "articles":    w["articles"],
+            "ban_summary": w.get("ban_summary") or [],
+        }
+        for w in weekly[:5]
+    ]
 
     now = datetime.now(timezone.utc)
     prev = now.replace(day=1) - timedelta(days=1)  # last day of previous month
