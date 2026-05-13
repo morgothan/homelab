@@ -165,6 +165,9 @@ services:
       - traefik.http.routers.whoami-http.middlewares=chain-authelia-nowaf@file
         #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.whoami-http.service=whoami
+      - traefik.http.routers.whoami-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.whoami-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.whoami-http.tls.domains[0].sans=*.${DOMAIN}
       #local access
       - traefik.http.routers.whoami-http-local.entrypoints=http
       - traefik.http.routers.whoami-http-local.rule=Host(`whoami.${LOCAL}`)
@@ -203,6 +206,9 @@ services:
       - traefik.http.routers.homepage-http.middlewares=chain-authelia-nowaf@file
         #      - traefik.http.routers.heimdall-http.middlewares=modsecurity@file
       - traefik.http.routers.homepage-http.service=homepage
+      - traefik.http.routers.homepage-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.homepage-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.homepage-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.homepage.loadbalancer.server.port=3000
       
 ########## Portainer
@@ -226,6 +232,9 @@ services:
       - traefik.http.routers.frontend.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.frontend.middlewares=chain-oauth@file
       - traefik.http.routers.frontend.service=frontend
+      - traefik.http.routers.frontend.tls.certresolver=letsencrypt
+      - traefik.http.routers.frontend.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.frontend.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.frontend.loadbalancer.server.port=9000
 
 
@@ -260,6 +269,9 @@ services:
       - traefik.http.routers.prometheus-http.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.influx2-http.middlewares=chain-oauth@file
       - traefik.http.routers.prometheus-http.service=prometheus
+      - traefik.http.routers.prometheus-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.prometheus-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.prometheus-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.prometheus.loadbalancer.server.port=9090
         #local access
       - traefik.http.routers.prometheus-http-local.entrypoints=http
@@ -309,6 +321,9 @@ services:
       - traefik.http.routers.grafana-http.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.grafana-http.middlewares=chain-oauth@file
       - traefik.http.routers.grafana-http.service=grafana
+      - traefik.http.routers.grafana-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.grafana-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.grafana-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.grafana.loadbalancer.server.port=3000
         #local access
       - traefik.http.routers.grafana-http-local.entrypoints=http
@@ -394,6 +409,9 @@ services:
         #- traefik.http.routers.dozzle-http.middlewares=chain-authelia@file
       - traefik.http.routers.dozzle-http.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.dozzle-http.service=dozzle
+      - traefik.http.routers.dozzle-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.dozzle-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.dozzle-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.dozzle.loadbalancer.server.port=8080
     expose:
       - 8080
@@ -430,6 +448,9 @@ services:
       - traefik.http.routers.tautulli-http.middlewares=chain-authelia-nowaf@file
         #- traefik.http.routers.tautulli-http.middlewares=chain-oauth@file
       - traefik.http.routers.tautulli-http.service=tautulli
+      - traefik.http.routers.tautulli-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.tautulli-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.tautulli-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.tautulli.loadbalancer.server.port=8181
         #local access
       - traefik.http.routers.tautulli-http-local.entrypoints=http
@@ -517,7 +538,10 @@ services:
       - traefik.http.routers.authelia-rtr.middlewares=chain-no-auth-no-cs@file # Should be chain-no-auth and not chain-authelia
       ## HTTP Services
       - traefik.http.routers.authelia-rtr.service=authelia-svc
-      - traefik.http.services.authelia-svc.loadbalancer.server.port=9091        
+      - traefik.http.routers.authelia-rtr.tls.certresolver=letsencrypt
+      - traefik.http.routers.authelia-rtr.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.authelia-rtr.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.authelia-svc.loadbalancer.server.port=9091
 
 ########## AdGuard Exporter
 # Exports AdGuard Home metrics (primary + kids) to Prometheus
@@ -644,6 +668,9 @@ services:
       - traefik.http.middlewares.guac-headers.headers.customrequestheaders.X-Forwarded-Proto=https
       - traefik.http.routers.guac-http.middlewares=guac-headers,chain-authelia-nowaf@file
       - traefik.http.routers.guac-http.service=guac
+      - traefik.http.routers.guac-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.guac-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.guac-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.guac.loadbalancer.server.port=8080
       # Local access — bypasses Cloudflare Tunnel entirely (much lower latency on LAN)
       - traefik.http.routers.guac-http-local.entrypoints=http
@@ -696,7 +723,9 @@ services:
       - traefik.http.routers.ttyd-https.entryPoints=https
       - traefik.http.routers.ttyd-https.rule=Host(`ttyd.${DOMAIN}`)
       - traefik.http.routers.ttyd-https.middlewares=chain-authelia-nowaf@file
-      - traefik.http.routers.ttyd-https.tls=true
+      - traefik.http.routers.ttyd-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.ttyd-https.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.ttyd-https.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.ttyd.loadBalancer.server.port=80
 
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
@@ -759,6 +788,9 @@ services:
       - traefik.http.routers.gotify-http.rule=Host(`gotify.${DOMAIN}`)
       - traefik.http.routers.gotify-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,gotify-strip-wwwauth
       - traefik.http.routers.gotify-http.service=gotify
+      - traefik.http.routers.gotify-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.gotify-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.gotify-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.gotify.loadbalancer.server.port=80
       # Login router (higher priority): /client is Gotify's own login endpoint — needs Basic auth
       # to reach Gotify, so skip strip-auth-header. No Authelia needed; Gotify validates credentials.
@@ -767,6 +799,9 @@ services:
       - traefik.http.routers.gotify-login.priority=100
       - traefik.http.routers.gotify-login.middlewares=chain-no-auth-no-waf@file,gotify-strip-wwwauth
       - traefik.http.routers.gotify-login.service=gotify
+      - traefik.http.routers.gotify-login.tls.certresolver=letsencrypt
+      - traefik.http.routers.gotify-login.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.gotify-login.tls.domains[0].sans=*.${DOMAIN}
       # Strip WWW-Authenticate from all Gotify responses — prevents browser from caching
       # Gotify credentials as Basic auth and replaying them to Authelia (causing bans)
       - traefik.http.middlewares.gotify-strip-wwwauth.headers.customresponseheaders.WWW-Authenticate=""
@@ -887,6 +922,9 @@ services:
       - traefik.http.routers.peanut-rtr.rule=Host(`peanut.${DOMAIN}`)
       - traefik.http.routers.peanut-rtr.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.peanut-rtr.service=peanut
+      - traefik.http.routers.peanut-rtr.tls.certresolver=letsencrypt
+      - traefik.http.routers.peanut-rtr.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.peanut-rtr.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.peanut.loadbalancer.server.port=8080
 
 ########## Overseerr
@@ -922,6 +960,9 @@ services:
       - traefik.http.routers.overseerr-http.rule=Host(`overseerr.${DOMAIN}`)
       - traefik.http.routers.overseerr-http.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.overseerr-http.service=overseerr
+      - traefik.http.routers.overseerr-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.overseerr-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.overseerr-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.overseerr.loadbalancer.server.port=5055
         #local access
       - traefik.http.routers.overseerr-http-local.entrypoints=http
@@ -1007,6 +1048,11 @@ services:
       - traefik.http.routers.steph-https.rule=Host(`steph.${DOMAIN}`) || Host(`steph.${HEYSHUTUP}`)
       - traefik.http.routers.steph-https.middlewares=chain-no-auth@file
       - traefik.http.routers.steph-https.service=steph
+      - traefik.http.routers.steph-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.steph-https.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.steph-https.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.routers.steph-https.tls.domains[1].main=${HEYSHUTUP}
+      - traefik.http.routers.steph-https.tls.domains[1].sans=*.${HEYSHUTUP}
       - traefik.http.services.steph.loadbalancer.server.port=80
 
 ########## HeyShutUp
@@ -1039,6 +1085,9 @@ services:
       - traefik.http.routers.heyshutup-http.rule=Host(`${HEYSHUTUP}`)
       - traefik.http.routers.heyshutup-http.middlewares=chain-no-auth@file
       - traefik.http.routers.heyshutup-http.service=heyshutup
+      - traefik.http.routers.heyshutup-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.heyshutup-http.tls.domains[0].main=${HEYSHUTUP}
+      - traefik.http.routers.heyshutup-http.tls.domains[0].sans=*.${HEYSHUTUP}
       - traefik.http.services.heyshutup.loadbalancer.server.port=3000
 
 ########## Scraparr
@@ -1106,6 +1155,9 @@ services:
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
       - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,kopia-auth@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
+      - traefik.http.routers.kopia-ui-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.kopia-ui-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.kopia-ui-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.kopia-ui.loadbalancer.server.port=5151
       - traefik.http.services.kopia-ui.loadbalancer.server.scheme=https
 
@@ -1155,6 +1207,9 @@ services:
       - traefik.http.routers.mealie-http.middlewares=chain-authelia-nowaf@file
 #      - traefik.http.routers.whoami-http.middlewares=waf@file
       - traefik.http.routers.mealie-http.service=mealie
+      - traefik.http.routers.mealie-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.mealie-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.mealie-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.mealie.loadbalancer.server.port=9000
 
 
@@ -1187,6 +1242,9 @@ services:
       - traefik.http.routers.lab-monitor-https.rule=Host(`news.${DOMAIN}`)
       - traefik.http.routers.lab-monitor-https.middlewares=chain-authelia-nowaf@file
       - traefik.http.routers.lab-monitor-https.service=lab-monitor
+      - traefik.http.routers.lab-monitor-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.lab-monitor-https.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.lab-monitor-https.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.lab-monitor.loadbalancer.server.port=8080
       # local
       - traefik.http.routers.lab-monitor-local.entrypoints=http
