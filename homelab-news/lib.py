@@ -1064,7 +1064,7 @@ body {
   bottom: calc(100% + 6px);
   left: 50%;
   transform: translateX(-50%);
-  background: var(--bg-card);
+  background: var(--card);
   border: 1px solid var(--bdr);
   color: var(--text);
   font-size: 0.72rem;
