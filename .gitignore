@@ -61,6 +61,9 @@ traefik/configs/middlewares-basicauth.yml
 # Traefik plugin cache (downloaded at runtime, owned by root)
 traefik/plugins/
 
+# fail2ban → Cloudflare sync state (contains attacker IPs, runtime data)
+traefik/fail2ban-state.json
+
 # CrowdSec runtime data (owned by root)
 crowdsec/
 
