@@ -51,7 +51,11 @@ def _status_bar(
             if r["status"] != "update_available":
                 continue
             ver = f" → {r['new_version']}" if r.get("new_version") else ""
-            pending.append(f"{host}/{r['container']}{ver}")
+            line = f"{host}/{r['container']}{ver}"
+            cl = r.get("changelog_analysis")
+            if cl:
+                line += f"\n  {cl[:120]}"
+            pending.append(line)
     n_updates = len(pending)
     n_unhealthy = len(unhealthy)
 
