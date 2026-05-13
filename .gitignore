@@ -63,6 +63,7 @@ traefik/plugins/
 
 # fail2ban → Cloudflare sync state (contains attacker IPs, runtime data)
 traefik/monitor/
+traefik/fail2ban-state.json
 
 # CrowdSec runtime data (owned by root)
 crowdsec/
