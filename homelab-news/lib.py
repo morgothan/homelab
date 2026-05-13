@@ -44,6 +44,44 @@ MAX_WEEKLY  = int(os.getenv("MAX_WEEKLY",  "16"))  # ~4 months of weeklies
 MAX_MONTHLY = int(os.getenv("MAX_MONTHLY", "24"))  # 2 years of monthlies
 BANTIME_HOURS = 24  # must match traefik/configs/middlewares-fail2ban.yml bantime
 
+_ATTACK_SIGNATURES: list[tuple[re.Pattern, str]] = [
+    # Checked top-to-bottom; each path gets the first matching label.
+    (re.compile(r'\.aws/|\.s3cfg|gcloud/credentials|\.digitalocean/|\.azure/', re.I),
+     "cloud credential sweep"),
+    (re.compile(r'\.env(?:[./\-]|$)|/\.env$', re.I),
+     "env file sweep"),
+    (re.compile(r'\.git/', re.I),
+     "git exposure scan"),
+    (re.compile(r'wp-(?:admin|login|content|includes)|xmlrpc\.php', re.I),
+     "WordPress probe"),
+    (re.compile(r'phpinfo|eval\.php|shell\.php|cmd\.php|webshell', re.I),
+     "PHP exploit probe"),
+    (re.compile(r'/backup(?:s)?/|\.sql(?:\.gz)?$|\.bak$|\.tar\.gz$|\.dump$', re.I),
+     "backup file scan"),
+    (re.compile(r'/(?:cpanel|whm|plesk|panel|admin|administrator|manager|console)(?:/|$)', re.I),
+     "admin panel probe"),
+    (re.compile(r'(?:config|settings|configuration|credentials|secrets?)\.'
+                r'(?:yml|yaml|json|php|ini|cfg|properties|xml)', re.I),
+     "config file sweep"),
+]
+
+
+def _classify_ban(paths: list[str]) -> str:
+    """Return a human-readable attack category based on the paths an IP requested."""
+    if not paths:
+        return "unknown"
+    scores: dict[str, int] = defaultdict(int)
+    for path in paths:
+        for pattern, label in _ATTACK_SIGNATURES:
+            if pattern.search(path):
+                scores[label] += 1
+                break
+    if scores:
+        return max(scores, key=scores.__getitem__)
+    if all(p.strip().rstrip("/") in ("", "/") for p in paths):
+        return "root scan"
+    return "vulnerability scan"
+
 
 def _fmt_duration(seconds: float) -> str:
     """Return human-readable duration like '2h 15m' or '45m'."""
@@ -411,6 +449,7 @@ async def check_fail2ban_bans() -> list[dict]:
             "expires_in":  _fmt_duration((expires - now).total_seconds()),
             "hit_count":   d["count"],
             "paths":       d["paths"],
+            "category":    _classify_ban(d["paths"]),
         })
 
     return sorted(result, key=lambda x: x["hit_count"], reverse=True)
@@ -489,10 +528,9 @@ async def generate_newspaper(
     if bans:
         lines.append(f"\nACTIVE FAIL2BAN BANS ({len(bans)} IPs blocked):")
         for b in bans[:5]:
-            paths = ", ".join(b["paths"][:3])
             lines.append(
                 f"  {b['ip']} — blocked {b['blocked_for']}, "
-                f"{b['hit_count']} blocked hits, scanning: {paths}"
+                f"{b['hit_count']} blocked hits, type: {b.get('category', 'vulnerability scan')}"
             )
 
     situation = "\n".join(lines)
@@ -573,7 +611,8 @@ async def generate_periodic_summary(
         entry_bans = entry.get("bans") or []
         if entry_bans:
             ban_parts = ", ".join(
-                f"{b['ip']} ({b['hit_count']} hits)" for b in entry_bans[:5]
+                f"{b['ip']} ({b.get('category', 'scan')}, {b['hit_count']} hits)"
+                for b in entry_bans[:5]
             )
             lines.append(f"  Banned IPs ({len(entry_bans)} total): {ban_parts}")
     body = "\n".join(lines)
@@ -1106,14 +1145,13 @@ def render_bans_card(bans: list[dict]) -> str:
     else:
         rows = []
         for b in bans:
-            paths = ", ".join(_h(p) for p in b["paths"][:3])
             rows.append(
                 '<div class="ban-row">'
                 f'<span class="c-err">{_h(b["ip"])}</span>'
                 f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
                 f'<span class="c-warn">expires in {_h(b["expires_in"])}</span>'
                 f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
-                f'<span class="c-gold">{paths}</span>'
+                f'<span class="c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
                 '</div>'
             )
         body = "".join(rows)
