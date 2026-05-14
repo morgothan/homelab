@@ -7,10 +7,10 @@ http:
           allowLocalRequests: true
           logLocalRequests: false
           logAllowedRequests: true
-          logApiRequests: true
+          logApiRequests: false
           api: "https://get.geojs.io/v1/ip/country/{ip}"
-          apiTimeoutMs: 2500
-          cacheSize: 500
+          apiTimeoutMs: 5000
+          cacheSize: 10000
           forceMonthlyUpdate: true
           ignoreApiTimeout: true
           ipGeolocationHttpHeaderField: cf-ipcountry
