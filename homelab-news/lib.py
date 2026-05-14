@@ -88,6 +88,13 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
     cache: dict[str, dict] = load_json(IP_INTEL_FILE) or {}
     now   = time.time()
     stale = [ip for ip in ips if ip not in cache or now - cache[ip].get("_ts", 0) > IP_INTEL_TTL]
+    # IPs cached without abuse data that now have a key available
+    needs_abuse = [
+        ip for ip in ips
+        if ip not in stale and ABUSEIPDB_KEY and "abuse_score" not in cache.get(ip, {})
+    ]
+
+    dirty = False
 
     if stale:
         # ── ip-api.com batch (free, no key, up to 100 IPs per request) ──────
@@ -114,29 +121,31 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
                             "org":          org,
                             "asn":          asn_num,
                         }
+            dirty = True
         except Exception as e:
             log.warning("ip-api.com enrichment failed: %s", e)
 
-        # ── AbuseIPDB per-IP (optional — only if key configured) ─────────────
-        if ABUSEIPDB_KEY:
-            for ip in stale:
-                if ip not in cache:
-                    continue  # skip if geo lookup already failed
+    # ── AbuseIPDB per-IP (optional — only if key configured) ─────────────
+    abuse_targets = [ip for ip in stale if ip in cache] + needs_abuse
+    if ABUSEIPDB_KEY and abuse_targets:
+        async with httpx.AsyncClient(timeout=10) as client:
+            for ip in abuse_targets:
                 try:
-                    async with httpx.AsyncClient(timeout=10) as client:
-                        resp = await client.get(
-                            "https://api.abuseipdb.com/api/v2/check",
-                            params={"ipAddress": ip, "maxAgeInDays": "90"},
-                            headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
-                        )
-                        resp.raise_for_status()
-                        data = resp.json().get("data", {})
-                        cache[ip]["abuse_score"]   = data.get("abuseConfidenceScore", 0)
-                        cache[ip]["abuse_reports"] = data.get("totalReports", 0)
-                        cache[ip]["usage_type"]    = data.get("usageType", "")
+                    resp = await client.get(
+                        "https://api.abuseipdb.com/api/v2/check",
+                        params={"ipAddress": ip, "maxAgeInDays": "90"},
+                        headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
+                    )
+                    resp.raise_for_status()
+                    data = resp.json().get("data", {})
+                    cache[ip]["abuse_score"]   = data.get("abuseConfidenceScore", 0)
+                    cache[ip]["abuse_reports"] = data.get("totalReports", 0)
+                    cache[ip]["usage_type"]    = data.get("usageType", "")
+                    dirty = True
                 except Exception as e:
                     log.warning("AbuseIPDB lookup for %s failed: %s", ip, e)
 
+    if dirty:
         save_json(IP_INTEL_FILE, cache)
 
     return {ip: cache.get(ip, {}) for ip in ips}
