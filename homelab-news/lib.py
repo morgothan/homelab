@@ -1908,6 +1908,15 @@ body {
 .np-blotter-ip { font-size: 0.85rem; font-weight: bold; font-family: "Courier New", monospace; }
 .np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
 .np-blotter-meta { font-size: 0.78rem; color: #888888; }
+.np-blotter-paths { width: 100%; font-size: 0.72rem; color: var(--muted); font-family: "Courier New", monospace; padding: 2px 0 4px; }
+.np-blotter-count { font-size: 0.7em; color: var(--muted); }
+.np-blotter-empty { padding: 10px 0; }
+.np-blotter-page { border-top: 3px double var(--bdr); padding: 14px 0 0; margin-top: 24px; }
+.np-blotter-page-head {
+  font-size: 0.62rem; letter-spacing: 0.26em; text-transform: uppercase;
+  color: var(--gold2); font-family: "Courier New", monospace;
+  border-bottom: 1px solid var(--bdr); padding-bottom: 8px; margin-bottom: 14px;
+}
 /* Collapsible newspaper sections */
 details.np-section > summary { list-style: none; cursor: pointer; user-select: none; display: block; }
 details.np-section > summary::-webkit-details-marker { display: none; }
@@ -2010,6 +2019,8 @@ def nav_bar(active: str) -> str:
         + _item("/", "Front Page", "front")
         + " &nbsp;&middot;&nbsp; "
         + _item("/current", "Current Events", "current")
+        + " &nbsp;&middot;&nbsp; "
+        + _item("/blotter", "Police Blotter", "blotter")
         + " &nbsp;&middot;&nbsp; "
         + _item("/archive", "Archive", "archive")
         + " &nbsp;&middot;&nbsp; "
@@ -2206,7 +2217,54 @@ def updates_card(update_hosts: dict) -> str:
     )
 
 
-def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None) -> str:
+def render_blotter_html(bans: list[dict], *, collapsed: bool = False) -> str:
+    """Police blotter. collapsed=True renders as a closed <details> for archive snapshots."""
+    n = len(bans)
+    count_str = f'{n} active ban{"s" if n != 1 else ""}'
+
+    if not bans:
+        entries_html = '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; No active IP bans.</span></div>'
+    else:
+        rows = []
+        for b in bans:
+            paths_html = ""
+            if b.get("paths"):
+                paths_html = (
+                    '<div class="np-blotter-paths">'
+                    + ' &middot; '.join(_h(p) for p in b["paths"][:5])
+                    + '</div>'
+                )
+            rows.append(
+                '<div class="np-blotter-item">'
+                f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
+                f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
+                f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
+                f' &middot; blocked {_h(b["blocked_for"])}'
+                f' &middot; expires in {_h(b["expires_in"])}</span>'
+                + paths_html
+                + '</div>'
+            )
+        entries_html = "".join(rows)
+
+    if collapsed:
+        return (
+            '<details class="np-blotter np-section">'
+            f'<summary class="np-blotter-head">Police Blotter'
+            f' <span class="np-blotter-count">({count_str})</span></summary>'
+            + entries_html
+            + '</details>'
+        )
+    return (
+        '<div class="np-blotter-page">'
+        f'<div class="np-blotter-page-head">Police Blotter'
+        f'<span class="np-blotter-meta" style="margin-left:14px">{count_str} &nbsp;&middot;&nbsp; 24h bantime</span>'
+        f'</div>'
+        + entries_html
+        + '</div>'
+    )
+
+
+def render_articles_html(articles: list[dict]) -> str:
     if not articles:
         return '<div class="np-pending">No articles available for this edition.</div>'
 
@@ -2274,21 +2332,4 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
             '</details>'
         )
 
-    if bans:
-        entries = "".join(
-            f'<div class="np-blotter-item">'
-            f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
-            f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
-            f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
-            f' &middot; blocked {_h(b["blocked_for"])}'
-            f' &middot; expires in {_h(b["expires_in"])}</span>'
-            f'</div>'
-            for b in bans
-        )
-        html += (
-            '<details class="np-blotter np-section" open>'
-            '<summary class="np-blotter-head">Police Blotter</summary>'
-            f'{entries}'
-            '</details>'
-        )
     return html

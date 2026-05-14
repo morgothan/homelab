@@ -11,9 +11,9 @@ from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, get_container_status,
+    load_json, get_container_status, check_fail2ban_bans,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
-    render_articles_html, log_card, containers_card, updates_card,
+    render_articles_html, render_blotter_html, log_card, containers_card, updates_card,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -94,10 +94,9 @@ async def index():
     newspaper = today.get("newspaper")
     docker_issues = today.get("docker_issues") or []
     loki_issues   = today.get("loki_issues") or []
-    bans          = today.get("bans") or []
 
     if newspaper:
-        articles_html = render_articles_html(newspaper, bans=bans)
+        articles_html = render_articles_html(newspaper)
         page_refresh  = REFRESH_INTERVAL
     elif newspaper == []:
         articles_html = (
@@ -146,12 +145,11 @@ async def current_events():
     loki_issues   = rolling.get("loki_issues") or []
     docker_analysis = rolling.get("docker_analysis")
     loki_analysis   = rolling.get("loki_analysis")
-    bans            = rolling.get("bans") or []
     built_at = rolling.get("built_at", "")
     now_str  = built_at[0:16].replace("T", " ") + " UTC" if built_at else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     if newspaper:
-        articles_html = render_articles_html(newspaper, bans=bans)
+        articles_html = render_articles_html(newspaper)
         page_refresh  = REFRESH_INTERVAL
     elif newspaper == []:
         articles_html = f'<div class="np-pending">Report unavailable — refreshing in {REFRESH_INTERVAL // 60} min</div>'
@@ -177,6 +175,19 @@ async def current_events():
         + '</div></details>'
     )
     return Response(content=page_wrap(body, refresh=page_refresh),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/blotter")
+async def blotter():
+    bans, _ = await check_fail2ban_bans()
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = (
+        masthead_rolling(now_str)
+        + nav_bar("blotter")
+        + render_blotter_html(bans)
+    )
+    return Response(content=page_wrap(body, refresh=60),
                     media_type="text/html; charset=utf-8")
 
 
@@ -227,11 +238,13 @@ async def archive_day(date_str: str):
         return Response(content=f"No archive found for {date_str}.", status_code=404,
                         media_type="text/plain")
 
-    articles_html = render_articles_html(rec.get("newspaper") or [], bans=rec.get("bans") or [])
+    bans = rec.get("bans") or []
+    articles_html = render_articles_html(rec.get("newspaper") or [])
     body = (
         masthead_archive(date_str)
         + nav_bar("archive")
         + articles_html
+        + render_blotter_html(bans, collapsed=True)
         + '<div class="grid" style="margin-top:24px">'
         + log_card("Docker Container Logs", f"Full day &mdash; {_h(date_str)}",
                    rec.get("docker_issues") or [], rec.get("docker_analysis"))
