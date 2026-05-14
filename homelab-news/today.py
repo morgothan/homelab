@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from lib import (
     UPDATE_INTERVAL, TODAY_FILE,
     check_docker_logs, check_loki, check_fail2ban_bans,
-    check_prometheus, check_kopia, check_beszel,
+    check_prometheus, check_kopia, check_beszel, check_tautulli,
     llm_analysis, generate_newspaper,
     get_container_status_async, load_json, save_json, UPDATES_FILE,
 )
@@ -21,13 +21,15 @@ async def run() -> None:
     since_ts = int(midnight.timestamp())
     log.info("Refreshing today's front page (since %s UTC)", midnight.strftime("%Y-%m-%d"))
 
-    docker_issues, loki_issues, (bans, probes), prometheus, kopia, beszel = await asyncio.gather(
+    (docker_issues, loki_issues, (bans, probes),
+     prometheus, kopia, beszel, tautulli) = await asyncio.gather(
         check_docker_logs(since_ts=since_ts),
         check_loki(start=midnight),
         check_fail2ban_bans(),
         check_prometheus(),
         check_kopia(),
         check_beszel(),
+        check_tautulli(),
     )
     # Update issues data immediately but preserve existing newspaper so the
     # page keeps showing the last good edition while the LLM rerenders.
@@ -52,7 +54,7 @@ async def run() -> None:
             llm_analysis(docker_issues, "Docker container (today)"),
             llm_analysis(loki_issues, "network/syslog (today)"),
         ),
-        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names, bans, probes, prometheus, kopia, beszel),
+        generate_newspaper(docker_issues, loki_issues, update_hosts, unhealthy_names, bans, probes, prometheus, kopia, beszel, tautulli),
     )
     log.info("Today's front page complete (%d articles, %d bans)",
              len(newspaper) if newspaper else 0, len(bans))

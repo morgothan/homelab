@@ -39,6 +39,8 @@ KOPIA_PASS       = os.getenv("KOPIA_PASS", "")
 BESZEL_URL       = os.getenv("BESZEL_URL", "http://beszel.hirschnet:8090")
 BESZEL_EMAIL     = os.getenv("BESZEL_EMAIL", "")
 BESZEL_PASS      = os.getenv("BESZEL_PASS", "")
+TAUTULLI_URL     = os.getenv("TAUTULLI_URL", "http://tautulli:8181")
+TAUTULLI_KEY     = os.getenv("TAUTULLI_KEY", "")
 
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -1106,6 +1108,73 @@ async def check_beszel() -> dict:
     return out
 
 
+# ── Tautulli Plex activity ────────────────────────────────────────────────────
+
+async def check_tautulli() -> dict:
+    """Query Tautulli for current Plex stream activity and recent play statistics.
+
+    Returns {"alerts": [...], "info": [...]} — no alerts (Tautulli is informational);
+    info carries current stream count and 7-day play trend for the LLM.
+    """
+    out: dict = {"alerts": [], "info": []}
+
+    if not TAUTULLI_KEY:
+        return out
+
+    base_params = {"apikey": TAUTULLI_KEY}
+
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            activity_r, plays_r = await asyncio.gather(
+                client.get(f"{TAUTULLI_URL}/api/v2",
+                           params={**base_params, "cmd": "get_activity"}),
+                client.get(f"{TAUTULLI_URL}/api/v2",
+                           params={**base_params, "cmd": "get_plays_by_date", "time_range": 7}),
+            )
+            activity_r.raise_for_status()
+            plays_r.raise_for_status()
+
+        act = activity_r.json().get("response", {}).get("data", {})
+        streams      = int(act.get("stream_count", 0))
+        transcodes   = int(act.get("stream_count_transcode", 0))
+        direct_plays = int(act.get("stream_count_direct_play", 0))
+
+        plays_data = plays_r.json().get("response", {}).get("data", {})
+        series     = plays_data.get("series", [])
+        total_7d   = 0
+        by_type: dict[str, list] = {}
+        for s in series:
+            by_type[s["name"]] = s.get("data", [])
+            if s["name"] == "Total":
+                total_7d = sum(s.get("data", []))
+
+        if streams > 0:
+            stream_detail = []
+            if direct_plays:
+                stream_detail.append(f"{direct_plays} direct")
+            if transcodes:
+                stream_detail.append(f"{transcodes} transcode")
+            detail = f" ({', '.join(stream_detail)})" if stream_detail else ""
+            out["info"].append(f"Plex: {streams} active stream{'s' if streams != 1 else ''}{detail}")
+        else:
+            out["info"].append("Plex: no active streams")
+
+        type_strs = [
+            f"{n}: {sum(v)}" for n, v in by_type.items()
+            if n != "Total" and sum(v) > 0
+        ]
+        if total_7d > 0:
+            out["info"].append(
+                f"Plex (7d): {total_7d} plays"
+                + (f" ({', '.join(type_strs)})" if type_strs else "")
+            )
+
+    except Exception as e:
+        log.warning("check_tautulli failed: %s", e)
+
+    return out
+
+
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
@@ -1150,6 +1219,7 @@ async def generate_newspaper(
     prometheus: Optional[dict] = None,
     kopia: Optional[dict] = None,
     beszel: Optional[dict] = None,
+    tautulli: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -1219,6 +1289,17 @@ async def generate_newspaper(
             beszel_lines.extend(f"  {i}" for i in beszel["info"])
         if beszel_lines:
             lines.append("\n" + "\n".join(beszel_lines))
+
+    if tautulli:
+        tautulli_lines: list[str] = []
+        if tautulli.get("alerts"):
+            tautulli_lines.append("PLEX ALERTS:")
+            tautulli_lines.extend(f"  {a}" for a in tautulli["alerts"])
+        if tautulli.get("info"):
+            tautulli_lines.append("PLEX ACTIVITY:")
+            tautulli_lines.extend(f"  {i}" for i in tautulli["info"])
+        if tautulli_lines:
+            lines.append("\n" + "\n".join(tautulli_lines))
 
     situation = "\n".join(lines)
     prompt = (
