@@ -1,0 +1,223 @@
+#!/usr/bin/env python3
+"""
+seerr-arr-sync — Detect and fix Overseerr requests stuck in 'processing'
+                 that never made it to Radarr or Sonarr.
+
+Overseerr auto-requests (from Plex watchlist) occasionally get created with
+serverId=null, leaving them in a perpetual 'processing' state without ever
+being added to Radarr/Sonarr. This script detects that drift and adds the
+missing items directly.
+
+Reads API keys and server config from jellyseerr/settings.json so it stays
+in sync if settings change.
+
+Usage:
+  seerr-arr-sync           # check and fix
+  seerr-arr-sync --dry-run # report only, no changes
+"""
+
+import json
+import sys
+import subprocess
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+DRY_RUN = "--dry-run" in sys.argv
+
+SETTINGS_FILE = Path("/home/nat/docker/jellyseerr/settings.json")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def load_settings():
+    return json.loads(SETTINGS_FILE.read_text())
+
+
+def get_seerr_url():
+    result = subprocess.run(
+        ["docker", "inspect", "-f",
+         "{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}", "overseerr"],
+        capture_output=True, text=True, check=True
+    )
+    ip = result.stdout.strip()
+    return f"http://{ip}:5055"
+
+
+def api_get(url, headers=None):
+    req = urllib.request.Request(url, headers=headers or {})
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        return json.loads(resp.read())
+
+
+def api_post(url, data, headers=None):
+    body = json.dumps(data).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json",
+        **(headers or {})
+    }, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode()
+        raise RuntimeError(f"HTTP {e.code}: {body[:300]}")
+
+
+def get_all_seerr_requests(seerr_url, api_key):
+    """Fetch all Overseerr requests, paginating as needed."""
+    results = []
+    skip = 0
+    take = 100
+    while True:
+        data = api_get(
+            f"{seerr_url}/api/v1/request?take={take}&skip={skip}&filter=all&sort=added",
+            headers={"X-Api-Key": api_key}
+        )
+        page = data.get("results", [])
+        results.extend(page)
+        total = data.get("pageInfo", {}).get("results", 0)
+        skip += take
+        if skip >= total:
+            break
+    return results
+
+
+def get_radarr_tmdb_ids(radarr_url, radarr_key):
+    movies = api_get(f"{radarr_url}/api/v3/movie", headers={"X-Api-Key": radarr_key})
+    return {str(m["tmdbId"]) for m in movies if m.get("tmdbId")}
+
+
+def get_sonarr_tmdb_ids(sonarr_url, sonarr_key):
+    series = api_get(f"{sonarr_url}/api/v3/series", headers={"X-Api-Key": sonarr_key})
+    return {str(s["tmdbId"]) for s in series if s.get("tmdbId")}
+
+
+def radarr_lookup(radarr_url, radarr_key, tmdb_id):
+    return api_get(
+        f"{radarr_url}/api/v3/movie/lookup/tmdb?tmdbId={tmdb_id}",
+        headers={"X-Api-Key": radarr_key}
+    )
+
+
+def sonarr_lookup(sonarr_url, sonarr_key, tmdb_id):
+    results = api_get(
+        f"{sonarr_url}/api/v3/series/lookup?term=tmdb:{tmdb_id}",
+        headers={"X-Api-Key": sonarr_key}
+    )
+    return results[0] if results else None
+
+
+def add_to_radarr(radarr_url, radarr_key, tmdb_id, profile_id, root_folder):
+    movie = radarr_lookup(radarr_url, radarr_key, tmdb_id)
+    movie["qualityProfileId"] = profile_id
+    movie["rootFolderPath"] = root_folder
+    movie["monitored"] = True
+    movie["addOptions"] = {"searchForMovie": True}
+    result = api_post(
+        f"{radarr_url}/api/v3/movie",
+        movie,
+        headers={"X-Api-Key": radarr_key}
+    )
+    return result.get("id"), movie.get("title", "?")
+
+
+def add_to_sonarr(sonarr_url, sonarr_key, tmdb_id, profile_id, root_folder):
+    show = sonarr_lookup(sonarr_url, sonarr_key, tmdb_id)
+    if not show:
+        raise RuntimeError("No result from Sonarr lookup")
+    show["qualityProfileId"] = profile_id
+    show["rootFolderPath"] = root_folder
+    show["monitored"] = True
+    show["seasonFolder"] = True
+    show["addOptions"] = {"searchForMissingEpisodes": True, "monitor": "all"}
+    for season in show.get("seasons", []):
+        season["monitored"] = True
+    result = api_post(
+        f"{sonarr_url}/api/v3/series",
+        show,
+        headers={"X-Api-Key": sonarr_key}
+    )
+    return result.get("id"), show.get("title", "?")
+
+
+def main():
+    settings = load_settings()
+    api_key = settings["main"]["apiKey"]
+    radarr_cfg = settings["radarr"][0]
+    sonarr_cfg = settings["sonarr"][0]
+
+    radarr_url = f"http://{radarr_cfg['hostname']}:{radarr_cfg['port']}"
+    radarr_key = radarr_cfg["apiKey"]
+    radarr_profile = radarr_cfg["activeProfileId"]
+    radarr_root = radarr_cfg["activeDirectory"]
+
+    sonarr_url = f"http://{sonarr_cfg['hostname']}:{sonarr_cfg['port']}"
+    sonarr_key = sonarr_cfg["apiKey"]
+    sonarr_profile = sonarr_cfg["activeProfileId"]
+    sonarr_root = sonarr_cfg["activeDirectory"]
+
+    seerr_url = get_seerr_url()
+
+    log("Fetching Overseerr requests...")
+    all_requests = get_all_seerr_requests(seerr_url, api_key)
+
+    # Filter: approved (2) + processing (3) — should be in *arr but might not be
+    stuck_movies = []
+    stuck_shows = []
+    for r in all_requests:
+        media = r.get("media", {})
+        if r.get("status") != 2 or media.get("status") != 3:
+            continue
+        tmdb_id = str(media.get("tmdbId", ""))
+        if not tmdb_id:
+            continue
+        if media.get("mediaType") == "movie":
+            stuck_movies.append(tmdb_id)
+        elif media.get("mediaType") == "tv":
+            stuck_shows.append(tmdb_id)
+
+    log(f"Found {len(stuck_movies)} approved movie requests, {len(stuck_shows)} approved TV requests to check.")
+
+    log("Fetching current Radarr library...")
+    radarr_ids = get_radarr_tmdb_ids(radarr_url, radarr_key)
+
+    log("Fetching current Sonarr library...")
+    sonarr_ids = get_sonarr_tmdb_ids(sonarr_url, sonarr_key)
+
+    missing_movies = [t for t in stuck_movies if t not in radarr_ids]
+    missing_shows = [t for t in stuck_shows if t not in sonarr_ids]
+
+    if not missing_movies and not missing_shows:
+        log("All approved requests are present in Radarr/Sonarr. Nothing to do.")
+        return
+
+    if missing_movies:
+        log(f"\n{len(missing_movies)} movie(s) missing from Radarr:")
+        for tmdb_id in missing_movies:
+            if DRY_RUN:
+                log(f"  [dry-run] Would add TMDB:{tmdb_id} to Radarr")
+            else:
+                try:
+                    arr_id, title = add_to_radarr(radarr_url, radarr_key, tmdb_id, radarr_profile, radarr_root)
+                    log(f"  Added: {title} (TMDB:{tmdb_id} → Radarr id:{arr_id})")
+                except Exception as e:
+                    log(f"  ERROR adding TMDB:{tmdb_id} to Radarr: {e}")
+
+    if missing_shows:
+        log(f"\n{len(missing_shows)} show(s) missing from Sonarr:")
+        for tmdb_id in missing_shows:
+            if DRY_RUN:
+                log(f"  [dry-run] Would add TMDB:{tmdb_id} to Sonarr")
+            else:
+                try:
+                    arr_id, title = add_to_sonarr(sonarr_url, sonarr_key, tmdb_id, sonarr_profile, sonarr_root)
+                    log(f"  Added: {title} (TMDB:{tmdb_id} → Sonarr id:{arr_id})")
+                except Exception as e:
+                    log(f"  ERROR adding TMDB:{tmdb_id} to Sonarr: {e}")
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,283 @@
+#!/usr/bin/env python3
+"""
+cf-tunnel-sync — Sync Traefik HTTPS routes to Cloudflare Tunnel ingress config.
+
+Reads all Host() rules from the Traefik API, diffs against the current
+Cloudflare Tunnel ingress, and updates if anything is missing.
+
+Default behaviour: add-only (never removes existing entries).
+Pass --sync to also remove entries no longer present in Traefik.
+Pass --dry-run to print the diff without making any changes.
+
+Required .env vars (in ~/docker/.env):
+  CF_TUNNEL_API_TOKEN   Cloudflare API token with Cloudflare Tunnel:Edit permission
+  CF_ACCOUNT_ID         Cloudflare account ID (visible in the dashboard URL)
+  CF_TUNNEL_ID          Tunnel ID (Zero Trust → Access → Tunnels → your tunnel)
+  CF_TUNNEL_DOMAINS     Comma-separated domain suffixes to include, e.g.:
+                          example.com,myotherdomain.com
+
+Optional .env vars:
+  CF_TUNNEL_SERVICE     URL cloudflared routes traffic to (default: http://traefik:80)
+  TRAEFIK_API           Traefik API base URL (default: http://traefik/api)
+"""
+
+import json
+import os
+import re
+import sys
+import urllib.request
+import urllib.error
+from pathlib import Path
+
+# ── Load .env ──────────────────────────────────────────────────────────────────
+
+def load_env(path):
+    env = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                v = v.strip().strip('"').strip("'")
+                # Resolve ${VAR} references against already-parsed values
+                v = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), m.group(0)), v)
+                env[k.strip()] = v
+    except FileNotFoundError:
+        pass
+    return env
+
+ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+_env = load_env(ENV_FILE)
+
+def cfg(key, default=""):
+    return os.environ.get(key, _env.get(key, default))
+
+TRAEFIK_API    = cfg("TRAEFIK_API",        "http://traefik/api")
+CF_TOKEN       = cfg("CF_TUNNEL_API_TOKEN")
+CF_ACCOUNT     = cfg("CF_ACCOUNT_ID")
+CF_TUNNEL      = cfg("CF_TUNNEL_ID")
+TUNNEL_SERVICE = cfg("CF_TUNNEL_SERVICE",  "https://traefik")
+RAW_DOMAINS    = cfg("CF_TUNNEL_DOMAINS")
+ALLOWED        = [d.strip() for d in RAW_DOMAINS.split(",") if d.strip()]
+RAW_EXCLUDE    = cfg("CF_TUNNEL_EXCLUDE")
+EXCLUDED       = {h.strip() for h in RAW_EXCLUDE.split(",") if h.strip()}
+# Optional dedicated token for DNS (Zone:Read + Zone:DNS:Edit).
+# Falls back to CF_TUNNEL_API_TOKEN if not set, but that token must then
+# have those permissions added.
+CF_DNS_TOKEN   = cfg("CF_DNS_API_TOKEN") or CF_TOKEN
+
+DRY_RUN = "--dry-run" in sys.argv
+SYNC    = "--sync"    in sys.argv  # also remove stale entries
+
+# ── Helpers ────────────────────────────────────────────────────────────────────
+
+def die(msg):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+def api_get(url, token=None):
+    req = urllib.request.Request(url)
+    if token:
+        req.add_header("Authorization", f"Bearer {token}")
+        req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        die(f"GET {url} → HTTP {e.code}: {e.read().decode()}")
+    except Exception as e:
+        die(f"GET {url} → {e}")
+
+def api_put(url, token, payload):
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method="PUT")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        die(f"PUT {url} → HTTP {e.code}: {e.read().decode()}")
+    except Exception as e:
+        die(f"PUT {url} → {e}")
+
+def api_post(url, token, payload):
+    data = json.dumps(payload).encode()
+    req = urllib.request.Request(url, data=data, method="POST")
+    req.add_header("Authorization", f"Bearer {token}")
+    req.add_header("Content-Type", "application/json")
+    try:
+        with urllib.request.urlopen(req, timeout=10) as r:
+            return json.load(r)
+    except urllib.error.HTTPError as e:
+        die(f"POST {url} → HTTP {e.code}: {e.read().decode()}")
+    except Exception as e:
+        die(f"POST {url} → {e}")
+
+# ── Step 1: Get hostnames from Traefik ────────────────────────────────────────
+
+def traefik_hostnames():
+    routers = api_get(f"{TRAEFIK_API}/http/routers")
+    hostnames = set()
+    for router in routers:
+        if "https" not in router.get("entryPoints", []):
+            continue
+        rule = router.get("rule", "")
+        # Extract all Host(`...`) values from the rule string
+        for match in re.finditer(r'Host\(`([^`]+)`\)', rule):
+            hostnames.add(match.group(1))
+    return hostnames
+
+def is_allowed(hostname):
+    if hostname in EXCLUDED:
+        return False
+    if not ALLOWED:
+        return True  # no filter configured — include everything
+    return any(hostname == d or hostname.endswith("." + d) for d in ALLOWED)
+
+# ── Step 2: Get current Cloudflare tunnel config ───────────────────────────────
+
+CF_API = "https://api.cloudflare.com/client/v4"
+
+def get_tunnel_config():
+    url = f"{CF_API}/accounts/{CF_ACCOUNT}/cfd_tunnel/{CF_TUNNEL}/configurations"
+    data = api_get(url, CF_TOKEN)
+    if not data.get("success"):
+        die(f"Cloudflare API error: {data.get('errors')}")
+    return data["result"].get("config", {})
+
+def put_tunnel_config(config):
+    url = f"{CF_API}/accounts/{CF_ACCOUNT}/cfd_tunnel/{CF_TUNNEL}/configurations"
+    data = api_put(url, CF_TOKEN, {"config": config})
+    if not data.get("success"):
+        die(f"Cloudflare API error: {data.get('errors')}")
+
+# ── Step 3: DNS records ────────────────────────────────────────────────────────
+
+_zone_cache = {}
+
+def get_zone_id(domain):
+    """Look up the Cloudflare zone ID for a domain (cached)."""
+    if domain in _zone_cache:
+        return _zone_cache[domain]
+    url = f"{CF_API}/zones?name={domain}&status=active"
+    data = api_get(url, CF_DNS_TOKEN)
+    if not data.get("success") or not data.get("result"):
+        die(f"Could not find Cloudflare zone for '{domain}' — "
+            f"set CF_DNS_API_TOKEN to a token with Zone:Read + Zone:DNS:Edit permissions")
+    zone_id = data["result"][0]["id"]
+    _zone_cache[domain] = zone_id
+    return zone_id
+
+def domain_for(hostname):
+    """Return the ALLOWED domain suffix that this hostname belongs to."""
+    for d in ALLOWED:
+        if hostname == d or hostname.endswith("." + d):
+            return d
+    return None
+
+def ensure_dns_cname(hostname, zone_id):
+    """Create a proxied CNAME → tunnel if one doesn't already exist. Returns True if created."""
+    cname_target = f"{CF_TUNNEL}.cfargotunnel.com"
+    check_url = f"{CF_API}/zones/{zone_id}/dns_records?type=CNAME&name={hostname}"
+    data = api_get(check_url, CF_DNS_TOKEN)
+    if not data.get("success"):
+        die(f"DNS lookup failed for {hostname}: {data.get('errors')}")
+    if data.get("result"):
+        return False  # already exists
+    payload = {
+        "type":    "CNAME",
+        "name":    hostname,
+        "content": cname_target,
+        "proxied": True,
+        "ttl":     1,  # auto
+    }
+    result = api_post(f"{CF_API}/zones/{zone_id}/dns_records", CF_DNS_TOKEN, payload)
+    if not result.get("success"):
+        die(f"Failed to create DNS CNAME for {hostname}: {result.get('errors')}")
+    return True
+
+# ── Step 4: Diff and update ────────────────────────────────────────────────────
+
+def main():
+    # Validate required config
+    for var, val in [("CF_TUNNEL_API_TOKEN", CF_TOKEN),
+                     ("CF_ACCOUNT_ID",       CF_ACCOUNT),
+                     ("CF_TUNNEL_ID",        CF_TUNNEL)]:
+        if not val:
+            die(f"{var} is not set — add it to ~/docker/.env")
+
+    # Get Traefik hostnames filtered to allowed domains
+    all_traefik = traefik_hostnames()
+    wanted = {h for h in all_traefik if is_allowed(h)}
+
+    # Get current tunnel ingress (list of rules, last is always the catch-all)
+    tunnel_cfg = get_tunnel_config()
+    ingress = tunnel_cfg.get("ingress", [])
+
+    # Catch-all is the last rule (no hostname key) — preserve it
+    catch_all = next((r for r in ingress if "hostname" not in r), {"service": "http_status:404"})
+    named_rules = [r for r in ingress if "hostname" in r]
+    existing_hosts = {r["hostname"] for r in named_rules}
+
+    to_add    = wanted - existing_hosts
+    to_remove = existing_hosts - wanted if SYNC else set()
+
+    # DNS check runs regardless of tunnel changes — wanted hosts may already be
+    # in the tunnel config but be missing their DNS CNAME record.
+    dns_added = []
+    for h in sorted(wanted):
+        domain = domain_for(h)
+        if not domain:
+            continue
+        zone_id = get_zone_id(domain)
+        if not DRY_RUN and ensure_dns_cname(h, zone_id):
+            dns_added.append(h)
+    if dns_added:
+        print(f"DNS CNAME created for: {', '.join(dns_added)}")
+
+    if not to_add and not to_remove:
+        if not dns_added:
+            print("Tunnel ingress and DNS are already up to date.")
+        return
+
+    if to_add:
+        print(f"Adding {len(to_add)} hostname(s):")
+        for h in sorted(to_add):
+            print(f"  + {h}")
+
+    if to_remove:
+        print(f"Removing {len(to_remove)} hostname(s):")
+        for h in sorted(to_remove):
+            print(f"  - {h}")
+
+    if DRY_RUN:
+        print("(dry run — no changes made)")
+        return
+
+    new_rules = [r for r in named_rules if r["hostname"] not in to_remove]
+    new_rules += [
+        {
+            "hostname": h,
+            "service": TUNNEL_SERVICE,
+            "originRequest": {
+                "originServerName": h,
+                "httpHostHeader": h,
+            },
+        }
+        for h in sorted(to_add)
+    ]
+    # Sort for stable ordering, catch-all always last
+    new_rules.sort(key=lambda r: r["hostname"])
+    new_rules.append(catch_all)
+
+    new_cfg = dict(tunnel_cfg)
+    new_cfg["ingress"] = new_rules
+
+    put_tunnel_config(new_cfg)
+    print("Tunnel config updated.")
+
+if __name__ == "__main__":
+    main()
