@@ -850,7 +850,7 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                     "paths":        paths,
                     "category":     category,
                 })
-            bans = sorted(result, key=lambda x: (-x["hit_count"], ipaddress.ip_address(x["ip"])))
+            bans = sorted(result, key=lambda x: x["expires_at"], reverse=True)
             banned_ips = {b["ip"] for b in bans}
             probes = _build_probes(access_hits, banned_ips, now)
             return bans, probes
