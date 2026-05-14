@@ -797,7 +797,7 @@ services:
       - traefik.http.routers.gotify-login.entrypoints=https
       - traefik.http.routers.gotify-login.rule=Host(`gotify.${DOMAIN}`) && Path(`/client`)
       - traefik.http.routers.gotify-login.priority=100
-      - traefik.http.routers.gotify-login.middlewares=chain-no-auth-no-waf@file,gotify-strip-wwwauth
+      - traefik.http.routers.gotify-login.middlewares=chain-no-auth@file,gotify-strip-wwwauth
       - traefik.http.routers.gotify-login.service=gotify
       - traefik.http.routers.gotify-login.tls.certresolver=letsencrypt
       - traefik.http.routers.gotify-login.tls.domains[0].main=${DOMAIN}
@@ -1249,7 +1249,7 @@ services:
       - BESZEL_PASS=${BESZEL_PASS}
       - TAUTULLI_KEY=${TAUTULLI_KEY}
       - MAX_ARCHIVE_DAYS=400
-      # - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
+      - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
     labels:
       - traefik.enable=true
       # external
