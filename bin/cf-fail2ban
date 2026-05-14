@@ -1,0 +1,489 @@
+#!/usr/bin/env python3
+"""
+cf-fail2ban — Sync Traefik fail2ban bans to Cloudflare account-level IP Access Rules.
+
+Watches docker logs for "Plugin: FailToBan: IP blocked" events, blocks those IPs
+in Cloudflare at the edge, and removes the blocks after the ban period expires.
+Maintains a state file so Traefik restarts don't orphan Cloudflare blocks.
+
+Required .env vars (in ~/docker/.env):
+  CFAPI          Cloudflare Global API Key
+  CF_API_EMAIL   Cloudflare account email
+  CF_ACCOUNT_ID  Cloudflare account ID
+
+Optional .env vars:
+  CF_FAIL2BAN_BANTIME   Ban duration in seconds (default: 86400 = 24h, must match
+                        traefik fail2ban bantime config)
+
+State file: ~/docker/traefik/fail2ban-state.json
+"""
+
+import ipaddress
+import json
+import os
+import re
+import subprocess
+import sys
+import time
+import urllib.request
+import urllib.error
+from collections import defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+def load_env(path):
+    env = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                k, _, v = line.partition("=")
+                v = v.strip().strip('"').strip("'")
+                v = re.sub(r'\$\{(\w+)\}', lambda m: env.get(m.group(1), m.group(0)), v)
+                env[k.strip()] = v
+    except FileNotFoundError:
+        pass
+    return env
+
+
+ENV_FILE   = Path(__file__).resolve().parent.parent / ".env"
+_env       = load_env(ENV_FILE)
+STATE_FILE = Path(__file__).resolve().parent.parent / "traefik/monitor/fail2ban-state.json"
+ACCESS_LOG = Path(__file__).resolve().parent.parent / "traefik/logs/access.log"
+CF_API     = "https://api.cloudflare.com/client/v4"
+
+
+def cfg(key, default=""):
+    return os.environ.get(key, _env.get(key, default))
+
+
+CF_API_KEY = cfg("CF_FAIL2BAN_TOKEN")
+CF_ACCOUNT = cfg("CF_ACCOUNT_ID")
+BAN_DURATION = int(cfg("CF_FAIL2BAN_BANTIME", "86400"))  # 24h default (1st offense)
+
+# Escalating ban durations. None = permanent (manual removal required).
+BAN_TIERS = [
+    86400,      # 1st offense: 24 hours
+    604800,     # 2nd offense: 7 days
+    2592000,    # 3rd offense: 30 days
+    31536000,   # 4th offense: 365 days
+    None,       # 5th+ offense: permanent
+]
+
+
+def ban_duration_for_offense(count):
+    """Return ban duration in seconds for the nth offense (1-indexed), or None for permanent."""
+    return BAN_TIERS[min(count, len(BAN_TIERS)) - 1]
+
+
+def offense_tier_label(count, duration):
+    suffix = ["st", "nd", "rd"][count - 1] if count <= 3 else "th"
+    dur = "permanent" if duration is None else (
+        "24h"  if duration == 86400   else
+        "7d"   if duration == 604800  else
+        "30d"  if duration == 2592000 else
+        "365d"
+    )
+    return f"{count}{suffix} offense ({dur})"
+
+
+DRY_RUN    = "--dry-run" in sys.argv
+LIST       = "--list" in sys.argv
+_ub_idx    = sys.argv.index("--unblock") if "--unblock" in sys.argv else -1
+UNBLOCK_IP = sys.argv[_ub_idx + 1] if _ub_idx >= 0 and _ub_idx + 1 < len(sys.argv) else None
+
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+def die(msg):
+    print(f"ERROR: {msg}", file=sys.stderr)
+    sys.exit(1)
+
+
+def ts_str(unix_ts):
+    return datetime.fromtimestamp(unix_ts, tz=timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def is_private(ip_str):
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return addr.is_private or addr.is_loopback or addr.is_link_local
+    except ValueError:
+        return False
+
+
+# ── Cloudflare API ────────────────────────────────────────────────────────────
+
+def _cf_headers():
+    return {
+        "Authorization": f"Bearer {CF_API_KEY}",
+        "Content-Type":  "application/json",
+    }
+
+
+def _cf_request(method, url, data=None):
+    body = json.dumps(data).encode() if data is not None else None
+    req  = urllib.request.Request(url, data=body, headers=_cf_headers(), method=method)
+    try:
+        with urllib.request.urlopen(req, timeout=15) as r:
+            return json.loads(r.read())
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode()
+        try:
+            return json.loads(raw)
+        except Exception:
+            die(f"HTTP {e.code} from Cloudflare ({url}): {raw[:200]}")
+
+
+def cf_find_rule(ip):
+    """Look up an existing account-level block rule for this IP. Returns rule ID or None."""
+    url    = (f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules"
+              f"?mode=block&configuration_target=ip&configuration_value={ip}&per_page=5")
+    result = _cf_request("GET", url)
+    if result.get("success") and result.get("result"):
+        return result["result"][0]["id"]
+    return None
+
+
+def cf_block_ip(ip, notes=None):
+    """
+    Add an account-level IP Access Rule blocking the IP.
+    Returns the CF rule ID, or None on failure.
+    """
+    if DRY_RUN:
+        print(f"  [dry-run] would block {ip} in Cloudflare")
+        return "dry-run-id"
+
+    url    = f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules"
+    result = _cf_request("POST", url, {
+        "mode": "block",
+        "configuration": {"target": "ip", "value": ip},
+        "notes": notes or f"fail2ban {ts_str(time.time())}",
+    })
+
+    if result.get("success"):
+        return result["result"]["id"]
+
+    errors = result.get("errors", [])
+    # Error 10009 = duplicate rule — find the existing one
+    if any(e.get("code") in (10009, 10004, 1004) for e in errors):
+        rule_id = cf_find_rule(ip)
+        if rule_id:
+            return rule_id
+
+    print(f"WARN: failed to block {ip}: {errors}")
+    return None
+
+
+def cf_unblock_rule(rule_id, ip):
+    """Delete a Cloudflare IP Access Rule. Tolerates 'not found' gracefully."""
+    if DRY_RUN:
+        print(f"  [dry-run] would unblock {ip} (rule {rule_id})")
+        return
+
+    url    = f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules/{rule_id}"
+    result = _cf_request("DELETE", url)
+
+    if result.get("success"):
+        return
+
+    errors = result.get("errors", [])
+    # Rule already gone — fine, we're unblocking anyway
+    if any(e.get("code") in (10000, 10007) for e in errors):
+        return
+
+    print(f"WARN: failed to remove rule {rule_id} for {ip}: {errors}")
+
+
+# ── State ─────────────────────────────────────────────────────────────────────
+
+def load_state():
+    try:
+        with open(STATE_FILE) as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state):
+    STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    with open(tmp, "w") as f:
+        json.dump(state, f, indent=2)
+    tmp.rename(STATE_FILE)
+
+
+# ── Ban classification ────────────────────────────────────────────────────────
+# Mirrors the signatures in homelab-news/lib.py — keep in sync if either changes.
+
+_ATTACK_SIGNATURES = [
+    (re.compile(r'/api/(?:firstfactor|secondfactor)', re.I),          "credential stuffing"),
+    (re.compile(r'\.aws/|\.s3cfg|gcloud/credentials|\.digitalocean/|\.azure/', re.I), "cloud credential sweep"),
+    (re.compile(r'\.env(?:[./\-]|$)|/\.env$', re.I),                  "env file sweep"),
+    (re.compile(r'\.git/', re.I),                                      "git exposure scan"),
+    (re.compile(r'wp-(?:admin|login|content|includes)|xmlrpc\.php', re.I), "WordPress probe"),
+    (re.compile(r'phpinfo|eval\.php|shell\.php|cmd\.php|webshell', re.I), "PHP exploit probe"),
+    (re.compile(r'/backup(?:s)?/|\.sql(?:\.gz)?$|\.bak$|\.tar\.gz$|\.dump$', re.I), "backup file scan"),
+    (re.compile(r'/(?:cpanel|whm|plesk|panel|admin|administrator|manager|console)(?:/|$)', re.I), "admin panel probe"),
+    (re.compile(r'(?:config|settings|configuration|credentials|secrets?)\.'
+                r'(?:yml|yaml|json|php|ini|cfg|properties|xml)', re.I), "config file sweep"),
+]
+
+
+def _classify_paths(paths):
+    if not paths:
+        return "unknown"
+    scores = defaultdict(int)
+    for path in paths:
+        for pattern, label in _ATTACK_SIGNATURES:
+            if pattern.search(path):
+                scores[label] += 1
+                break
+    if scores:
+        return max(scores, key=scores.__getitem__)
+    if all(p.strip().rstrip("/") in ("", "/") for p in paths):
+        return "root scan"
+    return "vulnerability scan"
+
+
+def _ban_metadata_from_log(ip):
+    """Look up an IP's probe activity in the Traefik access log at ban time.
+
+    Returns (paths, hit_count, category). Called immediately when a ban is
+    issued so the access log still contains the triggering activity.
+    """
+    try:
+        size = os.path.getsize(ACCESS_LOG)
+    except FileNotFoundError:
+        return [], 0, "unknown"
+
+    # Read last 32 MB — enough for ~12h of traffic, well past the findtime window
+    tail_bytes = 32 * 1024 * 1024
+    offset = max(0, size - tail_bytes)
+    try:
+        with open(ACCESS_LOG, "r", errors="replace") as f:
+            if offset > 0:
+                f.seek(offset)
+                f.readline()  # skip partial first line
+            raw = f.read()
+    except Exception:
+        return [], 0, "unknown"
+
+    # Only look back 2 hours — the ban was just triggered
+    cutoff = time.time() - 7200
+    paths = []
+    hit_count = 0
+
+    for line in raw.splitlines():
+        if ip not in line:
+            continue
+        try:
+            obj = json.loads(line)
+        except Exception:
+            continue
+        status = obj.get("DownstreamStatus")
+        if status not in (401, 403, 429):
+            continue
+        # Verify ClientHost matches — it may be "ip:port" or "ip1,ip2:port"
+        client_raw = obj.get("ClientHost", "")
+        host_ips = [part.split(":")[0].strip() for part in client_raw.split(",")]
+        if ip not in host_ips:
+            continue
+        # Timestamp check
+        ts_raw = obj.get("StartUTC") or obj.get("time", "")
+        try:
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00")).timestamp()
+            if ts < cutoff:
+                continue
+        except Exception:
+            pass
+        hit_count += 1
+        path = obj.get("RequestPath", "")
+        if path and path not in paths and len(paths) < 10:
+            paths.append(path)
+
+    return paths, hit_count, _classify_paths(paths)
+
+
+# ── Docker log parsing ────────────────────────────────────────────────────────
+
+def docker_logs_since(since_unix):
+    """
+    Fetch traefik container stdout+stderr since the given Unix timestamp.
+    Returns a list of log lines.
+    """
+    since_rfc = ts_str(since_unix)
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "traefik", "--since", since_rfc],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        # docker logs emits to stderr in some versions; combine both streams
+        return (result.stdout + result.stderr).splitlines()
+    except subprocess.TimeoutExpired:
+        print("WARN: docker logs timed out")
+        return []
+    except Exception as e:
+        print(f"WARN: docker logs failed: {e}")
+        return []
+
+
+def parse_ban_events(lines):
+    """
+    Find all IPs that the fail2ban plugin has blocked.
+    Returns a set of IP strings.
+    """
+    ips = set()
+    for line in lines:
+        line = line.strip()
+        if "FailToBan" not in line:
+            continue
+        if not line.startswith("{"):
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if entry.get("msg") != "Plugin: FailToBan: IP blocked":
+            continue
+        ip = entry.get("ip", "").strip()
+        if ip:
+            ips.add(ip)
+    return ips
+
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+def main():
+    if LIST:
+        state   = load_state()
+        banned  = state.get("banned", {})
+        history = state.get("offense_history", {})
+        if not banned:
+            print("No active Cloudflare blocks.")
+        else:
+            now = time.time()
+            print(f"{'IP':<20} {'Offense':<18} {'Banned at':<22} {'Expires at':<28} CF Rule ID")
+            print("-" * 105)
+            for ip, info in sorted(banned.items(), key=lambda x: (ipaddress.ip_address(x[0]).version, ipaddress.ip_address(x[0]))):
+                exp_ts  = info.get("expires_at")
+                offense = info.get("offense_count", 1)
+                tier    = offense_tier_label(offense, ban_duration_for_offense(offense))
+                if exp_ts is None:
+                    exp_str = "PERMANENT"
+                else:
+                    remaining = exp_ts - now
+                    exp_str   = ts_str(exp_ts)
+                    if remaining < 0:
+                        exp_str += " (EXPIRED, pending cleanup)"
+                print(f"{ip:<20} {tier:<18} {ts_str(info['banned_at']):<22} {exp_str:<28} {info['cf_rule_id']}")
+        if history:
+            print(f"\nOffense history ({len(history)} IPs):")
+            for ip, count in sorted(history.items(), key=lambda x: -x[1]):
+                status = "(currently banned)" if ip in banned else "(not currently banned)"
+                print(f"  {ip:<20} {count} offense(s) {status}")
+        return
+
+    if UNBLOCK_IP:
+        state   = load_state()
+        banned  = state.get("banned", {})
+        history = state.get("offense_history", {})
+        info    = banned.pop(UNBLOCK_IP, None)
+        if not info:
+            print(f"{UNBLOCK_IP} is not in the active ban list.")
+            return
+        rule_id = info.get("cf_rule_id")
+        if rule_id and not DRY_RUN:
+            cf_unblock_rule(rule_id, UNBLOCK_IP)
+        elif DRY_RUN:
+            print(f"  [dry-run] would unblock {UNBLOCK_IP} (rule {rule_id})")
+        offense = info.get("offense_count", history.get(UNBLOCK_IP, 1))
+        print(f"Unblocked {UNBLOCK_IP} ({offense_tier_label(offense, ban_duration_for_offense(offense))})")
+        print(f"Offense history preserved (count={offense}). Edit state file to reset.")
+        state["banned"]          = banned
+        state["offense_history"] = history
+        if not DRY_RUN:
+            save_state(state)
+        return
+
+    for var, val in [("CF_FAIL2BAN_TOKEN", CF_API_KEY), ("CF_ACCOUNT_ID", CF_ACCOUNT)]:
+        if not val:
+            die(f"{var} is not set in ~/docker/.env")
+
+    now   = time.time()
+    state = load_state()
+
+    banned          = state.get("banned", {})
+    offense_history = state.get("offense_history", {})
+    # On first run: look back one full ban period to catch in-progress bans
+    last_checked = state.get("last_checked", now - BAN_DURATION)
+
+    # ── 1. Expire bans whose time has passed ──────────────────────────────────
+    # Permanent bans (expires_at=None) are never auto-expired.
+    expired = [
+        ip for ip, info in banned.items()
+        if info.get("expires_at") is not None and info.get("expires_at", 0) <= now
+    ]
+    for ip in expired:
+        info    = banned.pop(ip)
+        rule_id = info.get("cf_rule_id")
+        if rule_id:
+            cf_unblock_rule(rule_id, ip)
+            print(f"Unblocked expired ban: {ip}  (was {ts_str(info['banned_at'])})")
+        # Preserve offense count so future bans escalate correctly
+        offense_history[ip] = info.get("offense_count", offense_history.get(ip, 1))
+
+    # ── 2. Read docker logs since last check ──────────────────────────────────
+    lines   = docker_logs_since(last_checked)
+    new_ips = parse_ban_events(lines)
+
+    # ── 3. Block new IPs in Cloudflare ────────────────────────────────────────
+    for ip in sorted(new_ips, key=ipaddress.ip_address):
+        if ip in banned:
+            continue  # already tracked
+
+        if is_private(ip):
+            continue  # LAN/loopback — skip
+
+        paths, hit_count, category = _ban_metadata_from_log(ip)
+
+        prev_count    = offense_history.get(ip, 0)
+        offense_count = prev_count + 1
+        duration      = ban_duration_for_offense(offense_count)
+        expires_at    = None if duration is None else int(now) + duration
+        tier          = offense_tier_label(offense_count, duration)
+        notes         = f"fail2ban {tier} {ts_str(now)}"
+
+        rule_id = cf_block_ip(ip, notes=notes)
+        if rule_id:
+            banned[ip] = {
+                "banned_at":     int(now),
+                "expires_at":    expires_at,
+                "cf_rule_id":    rule_id,
+                "category":      category,
+                "paths":         paths,
+                "hit_count":     hit_count,
+                "offense_count": offense_count,
+            }
+            offense_history[ip] = offense_count
+            exp_display = "PERMANENT" if expires_at is None else ts_str(expires_at)
+            print(f"Blocked: {ip}  {tier}  expires={exp_display}"
+                  f"  category={category}  hits={hit_count}  (rule {rule_id})")
+
+    # ── 4. Save state ─────────────────────────────────────────────────────────
+    state["banned"]          = banned
+    state["offense_history"] = offense_history
+    state["last_checked"]    = now
+    if not DRY_RUN:
+        save_state(state)
+
+
+if __name__ == "__main__":
+    main()

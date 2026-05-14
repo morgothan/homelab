@@ -1,0 +1,2 @@
+#!/bin/sh
+exec nsenter -t 1 -m -u -i -n -p -- su - nat -c /home/nat/bin/start-tmux.sh
