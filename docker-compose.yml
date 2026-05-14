@@ -1249,6 +1249,7 @@ services:
       - BESZEL_PASS=${BESZEL_PASS}
       - TAUTULLI_KEY=${TAUTULLI_KEY}
       - MAX_ARCHIVE_DAYS=400
+      # - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
     labels:
       - traefik.enable=true
       # external
