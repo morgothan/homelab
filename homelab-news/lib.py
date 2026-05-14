@@ -1323,9 +1323,12 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         f"[{i['source']} {i['level'].upper()} \xd7{i['count']}] {_sanitize_for_llm(i['message'], max_len=140)}"
         for i in ranked
     )
+    ctx = _load_context()
+    ctx_block = f"HOMELAB CONTEXT:\n{ctx}\n\n" if ctx else ""
     prompt = (
-        "Homelab log analysis. Stack: Traefik, Authelia, Redis, Prometheus, Jellyfin, UniFi.\n"
-        "For each entry: one line saying what it means, one line starting with '→' saying what to do.\n"
+        "Homelab log analysis.\n"
+        + ctx_block
+        + "For each entry: one line saying what it means, one line starting with '→' saying what to do.\n"
         "If it is harmless noise, write 'Noise: <reason>'. No preamble.\n\n"
         f"ENTRIES ({context}):\n{entries}"
     )
@@ -1593,7 +1596,9 @@ async def generate_periodic_summary(
     for entry in entries:
         lines.append(f"=== {entry['period']} ===")
         for a in entry.get("articles") or []:
-            lines.append(f"• {a.get('headline', '')}: {a.get('blurb', '')[:200]}")
+            headline = _sanitize_for_llm(a.get("headline", ""), max_len=200)
+            blurb    = _sanitize_for_llm(a.get("blurb", ""), max_len=200)
+            lines.append(f"• {headline}: {blurb}")
         entry_bans = entry.get("ban_summary") or []
         if not entry_bans:
             # Fallback: build from raw bans list (daily archive entries)
@@ -1611,9 +1616,12 @@ async def generate_periodic_summary(
     }
     title, source = scope_map.get(scope, ("digest", "editions"))
 
+    ctx = _load_context()
+    ctx_block = f"HOMELAB CONTEXT (use for accurate service names):\n{ctx}\n\n" if ctx else ""
     prompt = (
         f"You are the editor writing the {title} for a homelab status newspaper.\n"
-        f"Below are summaries from the {source} covering: {period_label}.\n\n"
+        + ctx_block
+        + f"Below are summaries from the {source} covering: {period_label}.\n\n"
         "Identify TRENDS and PATTERNS across this period:\n"
         "- Issues that recurred multiple times (state how often)\n"
         "- Things that got better or were resolved\n"
@@ -1669,16 +1677,27 @@ async def generate_periodic_summary(
 async def llm_changelog_analysis(container: str, image: str, tag: str, notes: str) -> Optional[str]:
     if not notes:
         return None
+    safe_image = _sanitize_for_llm(image, max_len=100)
+    safe_tag   = _sanitize_for_llm(tag, max_len=50)
+    safe_notes = _sanitize_for_llm(notes, max_len=2500)
+    ctx = _load_context()
+    ctx_block = (
+        f"HOMELAB CONTEXT (use to flag breaking changes that affect this specific setup):\n{ctx}\n\n"
+        if ctx else ""
+    )
     prompt = (
         f"You are summarising a Docker image update for a homelab operator.\n"
-        f"Image: {image}  New tag: {tag}\n\n"
-        f"RELEASE NOTES:\n{notes[:2500]}\n\n"
+        + ctx_block
+        + f"Image: {safe_image}  New tag: {safe_tag}\n\n"
+        f"RELEASE NOTES:\n{safe_notes}\n\n"
         "Write exactly 1-2 sentences describing what changed. Rules:\n"
         "- You MUST output something — never leave the response blank.\n"
         "- If the notes describe real changes (features, bug fixes, security patches), summarise them.\n"
         "- If the notes are sparse or this is just a base-image/container rebuild, say so: "
         "e.g. 'Container rebuild (ls456→ls457); qbittorrent application version unchanged at 5.2.0.'\n"
         "- Lead with any breaking changes or required migration steps if present.\n"
+        "- If the homelab context is provided and the changelog contains breaking changes or config\n"
+        "  migrations that affect services described in that context, flag them explicitly.\n"
         "Output only the 1-2 sentence summary. No headers, no bullet points, no preamble."
     )
     try:
