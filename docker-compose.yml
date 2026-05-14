@@ -120,7 +120,7 @@ services:
     restart: unless-stopped
     logging: *logging
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/ || exit 1"]
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/healthz || exit 1"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -1220,11 +1220,17 @@ services:
     container_name: lab-monitor
     restart: unless-stopped
     logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_PTRACE
+      - SYS_ADMIN
     networks:
       - ${DOCKERNET}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${USERDIR}/.docker/config.json:/root/.docker/config.json:ro
+      - ${USERDIR}/.docker/config.json:/home/appuser/.docker/config.json:ro
       - ${USERDIR}/.ssh:/root/.ssh:ro
       - ${USERDIR}/docker/homelab-news/data:/data
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
@@ -1235,6 +1241,7 @@ services:
       - OLLAMA_MODEL=${OLLAMA_MODEL}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
       - SSH_KEY=${SSH_KEY}
+      - DOCKER_AUTH_FILE=/home/appuser/.docker/config.json
       - PROMETHEUS_URL=http://prometheus:9090
       - KOPIA_USER=${KOPIA_USER}
       - KOPIA_PASS=${KOPIA_PASS}

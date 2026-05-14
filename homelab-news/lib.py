@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 LOKI_URL         = os.getenv("LOKI_URL", "http://loki:3100")
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "900"))
 UPDATE_INTERVAL  = int(os.getenv("UPDATE_INTERVAL", "3600"))
-LOG_HOURS        = int(os.getenv("LOG_HOURS", "6"))
+LOG_HOURS        = int(os.getenv("LOG_HOURS", "1"))
 DOCKER_AUTH      = os.getenv("DOCKER_AUTH_FILE", "/root/.docker/config.json")
 SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
@@ -57,7 +57,6 @@ MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
 
 SECTION_ORDER = [
-    "Front Page",
     "City Hall",
     "Public Safety",
     "Weather",
@@ -83,6 +82,35 @@ FAIL2BAN_ALLOWLIST = [
 ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-events view
 
 _AUTH_ENDPOINT = re.compile(r'/api/(?:firstfactor|secondfactor)', re.I)
+
+# Patterns that indicate a prompt injection attempt in untrusted text.
+# Applied before embedding external data (log messages, probe paths, changelog
+# summaries) into LLM prompts. Matches are replaced with [FILTERED] to preserve
+# context length without amplifying the payload.
+_INJECTION_PATTERNS = re.compile(
+    r'ignore\s+(?:all\s+)?(?:previous|above|prior)\s+instructions?'
+    r'|disregard\s+(?:the\s+)?(?:above|previous|prior|all)'
+    r'|forget\s+(?:your\s+)?instructions?'
+    r'|new\s+(?:task|instructions?|objective)'
+    r'|override\s+(?:all\s+)?(?:instructions?|rules?|directives?)'
+    r'|you\s+are\s+now\s+(?:a\s+)?(?:an?\s+)?(?:\w+\s+)*(?:assistant|bot|model|AI)'
+    r'|\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>|</?s>'
+    r'|\]\s*output\s*\[|output\s+json\s*:|output\s+only\s+json'
+    r'|\[\{"headline"|\[\s*\{\s*"headline"',
+    re.I,
+)
+
+
+def _sanitize_for_llm(text: str, max_len: int = 200) -> str:
+    """Sanitize untrusted text before embedding it in an LLM prompt.
+
+    Replaces injection trigger phrases with [FILTERED] and truncates.
+    Used for log messages, HTTP paths, and LLM-generated text that feeds
+    into a second LLM call (e.g. changelog summaries → newspaper prompt).
+    """
+    sanitized = _INJECTION_PATTERNS.sub("[FILTERED]", text)
+    return sanitized[:max_len]
+
 
 # Fail2ban / WAF log lines that appear in docker/loki issues but are already
 # captured (accurately) in the structured security block. Filtering these before
@@ -647,10 +675,12 @@ def _security_prompt_block(bans: list[dict], probes: list[dict]) -> str:
             f" generating scanner hits (not yet at ban threshold):"
         )
         for p in probes[:5]:
-            sample = ", ".join(p["paths"][:3])
+            # Raw paths are omitted here — they are external attacker-controlled
+            # strings and are a prompt injection surface. The classified category
+            # is sufficient context for the LLM.
             parts.append(
                 f"    {p['ip']}: {p['hit_count']} hits"
-                f" ({p.get('category', 'scan')}) — {sample}"
+                f" ({p.get('category', 'scan')})"
             )
 
     return "\n".join(parts)
@@ -697,20 +727,33 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                     continue  # expired (cf-fail2ban cleanup may be pending)
                 ban_start = datetime.fromtimestamp(banned_ts, tz=timezone.utc)
                 expires   = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
-                hits = access_hits.get(ip, [])
-                paths: list[str] = []
-                for _, p in hits:
-                    if p and p not in paths and len(paths) < 5:
-                        paths.append(p)
+
+                # Live access log data (present if ban is recent, absent if log has rolled)
+                live_hits = access_hits.get(ip, [])
+                live_paths: list[str] = []
+                for _, p in live_hits:
+                    if p and p not in live_paths and len(live_paths) < 5:
+                        live_paths.append(p)
+
+                # Prefer metadata stored at ban time; fall back to live log.
+                # This ensures category/paths are correct even after the log rolls.
+                stored_paths    = info.get("paths") or []
+                stored_category = info.get("category", "")
+                stored_hits     = info.get("hit_count", 0)
+
+                paths     = live_paths    or stored_paths
+                hit_count = len(live_hits) or stored_hits
+                category  = stored_category or _classify_ban(paths)
+
                 result.append({
                     "ip":           ip,
                     "banned_since": ban_start.strftime("%Y-%m-%d %H:%M UTC"),
                     "expires_at":   expires.strftime("%Y-%m-%d %H:%M UTC"),
                     "blocked_for":  _fmt_duration((now - ban_start).total_seconds()),
                     "expires_in":   _fmt_duration((expires - now).total_seconds()),
-                    "hit_count":    len(hits),
+                    "hit_count":    hit_count,
                     "paths":        paths,
-                    "category":     _classify_ban(paths),
+                    "category":     category,
                 })
             bans = sorted(result, key=lambda x: (-x["hit_count"], ipaddress.ip_address(x["ip"])))
             banned_ips = {b["ip"] for b in bans}
@@ -1182,7 +1225,7 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         return None
     ranked = sorted(issues, key=lambda i: (i["level"] != "error", -i["count"]))[:10]
     entries = "\n".join(
-        f"[{i['source']} {i['level'].upper()} \xd7{i['count']}] {i['message'][:140]}"
+        f"[{i['source']} {i['level'].upper()} \xd7{i['count']}] {_sanitize_for_llm(i['message'], max_len=140)}"
         for i in ranked
     )
     prompt = (
@@ -1244,18 +1287,22 @@ async def generate_newspaper(
             line = f"UPDATE on {label}: {r['container']} ({r['image']}{ver})"
             cl = r.get("changelog_analysis")
             if cl:
-                line += f" — CHANGELOG: {cl[:200]}"
+                # Sanitize before re-embedding: this text is LLM-generated from
+                # external GitHub release notes and is a second-order injection path.
+                line += f" — CHANGELOG: {_sanitize_for_llm(cl, max_len=200)}"
             lines.append(line)
 
     if clean_docker:
         lines.append("\nTOP DOCKER LOG ISSUES:")
         for i in sorted(clean_docker, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
-            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {i['message'][:120]}")
+            msg = _sanitize_for_llm(i['message'], max_len=120)
+            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {msg}")
 
     if clean_loki:
         lines.append("\nTOP NETWORK/SYSLOG ISSUES:")
         for i in sorted(clean_loki, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
-            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {i['message'][:120]}")
+            msg = _sanitize_for_llm(i['message'], max_len=120)
+            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {msg}")
 
     lines.append("\n" + _security_prompt_block(bans or [], probes or []))
 
@@ -1303,8 +1350,11 @@ async def generate_newspaper(
 
     situation = "\n".join(lines)
     prompt = (
-        "You are the editor of a homelab status newspaper covering a full day of events.\n"
-        "Write 4 to 10 articles — enough to cover everything noteworthy, no more.\n\n"
+        "You are the editor of a homelab status newspaper covering a full day of events.\n\n"
+        "LAYOUT: The page has one full-width Lead Story at the top, then each section shows its\n"
+        "articles side-by-side in columns. Write 1–3 articles per section that has noteworthy\n"
+        "activity — aim for 8–16 articles total. The FIRST article in your array is the Lead Story\n"
+        "(make it the most important event of the day). Omit sections with nothing to report.\n\n"
         "SECURITY INTERPRETATION GUIDE — read before writing any security article:\n"
         "- PATH SCANNERS = automated bots probing for vulnerable files (.env, .git, wp-admin, etc.).\n"
         "  These are NOT login failures. Write as 'scanning', 'probing', or 'vulnerability sweep'.\n"
@@ -1317,22 +1367,20 @@ async def generate_newspaper(
         "  summarised in the SECURITY block and will cause misclassification if used directly.\n\n"
         "Rules:\n"
         "- Group related items into one article. 'Five *arr apps have routine updates' = 1 article, not 5.\n"
-        "- Order by importance: breaking changes and errors first, routine updates last.\n"
+        "- Within a section, order by importance: errors first, routine updates last.\n"
         "- Headline: punchy, specific, real-newspaper style. Name the attack type and scale.\n"
         "  Good: 'Scanner Sweeps 56 .env Paths, Earns 24h Cloudflare Block'\n"
         "  Bad: 'System Experiencing Authentication Failures'\n"
-        "- Articles 1-4: blurb is 2-3 sentences, AP wire style, specific counts and service names.\n"
-        "- Articles 5+: blurb is 1 sentence only — these run as brief notes below the fold.\n"
+        "- Every article blurb: 2–3 sentences, AP wire style, specific counts and service names.\n"
         "- If something is completely fine, skip it — don't pad with 'all clear' articles.\n"
         "- Assign each article a section. Use exactly one of:\n"
-        "    Front Page       — critical failures or emergency-level alerts only\n"
         "    City Hall        — container health, image updates, service restarts\n"
         "    Public Safety    — security attacks, IP bans, scanner activity\n"
         "    Weather          — UPS/power events, system performance\n"
         "    City Archives    — backup and storage health\n"
         "    Arts & Entertainment — Sonarr, Radarr, Tautulli, Jellyfin, media pipeline\n"
         "    Public Works     — DNS, networking, Traefik configuration\n"
-        "  Default to City Hall if unsure. Most articles will be City Hall or Public Safety.\n"
+        "  Default to City Hall if unsure.\n"
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
         f"CURRENT HOMELAB STATUS:\n{situation}"
@@ -1345,7 +1393,7 @@ async def generate_newspaper(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 1500},
+                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 2500},
                 },
             )
             resp.raise_for_status()
@@ -1376,13 +1424,35 @@ async def generate_newspaper(
                         pass
 
             if isinstance(articles, list):
-                valid = [a for a in articles[:10]
-                         if isinstance(a, dict) and "headline" in a and "blurb" in a]
+                valid = _validate_articles(articles)
                 if valid:
                     return valid
     except Exception as e:
         log.warning("Newspaper generation failed (%s): %s", type(e).__name__, e)
     return None
+
+
+def _validate_articles(raw: list, max_count: int = 16) -> list[dict]:
+    """Validate and clamp LLM article output.
+
+    Enforces field-length limits so oversized injected content cannot be stored
+    or displayed. Unknown section values are normalised to City Hall.
+    """
+    valid = []
+    for a in raw:
+        if not isinstance(a, dict):
+            continue
+        if "headline" not in a or "blurb" not in a:
+            continue
+        headline = str(a["headline"])[:200]
+        blurb    = str(a["blurb"])[:600]
+        section  = str(a.get("section", "City Hall"))[:50]
+        if section not in SECTION_ORDER:
+            section = "City Hall"
+        valid.append({"headline": headline, "blurb": blurb, "section": section})
+        if len(valid) == max_count:
+            break
+    return valid
 
 
 def _ban_summary(bans: list[dict]) -> list[str]:
@@ -1490,8 +1560,7 @@ async def generate_periodic_summary(
                     except json.JSONDecodeError:
                         pass
             if isinstance(articles, list):
-                valid = [a for a in articles[:10]
-                         if isinstance(a, dict) and "headline" in a and "blurb" in a]
+                valid = _validate_articles(articles, max_count=10)
                 if valid:
                     return valid
     except Exception as e:
@@ -1799,13 +1868,18 @@ body {
 .np-nav a { color: var(--gold2); text-decoration: none; }
 .np-nav a:hover { color: var(--gold); }
 .np-nav strong { color: var(--gold); }
-.np-lead { padding: 22px 0 18px; border-bottom: 1px solid var(--bdr); }
+.np-lead { padding: 22px 0 18px; border-bottom: 3px double var(--bdr); }
 .np-lead-kicker {
   font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
   color: var(--gold2); font-family: "Courier New", monospace; margin-bottom: 8px;
 }
 .np-lead-hl { font-size: 2rem; font-weight: bold; line-height: 1.15; color: var(--text); margin-bottom: 12px; }
-.np-lead-blurb { font-size: 0.9rem; line-height: 1.75; color: #aaaaaa; max-width: 720px; }
+.np-lead-blurb { font-size: 0.9rem; line-height: 1.75; color: #aaaaaa; max-width: 720px; margin-bottom: 10px; }
+.np-lead-section {
+  display: inline-block; font-size: 0.58rem; letter-spacing: 0.2em; text-transform: uppercase;
+  font-family: "Courier New", monospace; color: var(--bg); background: var(--gold2);
+  padding: 2px 7px; border-radius: 2px;
+}
 .np-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); border-bottom: 1px solid var(--bdr); }
 .np-article { padding: 16px 20px; border-top: 1px solid var(--bdr); border-right: 1px solid var(--bdr); }
 .np-article:last-child { border-right: none; }
@@ -2137,15 +2211,20 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
         return '<div class="np-pending">No articles available for this edition.</div>'
 
     lead, *rest = articles
+    lead_section = lead.get("section", "").strip()
+    if lead_section not in SECTION_ORDER:
+        lead_section = "City Hall"
     html = (
-        '<details class="np-lead np-section" open>'
-        '<summary class="np-lead-kicker">Lead Story</summary>'
+        '<div class="np-lead">'
+        '<div class="np-lead-kicker">Lead Story</div>'
         f'<div class="np-lead-hl">{_h(lead["headline"])}</div>'
         f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
-        '</details>'
+        f'<div class="np-lead-section">{_h(lead_section)}</div>'
+        '</div>'
     )
 
-    # Group remaining articles by section, preserving within-section order
+    # Group remaining articles by section, preserving within-section order.
+    # The lead article's section may appear again if the LLM wrote more articles for it.
     by_section: dict[str, list[dict]] = defaultdict(list)
     for a in rest:
         section = a.get("section", "").strip()
@@ -2153,13 +2232,23 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
             section = "City Hall"
         by_section[section].append(a)
 
-    kickers = ["Also", "Elsewhere", "Update", "Developing"]
+    section_kickers = {
+        "City Hall": ["Report", "Update", "Bulletin", "Dispatch"],
+        "Public Safety": ["Alert", "Incident", "Report", "Advisory"],
+        "Weather": ["Reading", "Update", "Status", "Monitor"],
+        "City Archives": ["Report", "Status", "Update", "Audit"],
+        "Arts & Entertainment": ["Review", "Update", "Report", "Feature"],
+        "Public Works": ["Update", "Status", "Report", "Notice"],
+    }
+    default_kickers = ["Report", "Update", "Bulletin", "Notice"]
+
     for section in SECTION_ORDER:
         arts = by_section.get(section)
         if not arts:
             continue
         cols = arts[:3]
         briefs = arts[3:]
+        kickers = section_kickers.get(section, default_kickers)
 
         col_html = "".join(
             '<div class="np-article">'
@@ -2175,7 +2264,7 @@ def render_articles_html(articles: list[dict], bans: Optional[list[dict]] = None
                 f' &mdash; <span class="np-brief-blurb">{_h(a["blurb"])}</span></div>'
                 for a in briefs
             )
-            brief_html = f'<div class="np-briefs" style="margin-top:0">{brief_items}</div>'
+            brief_html = f'<div class="np-briefs">{brief_items}</div>'
 
         html += (
             '<details class="np-section" open>'
