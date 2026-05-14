@@ -1240,6 +1240,7 @@ services:
       - KOPIA_PASS=${KOPIA_PASS}
       - BESZEL_EMAIL=morgothan@gmail.com
       - BESZEL_PASS=${BESZEL_PASS}
+      - TAUTULLI_KEY=${TAUTULLI_KEY}
     labels:
       - traefik.enable=true
       # external
