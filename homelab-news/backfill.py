@@ -146,15 +146,15 @@ async def main() -> None:
         log.info("Nothing to do.")
         return
 
-    new_entries: list[dict] = []
     t0 = time.monotonic()
+    saved = 0
 
     for idx, d in enumerate(dates_to_do):
         try:
             entry = await process_day(d, dry_run=args.dry_run, no_llm=args.no_llm)
-            new_entries.append(entry)
         except Exception as e:
             log.error("[%s] Failed: %s", d.isoformat(), e)
+            entry = None
 
         done = idx + 1
         elapsed = time.monotonic() - t0
@@ -164,19 +164,22 @@ async def main() -> None:
         eta_m //= 60
         log.info("Progress: %d/%d  ETA %dh %02dm", done, total, eta_h, eta_m)
 
-    if not new_entries:
-        log.info("No entries generated.")
-        return
+        if entry and not args.dry_run:
+            # Re-read archive each time so we merge correctly even if daily.py
+            # wrote a new entry since we started.
+            current = load_json(ARCHIVE_FILE) or []
+            current_dates = {r["date"] for r in current}
+            if entry["date"] not in current_dates:
+                current.append(entry)
+                current.sort(key=lambda r: r["date"], reverse=True)
+                save_json(ARCHIVE_FILE, current)
+                saved += 1
+                log.info("[%s] Saved to archive (%d total entries)", entry["date"], len(current))
 
     if args.dry_run:
-        log.info("--dry-run: would add %d entries (not writing archive)", len(new_entries))
-        return
-
-    # Merge with existing archive and sort newest-first (no hard cap — daily.py handles that)
-    combined = archive + new_entries
-    combined.sort(key=lambda r: r["date"], reverse=True)
-    save_json(ARCHIVE_FILE, combined)
-    log.info("Done. Archive: %d total entries (%d new).", len(combined), len(new_entries))
+        log.info("--dry-run complete: %d days processed (nothing written)", total)
+    else:
+        log.info("Done. %d new entries saved.", saved)
 
 
 if __name__ == "__main__":
