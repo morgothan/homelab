@@ -816,12 +816,12 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                 state = json.load(f)
             result = []
             for ip, info in state.get("banned", {}).items():
-                expires_ts = info.get("expires_at", 0)
-                banned_ts  = info.get("banned_at",  0)
-                if expires_ts <= now.timestamp():
+                expires_ts = info.get("expires_at")  # None = permanent ban
+                banned_ts  = info.get("banned_at", 0)
+                permanent  = expires_ts is None
+                if not permanent and expires_ts <= now.timestamp():
                     continue  # expired (cf-fail2ban cleanup may be pending)
                 ban_start = datetime.fromtimestamp(banned_ts, tz=timezone.utc)
-                expires   = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
 
                 # Live access log data (present if ban is recent, absent if log has rolled)
                 live_hits = access_hits.get(ip, [])
@@ -840,17 +840,30 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                 hit_count = len(live_hits) or stored_hits
                 category  = stored_category or _classify_ban(paths)
 
+                if permanent:
+                    expires_at_str = "permanent"
+                    expires_in_str = "permanent"
+                else:
+                    expires    = datetime.fromtimestamp(expires_ts, tz=timezone.utc)
+                    expires_at_str = expires.strftime("%Y-%m-%d %H:%M UTC")
+                    expires_in_str = _fmt_duration((expires - now).total_seconds())
+
                 result.append({
-                    "ip":           ip,
-                    "banned_since": ban_start.strftime("%Y-%m-%d %H:%M UTC"),
-                    "expires_at":   expires.strftime("%Y-%m-%d %H:%M UTC"),
-                    "blocked_for":  _fmt_duration((now - ban_start).total_seconds()),
-                    "expires_in":   _fmt_duration((expires - now).total_seconds()),
-                    "hit_count":    hit_count,
-                    "paths":        paths,
-                    "category":     category,
+                    "ip":            ip,
+                    "banned_since":  ban_start.strftime("%Y-%m-%d %H:%M UTC"),
+                    "expires_at":    expires_at_str,
+                    "blocked_for":   _fmt_duration((now - ban_start).total_seconds()),
+                    "expires_in":    expires_in_str,
+                    "hit_count":     hit_count,
+                    "paths":         paths,
+                    "category":      category,
+                    "offense_count": info.get("offense_count", 1),
                 })
-            bans = sorted(result, key=lambda x: x["expires_at"], reverse=True)
+            # Permanent bans sort to top, then by expiration descending
+            bans = sorted(
+                result,
+                key=lambda x: ("0" if x["expires_at"] == "permanent" else "1" + x["expires_at"]),
+            )
             banned_ips = {b["ip"] for b in bans}
             probes = _build_probes(access_hits, banned_ips, now)
             return bans, probes
@@ -2025,6 +2038,9 @@ body {
 .np-blotter-ip { font-size: 0.85rem; font-weight: bold; font-family: "Courier New", monospace; }
 .np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
 .np-blotter-meta { font-size: 0.78rem; color: #888888; }
+.np-blotter-offense { font-size: 0.78rem; }
+.np-blotter-offense.abuse-med { color: var(--gold2); font-weight: bold; }
+.np-blotter-offense.abuse-hi  { color: #e05c5c; font-weight: bold; }
 .np-blotter-paths { width: 100%; font-size: 0.72rem; color: var(--muted); font-family: "Courier New", monospace; padding: 2px 0 4px; }
 .np-blotter-intel { width: 100%; font-size: 0.72rem; color: var(--muted); padding: 1px 0 3px; }
 .np-blotter-intel .flag { margin-right: 4px; }
@@ -2234,16 +2250,25 @@ def render_bans_card(bans: list[dict]) -> str:
             '<span class="c-ok">&#x2713;&nbsp; No active IP bans.</span>'
             '</div></div>'
         )
-    rows = "".join(
-        '<div class="ban-row">'
-        f'<span class="c-err">{_h(b["ip"])}</span>'
-        f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
-        f'<span class="c-warn">expires in {_h(b["expires_in"])}</span>'
-        f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
-        f'<span class="c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
-        '</div>'
-        for b in bans
-    )
+    def _ban_row(b):
+        expires = "&#x221e; permanent" if b["expires_in"] == "permanent" else _h(b["expires_in"])
+        offense = b.get("offense_count", 1)
+        offense_str = ""
+        if offense >= 2:
+            suffixes = ["st", "nd", "rd"]
+            suffix = suffixes[offense - 1] if offense <= 3 else "th"
+            offense_str = f'<span class="c-err"> &#x26a0;{offense}{suffix}</span>'
+        return (
+            '<div class="ban-row">'
+            f'<span class="c-err">{_h(b["ip"])}</span>'
+            f'<span class="c-dim">+{_h(b["blocked_for"])}</span>'
+            f'<span class="c-warn">expires in {expires}</span>'
+            f'<span class="c-dim">&#xd7;{b["hit_count"]}</span>'
+            f'<span class="c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
+            + offense_str +
+            '</div>'
+        )
+    rows = "".join(_ban_row(b) for b in bans)
     return (
         '<div class="card full">'
         '<details class="ban-details">'
@@ -2395,13 +2420,23 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Opt
                     + '</div>'
                 )
             intel_html = _intel_line(intel.get(b["ip"], {}))
+            offense = b.get("offense_count", 1)
+            offense_html = ""
+            if offense >= 2:
+                tier_cls = "abuse-hi" if offense >= 5 else ("abuse-med" if offense >= 3 else "")
+                suffixes = ["st", "nd", "rd"]
+                suffix = suffixes[offense - 1] if offense <= 3 else "th"
+                label = f"&#x26a0; {offense}{suffix} offense"
+                offense_html = f' &middot; <span class="np-blotter-offense{" " + tier_cls if tier_cls else ""}">{label}</span>'
+            expires_display = "&#x221e; permanent" if b["expires_in"] == "permanent" else _h(b["expires_in"])
             rows.append(
                 '<div class="np-blotter-item">'
                 f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
                 f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
                 f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
                 f' &middot; blocked {_h(b["blocked_for"])}'
-                f' &middot; expires in {_h(b["expires_in"])}</span>'
+                f' &middot; expires in {expires_display}'
+                + offense_html + '</span>'
                 + intel_html
                 + paths_html
                 + '</div>'
