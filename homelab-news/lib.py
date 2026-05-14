@@ -56,6 +56,21 @@ PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
 
+CONTEXT_FILE  = os.path.join(DATA_DIR, "context.md")
+
+
+def _load_context() -> str:
+    """Load optional homelab context file from /data/context.md.
+    Returns empty string if the file doesn't exist."""
+    try:
+        with open(CONTEXT_FILE) as f:
+            return f.read().strip()
+    except FileNotFoundError:
+        return ""
+    except Exception as e:
+        log.warning("Could not read context.md: %s", e)
+        return ""
+
 SECTION_ORDER = [
     "City Hall",
     "Public Safety",
@@ -1349,9 +1364,12 @@ async def generate_newspaper(
             lines.append("\n" + "\n".join(tautulli_lines))
 
     situation = "\n".join(lines)
+    context = _load_context()
+    context_block = f"HOMELAB CONTEXT (use this to write accurate service names and understand what's normal):\n{context}\n\n" if context else ""
     prompt = (
         "You are the editor of a homelab status newspaper covering a full day of events.\n\n"
-        "LAYOUT: The page has one full-width Lead Story at the top, then each section shows its\n"
+        + context_block
+        + "LAYOUT: The page has one full-width Lead Story at the top, then each section shows its\n"
         "articles side-by-side in columns. Write 1–3 articles per section that has noteworthy\n"
         "activity — aim for 8–16 articles total. The FIRST article in your array is the Lead Story\n"
         "(make it the most important event of the day). Omit sections with nothing to report.\n\n"
@@ -1393,7 +1411,7 @@ async def generate_newspaper(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.3, "num_predict": 2500},
+                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 2500},
                 },
             )
             resp.raise_for_status()
