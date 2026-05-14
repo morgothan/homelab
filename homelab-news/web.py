@@ -242,7 +242,7 @@ async def archive_day(date_str: str):
     articles_html = render_articles_html(rec.get("newspaper") or [])
     body = (
         masthead_archive(date_str)
-        + nav_bar("archive")
+        + nav_bar("archive-day")
         + articles_html
         + render_blotter_html(bans, collapsed=True)
         + '<div class="grid" style="margin-top:24px">'
