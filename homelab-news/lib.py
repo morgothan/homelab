@@ -56,7 +56,10 @@ PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
 
-CONTEXT_FILE  = os.path.join(DATA_DIR, "context.md")
+CONTEXT_FILE   = os.path.join(DATA_DIR, "context.md")
+IP_INTEL_FILE  = os.path.join(DATA_DIR, "ip_intel.json")
+IP_INTEL_TTL   = 7 * 86400  # re-query after 7 days
+ABUSEIPDB_KEY  = os.getenv("ABUSEIPDB_KEY", "")
 
 
 def _load_context() -> str:
@@ -70,6 +73,74 @@ def _load_context() -> str:
     except Exception as e:
         log.warning("Could not read context.md: %s", e)
         return ""
+
+
+async def enrich_ips(ips: list[str]) -> dict[str, dict]:
+    """Return geo/ASN/abuse intel for a list of IPs, using a persistent 7-day cache.
+
+    Always queries ip-api.com (free, no key) for geo + ASN + ISP/org.
+    Optionally queries AbuseIPDB for abuse score if ABUSEIPDB_KEY is set.
+    Results cached in /data/ip_intel.json so the blotter page stays fast.
+    """
+    if not ips:
+        return {}
+
+    cache: dict[str, dict] = load_json(IP_INTEL_FILE) or {}
+    now   = time.time()
+    stale = [ip for ip in ips if ip not in cache or now - cache[ip].get("_ts", 0) > IP_INTEL_TTL]
+
+    if stale:
+        # ── ip-api.com batch (free, no key, up to 100 IPs per request) ──────
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                resp = await client.post(
+                    "http://ip-api.com/batch",
+                    params={"fields": "status,country,countryCode,city,isp,org,as,query"},
+                    json=[{"query": ip} for ip in stale],
+                )
+                resp.raise_for_status()
+                for item in resp.json():
+                    ip = item.get("query", "")
+                    if ip and item.get("status") == "success":
+                        asn_raw = item.get("as", "")          # e.g. "AS12345 Some Org"
+                        asn_num = asn_raw.split()[0] if asn_raw else ""
+                        org     = item.get("org") or item.get("isp", "")
+                        cache[ip] = {
+                            "_ts":          now,
+                            "country":      item.get("country", ""),
+                            "country_code": item.get("countryCode", ""),
+                            "city":         item.get("city", ""),
+                            "isp":          item.get("isp", ""),
+                            "org":          org,
+                            "asn":          asn_num,
+                        }
+        except Exception as e:
+            log.warning("ip-api.com enrichment failed: %s", e)
+
+        # ── AbuseIPDB per-IP (optional — only if key configured) ─────────────
+        if ABUSEIPDB_KEY:
+            for ip in stale:
+                if ip not in cache:
+                    continue  # skip if geo lookup already failed
+                try:
+                    async with httpx.AsyncClient(timeout=10) as client:
+                        resp = await client.get(
+                            "https://api.abuseipdb.com/api/v2/check",
+                            params={"ipAddress": ip, "maxAgeInDays": "90"},
+                            headers={"Key": ABUSEIPDB_KEY, "Accept": "application/json"},
+                        )
+                        resp.raise_for_status()
+                        data = resp.json().get("data", {})
+                        cache[ip]["abuse_score"]   = data.get("abuseConfidenceScore", 0)
+                        cache[ip]["abuse_reports"] = data.get("totalReports", 0)
+                        cache[ip]["usage_type"]    = data.get("usageType", "")
+                except Exception as e:
+                    log.warning("AbuseIPDB lookup for %s failed: %s", ip, e)
+
+        save_json(IP_INTEL_FILE, cache)
+
+    return {ip: cache.get(ip, {}) for ip in ips}
+
 
 SECTION_ORDER = [
     "City Hall",
@@ -1927,6 +1998,10 @@ body {
 .np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
 .np-blotter-meta { font-size: 0.78rem; color: #888888; }
 .np-blotter-paths { width: 100%; font-size: 0.72rem; color: var(--muted); font-family: "Courier New", monospace; padding: 2px 0 4px; }
+.np-blotter-intel { width: 100%; font-size: 0.72rem; color: var(--muted); padding: 1px 0 3px; }
+.np-blotter-intel .flag { margin-right: 4px; }
+.np-blotter-intel .abuse-hi { color: #e05c5c; font-weight: bold; }
+.np-blotter-intel .abuse-med { color: var(--gold2); }
 .np-blotter-count { font-size: 0.7em; color: var(--muted); }
 .np-blotter-empty { padding: 10px 0; }
 .np-blotter-page { border-top: 3px double var(--bdr); padding: 14px 0 0; margin-top: 24px; }
@@ -2235,10 +2310,49 @@ def updates_card(update_hosts: dict) -> str:
     )
 
 
-def render_blotter_html(bans: list[dict], *, collapsed: bool = False) -> str:
-    """Police blotter. collapsed=True renders as a closed <details> for archive snapshots."""
+def _intel_line(info: dict) -> str:
+    """Format a single geo/ASN/abuse intel line for a ban entry."""
+    if not info:
+        return ""
+    parts: list[str] = []
+
+    cc = info.get("country_code", "")
+    country = info.get("country", "")
+    city = info.get("city", "")
+    if cc:
+        flag = "".join(chr(0x1F1E6 + ord(c) - ord("A")) for c in cc.upper() if c.isalpha())
+        loc = ", ".join(filter(None, [city, country]))
+        parts.append(f'<span class="flag">{flag}</span>{_h(loc)}')
+
+    org = info.get("org") or info.get("isp", "")
+    asn = info.get("asn", "")
+    if org:
+        parts.append(_h(f"{org} ({asn})" if asn else org))
+
+    abuse_score = info.get("abuse_score")
+    if abuse_score is not None:
+        if abuse_score >= 50:
+            cls = "abuse-hi"
+        elif abuse_score >= 20:
+            cls = "abuse-med"
+        else:
+            cls = ""
+        label = f"Abuse: {abuse_score}%"
+        if info.get("usage_type"):
+            label += f" · {info['usage_type']}"
+        parts.append(f'<span class="{cls}">{_h(label)}</span>' if cls else _h(label))
+
+    if not parts:
+        return ""
+    return '<div class="np-blotter-intel">' + " &nbsp;·&nbsp; ".join(parts) + "</div>"
+
+
+def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Optional[dict] = None) -> str:
+    """Police blotter. collapsed=True renders as a closed <details> for archive snapshots.
+    intel is a dict keyed by IP with geo/ASN/abuse data from enrich_ips()."""
     n = len(bans)
     count_str = f'{n} active ban{"s" if n != 1 else ""}'
+    intel = intel or {}
 
     if not bans:
         entries_html = '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; No active IP bans.</span></div>'
@@ -2252,6 +2366,7 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False) -> str:
                     + ' &middot; '.join(_h(p) for p in b["paths"][:5])
                     + '</div>'
                 )
+            intel_html = _intel_line(intel.get(b["ip"], {}))
             rows.append(
                 '<div class="np-blotter-item">'
                 f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
@@ -2259,6 +2374,7 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False) -> str:
                 f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
                 f' &middot; blocked {_h(b["blocked_for"])}'
                 f' &middot; expires in {_h(b["expires_in"])}</span>'
+                + intel_html
                 + paths_html
                 + '</div>'
             )
