@@ -1,0 +1,24 @@
+http:
+  #  serversTransports:
+  #    insecureSkipVerify: true
+
+  routers:
+    plex-http:
+      entryPoints:
+        - "https"
+      rule: Host(`plex.sketchyasfuckistan.net`)
+      middlewares:
+        - chain-authelia-nowaf
+      service: "plex"
+      tls:
+        certresolver: letsencrypt
+        domains:
+          - main: "sketchyasfuckistan.net"
+            sans:
+              - "*.sketchyasfuckistan.net"
+
+  services:
+    plex:
+      loadBalancer:
+        servers:
+          - url: "http://plex.iot.hirschnet:32400/"

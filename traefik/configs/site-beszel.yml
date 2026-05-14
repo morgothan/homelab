@@ -1,0 +1,56 @@
+http:
+  #  serversTransports:
+  #    insecureSkipVerify: true
+
+  routers:
+    beszel-http:
+      entryPoints:
+        - "https"
+      rule: Host(`beszel.sketchyasfuckistan.net`)
+      middlewares:
+        - test-errors
+        - realip
+        - robotstxt
+        - middlewares-rate-limit
+        - middlewares-secure-headers
+        - fail2ban
+        - beszel-authelia
+        - beszel-strip-wwwauth
+      service: "beszel"
+      tls:
+        certresolver: letsencrypt
+        domains:
+          - main: "sketchyasfuckistan.net"
+            sans:
+              - "*.sketchyasfuckistan.net"
+
+  middlewares:
+    # Custom forwardAuth that omits the Authorization header so Authelia uses
+    # the session cookie rather than trying to validate PocketBase Bearer tokens.
+    # Traefik still forwards the full original request (with Bearer token) to the backend.
+    beszel-authelia:
+      forwardAuth:
+        address: "http://authelia:9091/api/authz/forward-auth"
+#        trustForwardHeader: true
+        authResponseHeaders:
+          - "Remote-User"
+          - "Remote-Groups"
+        authRequestHeaders:
+          - "Cookie"
+          - "X-Forwarded-For"
+          - "X-Forwarded-Host"
+          - "X-Forwarded-Uri"
+          - "X-Forwarded-Proto"
+          - "X-Forwarded-Method"
+          - "X-Real-Ip"
+
+    beszel-strip-wwwauth:
+      headers:
+        customResponseHeaders:
+          WWW-Authenticate: ""
+
+  services:
+    beszel:
+      loadBalancer:
+        servers:
+          - url: "http://beszel.hirschnet:8090/"

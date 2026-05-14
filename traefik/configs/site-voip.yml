@@ -1,0 +1,24 @@
+http:
+  #  serversTransports:
+  #    insecureSkipVerify: true
+
+  routers:
+    voip-http:
+      entryPoints:
+        - "https"
+      rule: Host(`voip.sketchyasfuckistan.net`)
+      middlewares:
+        - chain-authelia-nowaf
+      service: "voip"
+      tls:
+        certresolver: letsencrypt
+        domains:
+          - main: "sketchyasfuckistan.net"
+            sans:
+              - "*.sketchyasfuckistan.net"
+
+  services:
+    voip:
+      loadBalancer:
+        servers:
+          - url: "https://voip.hirschnet/"
