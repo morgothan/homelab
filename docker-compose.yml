@@ -1248,6 +1248,7 @@ services:
       - BESZEL_EMAIL=morgothan@gmail.com
       - BESZEL_PASS=${BESZEL_PASS}
       - TAUTULLI_KEY=${TAUTULLI_KEY}
+      - MAX_ARCHIVE_DAYS=400
     labels:
       - traefik.enable=true
       # external
