@@ -11,7 +11,7 @@ from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, get_container_status, check_fail2ban_bans,
+    load_json, get_container_status, check_fail2ban_bans, enrich_ips,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
     render_articles_html, render_blotter_html, log_card, containers_card, updates_card,
 )
@@ -181,11 +181,12 @@ async def current_events():
 @app.get("/blotter")
 async def blotter():
     bans, _ = await check_fail2ban_bans()
+    intel = await enrich_ips([b["ip"] for b in bans])
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     body = (
         masthead_rolling(now_str)
         + nav_bar("blotter")
-        + render_blotter_html(bans)
+        + render_blotter_html(bans, intel=intel)
     )
     return Response(content=page_wrap(body, refresh=60),
                     media_type="text/html; charset=utf-8")
