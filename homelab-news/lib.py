@@ -2136,15 +2136,39 @@ _FAVICON_SVG = (
 
 
 def page_wrap(body: str, refresh: Optional[int] = None) -> str:
-    refresh_tag = f'<meta http-equiv="refresh" content="{refresh}">' if refresh else ""
+    refresh_script = ""
+    if refresh:
+        refresh_script = (
+            f'<script>'
+            f'(function(){{var iv={refresh}*1000;'
+            # Track open <details> elements so they survive a refresh
+            f'function openKeys(){{return Array.from(document.querySelectorAll("details[open]"))'
+            f'.map(function(d){{return d.querySelector("summary")?d.querySelector("summary").textContent.trim():""}});}}'
+            f'setInterval(function(){{'
+            f'fetch(location.href,{{cache:"no-store"}})'
+            f'.then(function(r){{return r.text();}})'
+            f'.then(function(html){{'
+            f'var p=new DOMParser();'
+            f'var nd=p.parseFromString(html,"text/html").body.innerHTML;'
+            f'if(nd!==document.body.innerHTML){{'
+            # Re-open any <details> that were open before the swap
+            f'var ok=openKeys();'
+            f'document.body.innerHTML=nd;'
+            f'if(ok.length){{document.querySelectorAll("details").forEach(function(d){{'
+            f'var s=d.querySelector("summary");'
+            f'if(s&&ok.indexOf(s.textContent.trim())>=0)d.setAttribute("open","");}});}}'
+            f'}}}}).catch(function(){{}});'
+            f'}},iv);'
+            f'}})();'
+            f'</script>'
+        )
     return (
         '<!DOCTYPE html><html lang="en"><head>'
         '<meta charset="utf-8"><title>Sketchyasfuckistan News</title>'
         '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
-        + refresh_tag
-        + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<style>' + _CSS + '</style>'
-        '</head><body>' + body + '</body></html>'
+        '</head><body>' + body + refresh_script + '</body></html>'
     )
 
 
