@@ -270,16 +270,24 @@ async def trends():
         if not items:
             return html + f'<div class="np-pending">{_h(empty_msg)}</div>'
         parts = []
-        for item in items:
-            label = item.get(label_key, "")
+        # Most recent first; open the first (most recent) entry by default
+        for idx, item in enumerate(reversed(items)):
+            label    = item.get(label_key, "")
             articles = item.get("articles") or []
-            headline = _h(articles[0]["headline"]) if articles else '<span class="c-dim">No articles</span>'
+            lead     = articles[0]["headline"] if articles else ""
+            count    = len(articles)
+            open_attr = " open" if idx == 0 else ""
             parts.append(
-                f'<div class="arch-period">'
+                f'<details class="arch-period"{open_attr}>'
+                f'<summary>'
+                f'<div class="arch-period-hd">'
                 f'<span class="arch-date">{_h(label)}</span>'
-                f'<span class="arch-headline">{headline}</span>'
-                f'<span class="arch-meta">{len(articles)} articles</span></div>'
-                + render_articles_html(articles)
+                f'<span class="arch-meta">{count} article{"s" if count != 1 else ""}</span>'
+                f'</div>'
+                + (f'<div class="arch-period-lead">{_h(lead)}</div>' if lead else '')
+                + f'</summary>'
+                f'<div class="arch-period-body">{render_articles_html(articles)}</div>'
+                f'</details>'
             )
         return html + "".join(parts)
 
