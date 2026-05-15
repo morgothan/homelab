@@ -407,12 +407,15 @@ services:
       - traefik.http.routers.dozzle-http.entrypoints=https
       - traefik.http.routers.dozzle-http.rule=Host(`dozzle.${DOMAIN}`)
         #- traefik.http.routers.dozzle-http.middlewares=chain-authelia@file
-      - traefik.http.routers.dozzle-http.middlewares=chain-authelia-nowaf@file
+      # chain-authelia-nowaf minus test-errors: Dozzle returns 404 on /api/cloud/config
+      # intentionally; test-errors would replace it with HTML breaking the Vue frontend.
+      - traefik.http.routers.dozzle-http.middlewares=realip@file,robotstxt@file,middlewares-rate-limit@file,middlewares-secure-headers@file,fail2ban@file,middlewares-authelia@file
       - traefik.http.routers.dozzle-http.service=dozzle
       - traefik.http.routers.dozzle-http.tls.certresolver=letsencrypt
       - traefik.http.routers.dozzle-http.tls.domains[0].main=${DOMAIN}
       - traefik.http.routers.dozzle-http.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.dozzle.loadbalancer.server.port=8080
+      - traefik.http.services.dozzle.loadbalancer.responseForwarding.flushInterval=-1
     expose:
       - 8080
     restart: unless-stopped
