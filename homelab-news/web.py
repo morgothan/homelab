@@ -270,8 +270,8 @@ async def trends():
         if not items:
             return html + f'<div class="np-pending">{_h(empty_msg)}</div>'
         parts = []
-        # Most recent first; open the first (most recent) entry by default
-        for idx, item in enumerate(reversed(items)):
+        # JSON is stored newest-first; open the first (most recent) entry by default
+        for idx, item in enumerate(items):
             label    = item.get(label_key, "")
             articles = item.get("articles") or []
             lead     = articles[0]["headline"] if articles else ""
