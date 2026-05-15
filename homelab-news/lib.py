@@ -266,13 +266,20 @@ def _classify_ban(paths: list[str]) -> str:
 
 
 def _fmt_duration(seconds: float) -> str:
-    """Return human-readable duration like '2h 15m' or '45m'."""
+    """Return human-readable duration: months, weeks, days, hours, minutes."""
     seconds = max(0, int(seconds))
-    h, rem = divmod(seconds, 3600)
-    m = rem // 60
-    if h:
-        return f"{h}h {m}m" if m else f"{h}h"
-    return f"{m}m" if m else "<1m"
+    months, rem  = divmod(seconds, 30 * 86400)
+    weeks,  rem  = divmod(rem,      7 * 86400)
+    days,   rem  = divmod(rem,          86400)
+    hours,  rem  = divmod(rem,           3600)
+    minutes      = rem // 60
+    parts = []
+    if months:  parts.append(f"{months}mo")
+    if weeks:   parts.append(f"{weeks}w")
+    if days:    parts.append(f"{days}d")
+    if hours:   parts.append(f"{hours}h")
+    if minutes: parts.append(f"{minutes}m")
+    return " ".join(parts) if parts else "<1m"
 
 
 def _parse_remote_hosts() -> list[tuple[str, str]]:
