@@ -1659,7 +1659,7 @@ async def generate_periodic_summary(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 1500},
+                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 3000},
                 },
             )
             resp.raise_for_status()
