@@ -1982,10 +1982,27 @@ body {
   color: var(--gold2); font-family: "Courier New", monospace;
   margin: 32px 0 12px; padding-bottom: 6px; border-bottom: 1px solid var(--bdr);
 }
-.arch-period {
-  display: grid; grid-template-columns: 10em 1fr 7em; gap: 12px; padding: 10px 0 6px;
-  border-bottom: 1px solid var(--dim); align-items: baseline;
+.arch-period { border-bottom: 1px solid var(--dim); }
+.arch-period:last-child { border-bottom: none; }
+.arch-period > summary {
+  display: block; cursor: pointer; padding: 10px 4px 8px; list-style: none;
+  user-select: none;
 }
+.arch-period > summary::-webkit-details-marker { display: none; }
+.arch-period > summary::marker { display: none; }
+.arch-period-hd {
+  display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+}
+.arch-period-hd .arch-date { display: flex; align-items: center; gap: 7px; }
+.arch-period-hd .arch-date::before {
+  content: "▶"; font-size: 0.55rem; color: var(--gold2);
+  display: inline-block; transition: transform 0.15s; flex-shrink: 0;
+}
+.arch-period[open] > summary .arch-date::before { transform: rotate(90deg); }
+.arch-period > summary:hover .arch-date { color: var(--gold); }
+.arch-period-lead { font-size: 0.85rem; color: var(--muted); margin-top: 3px; padding-left: 19px;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.arch-period-body { padding: 4px 0 14px 19px; }
 .changelog {
   margin: 2px 0 8px 14px; padding: 5px 10px; border-left: 2px solid var(--warn);
   background: rgba(200, 136, 64, 0.05); font-size: 11px; color: #aaaaaa; white-space: pre-wrap; line-height: 1.6;
