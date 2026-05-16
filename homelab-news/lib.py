@@ -168,10 +168,15 @@ CF_FAIL2BAN_STATE   = os.getenv("CF_FAIL2BAN_STATE",   "/traefik/monitor/fail2ba
 ACCESS_LOG_TAIL_MB  = 60    # bytes to read from end of access log (~26h of traffic)
 
 FAIL2BAN_ALLOWLIST = [
+    # IPv4 private / loopback
     ipaddress.ip_network("10.0.0.0/8"),
     ipaddress.ip_network("172.16.0.0/12"),
     ipaddress.ip_network("192.168.0.0/16"),
     ipaddress.ip_network("127.0.0.0/8"),
+    # IPv6 loopback / link-local / ULA
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fe80::/10"),
+    ipaddress.ip_network("fc00::/7"),
 ]
 
 ROLLING_HOURS = int(os.getenv("ROLLING_HOURS", "1"))   # log window for current-events view
@@ -831,7 +836,12 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                 ban_start = datetime.fromtimestamp(banned_ts, tz=timezone.utc)
 
                 # Live access log data (present if ban is recent, absent if log has rolled)
-                live_hits = access_hits.get(ip, [])
+                # Normalize IP notation before lookup (state file and access log may differ)
+                try:
+                    norm_ip = str(ipaddress.ip_address(ip))
+                except ValueError:
+                    norm_ip = ip
+                live_hits = access_hits.get(norm_ip) or access_hits.get(ip, [])
                 live_paths: list[str] = []
                 for _, p in live_hits:
                     if p and p not in live_paths and len(live_paths) < 5:
@@ -845,7 +855,9 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
 
                 paths     = live_paths    or stored_paths
                 hit_count = len(live_hits) or stored_hits
-                category  = stored_category or _classify_ban(paths)
+                # Don't trust stored "unknown" — re-classify if we have paths now
+                effective_stored = stored_category if stored_category and stored_category != "unknown" else ""
+                category  = effective_stored or _classify_ban(paths)
 
                 if permanent:
                     expires_at_str = "permanent"

@@ -117,6 +117,32 @@ def is_private(ip_str):
         return False
 
 
+def _extract_client_ips(client_raw: str) -> list:
+    """Extract IP address(es) from a Traefik ClientHost field.
+
+    Traefik may log ClientHost as a bare IP, 'ip:port' (IPv4), or a
+    comma-separated list of those.  IPv6 addresses have no port suffix in
+    Traefik logs, so splitting on ':' would mangle them — try a direct
+    ip_address() parse first.
+    """
+    ips = []
+    for part in client_raw.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            # Bare IPv4 or IPv6 address — take as-is
+            ipaddress.ip_address(part)
+            ips.append(part)
+        except ValueError:
+            # IPv4:port — strip the port
+            if ":" in part:
+                ips.append(part.rsplit(":", 1)[0])
+            else:
+                ips.append(part)
+    return ips
+
+
 # ── Cloudflare API ────────────────────────────────────────────────────────────
 
 def _cf_headers():
@@ -289,10 +315,9 @@ def _ban_metadata_from_log(ip):
         status = obj.get("DownstreamStatus")
         if status not in (401, 403, 429):
             continue
-        # Verify ClientHost matches — it may be "ip:port" or "ip1,ip2:port"
+        # Verify ClientHost matches — it may be "ip", "ip:port", or "ip1,ip2:port"
         client_raw = obj.get("ClientHost", "")
-        host_ips = [part.split(":")[0].strip() for part in client_raw.split(",")]
-        if ip not in host_ips:
+        if ip not in _extract_client_ips(client_raw):
             continue
         # Timestamp check
         ts_raw = obj.get("StartUTC") or obj.get("time", "")
@@ -445,7 +470,7 @@ def main():
     new_ips = parse_ban_events(lines)
 
     # ── 3. Block new IPs in Cloudflare ────────────────────────────────────────
-    for ip in sorted(new_ips, key=ipaddress.ip_address):
+    for ip in sorted(new_ips, key=lambda x: (ipaddress.ip_address(x).version, int(ipaddress.ip_address(x)))):
         if ip in banned:
             continue  # already tracked
 
