@@ -146,26 +146,29 @@ async def check_proxmox_apt() -> dict:
 
 
 async def check_adguard_update(url: str, label: str) -> dict:
-    """Check an AdGuard Home instance for available updates via its HTTP API."""
+    """Check an AdGuard Home instance for available updates.
+
+    Gets current version from the local API, then compares against the latest
+    GitHub release. Avoids the /control/update/check endpoint which fails because
+    AdGuard itself is the resolver (can't reach static.adtidy.org).
+    """
     ts = datetime.now(timezone.utc).isoformat()
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             status_r = await client.get(f"{url}/control/status")
             status_r.raise_for_status()
             current_version = status_r.json().get("version", "?")
-
-            check_r = await client.get(f"{url}/control/update/check")
-            check_r.raise_for_status()
-            check = check_r.json()
     except Exception as e:
-        log.warning("AdGuard check failed for %s: %s", label, e)
+        log.warning("AdGuard status check failed for %s: %s", label, e)
         return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
 
-    new_version = check.get("new_version", "")
-    update_available = bool(new_version) and new_version != current_version
+    # Fetch latest release from GitHub (bypasses the DNS chicken-and-egg problem)
+    release = await fetch_github_release_notes("https://github.com/AdguardTeam/AdGuardHome")
+    latest_tag = release[0] if release else None
+    new_version = latest_tag or current_version
 
     updates = []
-    if update_available:
+    if new_version and new_version.lstrip("v") != current_version.lstrip("v"):
         updates.append({
             "app":             "adguard-home",
             "current_version": current_version,
