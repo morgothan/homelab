@@ -576,6 +576,21 @@ services:
       - ${DOCKERNET}
 
 
+########## OpenEVSE Exporter
+# Exports EV charger metrics (state, power, energy, temperature) to Prometheus
+  openevse-exporter:
+    image: prometheuscommunity/json-exporter:latest
+    container_name: openevse-exporter
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - ${DOCKERDIR}/prometheus/etc/openevse-exporter.yml:/config.yml:ro
+    command:
+      - '--config.file=/config.yml'
+
+
 ########## Proxmox VE Exporter
 # Exports Proxmox host and VM metrics to Prometheus
   pve-exporter:
