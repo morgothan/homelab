@@ -1268,6 +1268,7 @@ services:
       - TAUTULLI_KEY=${TAUTULLI_KEY}
       - MAX_ARCHIVE_DAYS=400
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
+      - CROWDSEC_KEY=${CROWDSEC_KEY}    # optional: enables CrowdSec CTI on police blotter
     labels:
       - traefik.enable=true
       # external
