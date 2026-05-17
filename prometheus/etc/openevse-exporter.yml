@@ -1,0 +1,74 @@
+modules:
+  default:
+    metrics:
+      - name: openevse_state
+        path: "{ .state }"
+        help: "EVSE state (1=not_connected 2=connected 3=charging 6=GFCI_fault 7=no_ground 8=stuck_relay 10=over_temp 254=sleeping 255=disabled)"
+
+      - name: openevse_vehicle_connected
+        path: "{ .vehicle }"
+        help: "Vehicle plugged in (1=yes 0=no)"
+
+      - name: openevse_amp
+        path: "{ .amp }"
+        help: "Charging current in amps"
+
+      - name: openevse_pilot_amp
+        path: "{ .pilot }"
+        help: "Pilot current offered to vehicle in amps"
+
+      - name: openevse_voltage_volts
+        path: "{ .voltage }"
+        help: "Line voltage in volts"
+
+      - name: openevse_power_watts
+        path: "{ .power }"
+        help: "Current power draw in watts"
+
+      - name: openevse_temperature_decidegc
+        path: "{ .temp }"
+        help: "Controller temperature in 0.1 degree C units (divide by 10 for Celsius)"
+
+      - name: openevse_temperature_max_decidegc
+        path: "{ .temp_max }"
+        help: "Max recorded temperature in 0.1 degree C units"
+
+      - name: openevse_session_energy_wh
+        path: "{ .session_energy }"
+        help: "Energy delivered this session in Wh"
+
+      - name: openevse_session_elapsed_seconds
+        path: "{ .session_elapsed }"
+        help: "Current session elapsed time in seconds"
+
+      - name: openevse_total_energy_kwh
+        path: "{ .total_energy }"
+        help: "Total lifetime energy delivered in kWh"
+
+      - name: openevse_total_energy_day_kwh
+        path: "{ .total_day }"
+        help: "Energy delivered today in kWh"
+
+      - name: openevse_total_energy_week_kwh
+        path: "{ .total_week }"
+        help: "Energy delivered this week in kWh"
+
+      - name: openevse_total_energy_month_kwh
+        path: "{ .total_month }"
+        help: "Energy delivered this month in kWh"
+
+      - name: openevse_wifi_rssi_dbm
+        path: "{ .srssi }"
+        help: "WiFi signal strength in dBm"
+
+      - name: openevse_gfci_count_total
+        path: "{ .gfcicount }"
+        help: "Cumulative GFCI fault trip count"
+
+      - name: openevse_charge_rate_amp
+        path: "{ .charge_rate }"
+        help: "Solar divert charge rate in amps"
+
+      - name: openevse_uptime_seconds
+        path: "{ .uptime }"
+        help: "Device uptime in seconds"
