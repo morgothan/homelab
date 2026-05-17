@@ -9,10 +9,10 @@ from fastapi.responses import RedirectResponse
 
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
-    TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE,
+    TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status, check_fail2ban_bans, enrich_ips,
-    page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive,
+    page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, log_card, containers_card, updates_card,
 )
 
@@ -175,6 +175,104 @@ async def current_events():
         + '</div></details>'
     )
     return Response(content=page_wrap(body, refresh=page_refresh),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/wire")
+async def wire_reports():
+    from html import escape as _h
+    intel = load_json(HOMELAB_INTEL_FILE)
+    updates_raw = load_json(UPDATES_FILE) or {}
+    update_hosts = updates_raw.get("hosts", {})
+
+    if intel is None and not update_hosts:
+        return Response(content=_init_page(), media_type="text/html; charset=utf-8")
+
+    checked_at = ""
+    if intel and intel.get("checked_at"):
+        raw = intel["checked_at"]
+        checked_at = raw[0:16].replace("T", " ") + " UTC"
+    elif updates_raw.get("checked_at"):
+        raw = updates_raw["checked_at"]
+        checked_at = raw[0:16].replace("T", " ") + " UTC"
+
+    articles = (intel or {}).get("articles") or []
+    sources  = (intel or {}).get("sources", {})
+
+    if articles:
+        articles_html = render_articles_html(articles)
+    elif intel is not None:
+        articles_html = (
+            '<div class="np-pending">'
+            f'Wire desk is compiling the next bulletin&#x2026;<br>'
+            '<small style="font-size:0.75rem">Check back in a few minutes</small>'
+            '</div>'
+        )
+    else:
+        articles_html = (
+            '<div class="np-pending">Initializing wire reports&#x2026;<br>'
+            '<small style="font-size:0.75rem">First check runs at startup</small></div>'
+        )
+
+    # Source status grid
+    source_rows: list[str] = []
+    for key, src in sources.items():
+        lbl    = _h(src.get("label", key))
+        status = src.get("status", "unknown")
+        updates = src.get("updates", [])
+        ts_str  = src.get("ts", "")
+        ts_disp = _h(ts_str[11:16]) if ts_str else ""
+
+        if status == "error":
+            err = _h(src.get("error", "unknown")[:60])
+            row_body = f'<span class="c-warn">&#x26a0; check failed: {err}</span>'
+        elif updates:
+            items = []
+            for u in updates[:5]:
+                pkg = _h(u.get("package") or u.get("app", "?"))
+                new = _h(u.get("new_version", "?"))
+                items.append(f'<span class="c-warn">{pkg} &#x2192; {new}</span>')
+            row_body = " &nbsp; ".join(items)
+        else:
+            row_body = '<span class="c-ok">&#x2713; current</span>'
+
+        source_rows.append(
+            '<div class="upd">'
+            f'<span class="c-gold">{lbl}'
+            + (f'<span class="c-dim" style="font-size:11px"> &mdash; {ts_disp}</span>' if ts_disp else '')
+            + f'</span>{row_body}</div>'
+        )
+
+    # Docker image updates summary
+    docker_rows: list[str] = []
+    for label, host in update_hosts.items():
+        available = [r for r in host.get("results", []) if r["status"] == "update_available"]
+        if not available:
+            continue
+        for r in available[:5]:
+            ver = f" &#x2192; {_h(r['new_version'])}" if r.get("new_version") else ""
+            docker_rows.append(
+                '<div class="upd">'
+                f'<span class="c-blue">{_h(label)}/{_h(r["container"])}</span>'
+                f'<span class="c-dim">{_h(r["image"])}{ver}</span>'
+                '</div>'
+            )
+
+    dispatches = ""
+    if source_rows or docker_rows:
+        all_rows = source_rows + (
+            ['<hr class="rule-sng" style="margin:8px 0">'] + docker_rows if docker_rows else []
+        )
+        dispatches = (
+            '<details class="np-section" open>'
+            '<summary class="np-dispatch-head">Sources &amp; Status</summary>'
+            '<div style="margin-top:12px">'
+            + "<br>".join(all_rows)
+            + '</div></details>'
+        )
+
+    body = masthead_wire(checked_at or "pending") + nav_bar("wire") + articles_html + dispatches
+    return Response(content=page_wrap(body, refresh=UPDATE_INTERVAL),
                     media_type="text/html; charset=utf-8")
 
 
