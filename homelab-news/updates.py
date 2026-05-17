@@ -12,7 +12,7 @@ import httpx
 from lib import (
     UPDATE_INTERVAL, UPDATES_FILE, HOMELAB_INTEL_FILE, REMOTE_HOSTS, SSH_KEY,
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS, PLEX_LXC_ID,
-    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN,
+    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, OLLAMA_URL,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
@@ -40,6 +40,9 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
     "plexmediaserver": None,
     "home-assistant": "https://github.com/home-assistant/core",
     "homeassistant":  "https://github.com/home-assistant/core",
+    "beszel":         "https://github.com/henrygd/beszel",
+    "ollama":         "https://github.com/ollama/ollama",
+    "truenas":        None,
 }
 
 
@@ -306,6 +309,94 @@ async def check_homeassistant_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
+async def check_truenas_update() -> dict:
+    """Check TrueNAS Scale OS itself for a pending system update via midclt."""
+    label = "TrueNAS Scale"
+    ts = datetime.now(timezone.utc).isoformat()
+    cmd = "midclt call update.check_available 2>/dev/null || true"
+    ok, out = await _ssh_run(TRUENAS_SSH_HOST, cmd, timeout=60)
+    if not ok:
+        ok, out = await _ssh_run(TRUENAS_SSH_HOST, "sudo " + cmd, timeout=60)
+    if not ok:
+        return {"label": label, "status": "error", "ts": ts, "error": out[:100], "updates": []}
+    try:
+        data = json.loads(out)
+    except Exception as e:
+        return {"label": label, "status": "error", "ts": ts,
+                "error": f"parse error: {e}", "updates": []}
+
+    status = data.get("status", "")
+    new_version = data.get("version", "")
+    updates = []
+    if status == "AVAILABLE" and new_version:
+        updates.append({
+            "app":             "truenas",
+            "current_version": data.get("installed_version", "?"),
+            "new_version":     new_version,
+        })
+    log.info("TrueNAS system: status=%s version=%s", status, new_version)
+    return {"label": label, "status": "done", "ts": ts, "updates": updates}
+
+
+async def check_beszel_update() -> dict:
+    """Check Beszel hub version via container image label against latest GitHub release."""
+    label = "Beszel"
+    ts = datetime.now(timezone.utc).isoformat()
+    ok, out = await _ssh_run(
+        BESZEL_SSH_HOST,
+        "docker inspect beszel --format '{{index .Config.Labels \"org.opencontainers.image.version\"}}' 2>/dev/null",
+        timeout=15,
+    )
+    if not ok or not out.strip():
+        return {"label": label, "status": "error", "ts": ts,
+                "error": "could not read Beszel version label", "updates": []}
+    current_version = out.strip()
+
+    release = await fetch_github_release_notes("https://github.com/henrygd/beszel")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
+
+    updates = []
+    if new_version and new_version != current_version.lstrip("v"):
+        updates.append({
+            "app":             "beszel",
+            "current_version": current_version,
+            "new_version":     new_version,
+        })
+    log.info("Beszel: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
+    return {"label": label, "status": "done", "ts": ts,
+            "current_version": current_version, "updates": updates}
+
+
+async def check_ollama_update() -> dict:
+    """Check Ollama version via its local API against latest GitHub release."""
+    label = "Ollama"
+    ts = datetime.now(timezone.utc).isoformat()
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/version")
+            r.raise_for_status()
+            current_version = r.json().get("version", "")
+    except Exception as e:
+        log.warning("Ollama version check failed: %s", e)
+        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
+
+    release = await fetch_github_release_notes("https://github.com/ollama/ollama")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
+
+    updates = []
+    if new_version and new_version != current_version.lstrip("v"):
+        updates.append({
+            "app":             "ollama",
+            "current_version": current_version,
+            "new_version":     new_version,
+        })
+    log.info("Ollama: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
+    return {"label": label, "status": "done", "ts": ts,
+            "current_version": current_version, "updates": updates}
+
+
 async def run_homelab_checks() -> dict:
     """Run all non-Docker homelab update checks concurrently."""
     adguard_coros = [check_adguard_update(url, label) for url, label in ADGUARD_URLS]
@@ -315,6 +406,9 @@ async def run_homelab_checks() -> dict:
         check_plex_update(),
         check_truenas_apps(),
         check_homeassistant_update(),
+        check_truenas_update(),
+        check_beszel_update(),
+        check_ollama_update(),
         return_exceptions=True,
     )
     def _key(label: str) -> str:
@@ -323,7 +417,7 @@ async def run_homelab_checks() -> dict:
     keys = (
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
-        + ["plex", "truenas", "home_assistant"]
+        + ["plex", "truenas", "home_assistant", "truenas_system", "beszel", "ollama"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
