@@ -69,6 +69,7 @@ CONTEXT_FILE   = os.path.join(DATA_DIR, "context.md")
 IP_INTEL_FILE  = os.path.join(DATA_DIR, "ip_intel.json")
 IP_INTEL_TTL   = 7 * 86400  # re-query after 7 days
 ABUSEIPDB_KEY  = os.getenv("ABUSEIPDB_KEY", "")
+CROWDSEC_KEY   = os.getenv("CROWDSEC_KEY", "")
 
 
 def _load_context() -> str:
@@ -85,10 +86,11 @@ def _load_context() -> str:
 
 
 async def enrich_ips(ips: list[str]) -> dict[str, dict]:
-    """Return geo/ASN/abuse intel for a list of IPs, using a persistent 7-day cache.
+    """Return geo/ASN/abuse/CTI intel for a list of IPs, using a persistent 7-day cache.
 
     Always queries ip-api.com (free, no key) for geo + ASN + ISP/org.
     Optionally queries AbuseIPDB for abuse score if ABUSEIPDB_KEY is set.
+    Optionally queries CrowdSec CTI for threat score + behaviors if CROWDSEC_KEY is set.
     Results cached in /data/ip_intel.json so the blotter page stays fast.
     """
     if not ips:
@@ -97,10 +99,14 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
     cache: dict[str, dict] = load_json(IP_INTEL_FILE) or {}
     now   = time.time()
     stale = [ip for ip in ips if ip not in cache or now - cache[ip].get("_ts", 0) > IP_INTEL_TTL]
-    # IPs cached without abuse data that now have a key available
+    # IPs cached without supplemental data that now have a key available
     needs_abuse = [
         ip for ip in ips
         if ip not in stale and ABUSEIPDB_KEY and "abuse_score" not in cache.get(ip, {})
+    ]
+    needs_cs = [
+        ip for ip in ips
+        if ip not in stale and CROWDSEC_KEY and "crowdsec_score" not in cache.get(ip, {})
     ]
 
     dirty = False
@@ -153,6 +159,50 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
                     dirty = True
                 except Exception as e:
                     log.warning("AbuseIPDB lookup for %s failed: %s", ip, e)
+
+    # ── CrowdSec CTI per-IP (optional — only if key configured) ──────────
+    # Free tier: 500 req/day ≈ ~20/hour. Throttle to 1 req/s to avoid 429.
+    cs_targets = [ip for ip in stale if ip in cache] + needs_cs
+    if CROWDSEC_KEY and cs_targets:
+        async with httpx.AsyncClient(timeout=10) as client:
+            for ip in cs_targets:
+                try:
+                    resp = await client.get(
+                        f"https://cti.api.crowdsec.net/v2/smoke/{ip}",
+                        headers={"x-api-key": CROWDSEC_KEY, "Accept": "application/json"},
+                    )
+                    if resp.status_code == 429:
+                        log.warning("CrowdSec rate-limited; stopping CTI lookups for this run")
+                        break
+                    if resp.status_code == 404:
+                        # IP unknown to CrowdSec — store empty record so we don't re-query
+                        cache[ip]["crowdsec_score"]           = 0
+                        cache[ip]["crowdsec_noise"]           = 0
+                        cache[ip]["crowdsec_behaviors"]       = []
+                        cache[ip]["crowdsec_classifications"] = []
+                        cache[ip]["crowdsec_is_tor"]          = False
+                        cache[ip]["crowdsec_is_proxy"]        = False
+                        dirty = True
+                        await asyncio.sleep(1.1)
+                        continue
+                    resp.raise_for_status()
+                    data = resp.json()
+                    scores  = data.get("scores", {}).get("overall", {})
+                    cls     = data.get("classifications", {})
+                    cache[ip]["crowdsec_score"]           = scores.get("total", 0)
+                    cache[ip]["crowdsec_noise"]           = data.get("background_noise_score", 0)
+                    cache[ip]["crowdsec_behaviors"]       = [
+                        b["name"] for b in data.get("behaviors", [])
+                    ]
+                    cache[ip]["crowdsec_classifications"] = [
+                        c["label"] for c in cls.get("classifications", [])
+                    ]
+                    cache[ip]["crowdsec_is_tor"]          = cls.get("is_tor", False)
+                    cache[ip]["crowdsec_is_proxy"]        = cls.get("is_proxy", False) or cls.get("is_vpn", False)
+                    dirty = True
+                    await asyncio.sleep(1.1)
+                except Exception as e:
+                    log.warning("CrowdSec lookup for %s failed: %s", ip, e)
 
     if dirty:
         save_json(IP_INTEL_FILE, cache)
@@ -2199,6 +2249,8 @@ body {
 .np-blotter-intel .flag { margin-right: 4px; }
 .np-blotter-intel .abuse-hi { color: #e05c5c; font-weight: bold; }
 .np-blotter-intel .abuse-med { color: var(--gold2); }
+.np-blotter-intel .badge-threat { background: #7a1a1a; color: #ffcccc; border-radius: 3px; padding: 1px 5px; font-size: 0.68rem; font-weight: bold; letter-spacing: 0.04em; }
+.np-blotter-intel .badge-cs { background: #1a3a5c; color: #aad4ff; border-radius: 3px; padding: 1px 5px; font-size: 0.68rem; }
 .np-blotter-count { font-size: 0.7em; color: var(--muted); }
 .np-blotter-empty { padding: 10px 0; }
 .np-blotter-page { border-top: 3px double var(--bdr); padding: 14px 0 0; margin-top: 24px; }
@@ -2555,10 +2607,11 @@ def updates_card(update_hosts: dict) -> str:
 
 
 def _intel_line(info: dict) -> str:
-    """Format a single geo/ASN/abuse intel line for a ban entry."""
+    """Format a single geo/ASN/abuse/CrowdSec intel line for a ban entry."""
     if not info:
         return ""
     parts: list[str] = []
+    badges: list[str] = []
 
     cc = info.get("country_code", "")
     country = info.get("country", "")
@@ -2586,9 +2639,39 @@ def _intel_line(info: dict) -> str:
             label += f" · {info['usage_type']}"
         parts.append(f'<span class="{cls}">{_h(label)}</span>' if cls else _h(label))
 
-    if not parts:
+    # CrowdSec CTI
+    cs_score = info.get("crowdsec_score")
+    if cs_score is not None and cs_score > 0:
+        if cs_score >= 3:
+            score_cls = "abuse-hi"
+        else:
+            score_cls = "abuse-med"
+        parts.append(f'<span class="{score_cls}">CrowdSec: {cs_score}/5</span>')
+
+    cs_noise = info.get("crowdsec_noise", 0)
+    if cs_noise and cs_noise >= 7:
+        parts.append(f'<span class="abuse-med">noise:{cs_noise}/10</span>')
+
+    behaviors = info.get("crowdsec_behaviors", [])
+    if behaviors:
+        top = behaviors[:3]
+        parts.append(_h(" · ".join(top)))
+
+    if info.get("crowdsec_is_tor"):
+        badges.append('<span class="badge-threat">TOR</span>')
+    if info.get("crowdsec_is_proxy"):
+        badges.append('<span class="badge-threat">VPN/Proxy</span>')
+
+    classifications = info.get("crowdsec_classifications", [])
+    for label in classifications[:2]:
+        badges.append(f'<span class="badge-cs">{_h(label)}</span>')
+
+    if not parts and not badges:
         return ""
-    return '<div class="np-blotter-intel">' + " &nbsp;·&nbsp; ".join(parts) + "</div>"
+    body = " &nbsp;·&nbsp; ".join(parts)
+    if badges:
+        body = ("&nbsp;".join(badges) + ("&nbsp;&nbsp;" if parts else "")) + body
+    return '<div class="np-blotter-intel">' + body + "</div>"
 
 
 def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Optional[dict] = None) -> str:
