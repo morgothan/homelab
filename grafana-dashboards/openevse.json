@@ -1,0 +1,290 @@
+{
+  "dashboard": {
+    "uid": "openevse-charger",
+    "title": "OpenEVSE — EV Charger",
+    "tags": ["evse", "energy", "openevse"],
+    "timezone": "browser",
+    "schemaVersion": 39,
+    "refresh": "30s",
+    "time": { "from": "now-24h", "to": "now" },
+    "panels": [
+
+      { "type": "row", "title": "Status", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 0 }, "id": 100 },
+
+      {
+        "id": 1, "title": "Charger State", "type": "stat",
+        "gridPos": { "h": 4, "w": 5, "x": 0, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto", "textMode": "value_and_name", "colorMode": "background", "graphMode": "none" },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "1": { "text": "Not Connected", "color": "gray" }, "2": { "text": "Connected", "color": "blue" }, "3": { "text": "Charging", "color": "green" }, "4": { "text": "Vent Required", "color": "red" }, "5": { "text": "Diode Fault", "color": "red" }, "6": { "text": "GFCI Fault", "color": "red" }, "7": { "text": "No Ground", "color": "red" }, "8": { "text": "Stuck Relay", "color": "red" }, "9": { "text": "GFCI Test Fault", "color": "red" }, "10": { "text": "Over Temp", "color": "red" }, "254": { "text": "Sleeping", "color": "orange" }, "255": { "text": "Disabled", "color": "dark-gray" } } }
+            ],
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_state", "legendFormat": "State", "instant": true }]
+      },
+
+      {
+        "id": 2, "title": "Vehicle", "type": "stat",
+        "gridPos": { "h": 4, "w": 3, "x": 5, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "0": { "text": "Not Plugged In", "color": "gray" }, "1": { "text": "Plugged In", "color": "green" } } }
+            ],
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "gray", "value": null }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_vehicle_connected", "legendFormat": "Vehicle", "instant": true }]
+      },
+
+      {
+        "id": 3, "title": "Power", "type": "gauge",
+        "gridPos": { "h": 4, "w": 4, "x": 8, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "minVehicle": 0, "maxVehicle": 9600, "orientation": "auto" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "watt", "min": 0, "max": 9600,
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 6000 }, { "color": "red", "value": 8500 }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_power_watts", "legendFormat": "Power", "instant": true }]
+      },
+
+      {
+        "id": 4, "title": "Current", "type": "gauge",
+        "gridPos": { "h": 4, "w": 4, "x": 12, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "orientation": "auto" },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "amp", "min": 0, "max": 40,
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 30 }, { "color": "red", "value": 38 }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_amp", "legendFormat": "Amps", "instant": true }]
+      },
+
+      {
+        "id": 5, "title": "Pilot Offer", "type": "stat",
+        "gridPos": { "h": 2, "w": 3, "x": 16, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "amp" } },
+        "targets": [{ "expr": "openevse_pilot_amp", "legendFormat": "Pilot", "instant": true }]
+      },
+
+      {
+        "id": 6, "title": "Voltage", "type": "stat",
+        "gridPos": { "h": 2, "w": 3, "x": 16, "y": 3 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "volt" } },
+        "targets": [{ "expr": "openevse_voltage_volts", "legendFormat": "Voltage", "instant": true }]
+      },
+
+      {
+        "id": 7, "title": "Uptime", "type": "stat",
+        "gridPos": { "h": 4, "w": 2, "x": 19, "y": 1 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "s" } },
+        "targets": [{ "expr": "openevse_uptime_seconds", "legendFormat": "Uptime", "instant": true }]
+      },
+
+      { "type": "row", "title": "Power & Charging", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 5 }, "id": 101 },
+
+      {
+        "id": 10, "title": "Power Draw", "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 0, "y": 6 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "watt", "min": 0,
+            "color": { "mode": "fixed", "fixedColor": "green" },
+            "custom": { "fillOpacity": 20, "lineWidth": 2 },
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_power_watts", "legendFormat": "Power (W)" }]
+      },
+
+      {
+        "id": 11, "title": "Charging Current", "type": "timeseries",
+        "gridPos": { "h": 8, "w": 12, "x": 12, "y": 6 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "amp", "min": 0,
+            "color": { "mode": "fixed", "fixedColor": "blue" },
+            "custom": { "fillOpacity": 15, "lineWidth": 2 },
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }] }
+          }
+        },
+        "targets": [
+          { "expr": "openevse_amp", "legendFormat": "Actual (A)" },
+          { "expr": "openevse_pilot_amp", "legendFormat": "Pilot Offer (A)" }
+        ]
+      },
+
+      { "type": "row", "title": "Energy", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 14 }, "id": 102 },
+
+      {
+        "id": 20, "title": "Session Energy", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 0, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "watth", "decimals": 2 } },
+        "targets": [{ "expr": "openevse_session_energy_wh", "legendFormat": "Session", "instant": true }]
+      },
+
+      {
+        "id": 21, "title": "Session Duration", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 4, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "s" } },
+        "targets": [{ "expr": "openevse_session_elapsed_seconds", "legendFormat": "Duration", "instant": true }]
+      },
+
+      {
+        "id": 22, "title": "Today", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 8, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 } },
+        "targets": [{ "expr": "openevse_total_energy_day_kwh", "legendFormat": "Today", "instant": true }]
+      },
+
+      {
+        "id": 23, "title": "This Week", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 12, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 } },
+        "targets": [{ "expr": "openevse_total_energy_week_kwh", "legendFormat": "Week", "instant": true }]
+      },
+
+      {
+        "id": 24, "title": "This Month", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 16, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 2 } },
+        "targets": [{ "expr": "openevse_total_energy_month_kwh", "legendFormat": "Month", "instant": true }]
+      },
+
+      {
+        "id": 25, "title": "Total Lifetime", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 20, "y": 15 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "none", "graphMode": "none" },
+        "fieldConfig": { "defaults": { "unit": "kwatth", "decimals": 3 } },
+        "targets": [{ "expr": "openevse_total_energy_kwh", "legendFormat": "Lifetime", "instant": true }]
+      },
+
+      {
+        "id": 26, "title": "Session Energy Over Time", "type": "timeseries",
+        "gridPos": { "h": 7, "w": 24, "x": 0, "y": 18 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "multi" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+        "fieldConfig": {
+          "defaults": { "custom": { "fillOpacity": 10, "lineWidth": 2 } },
+          "overrides": [
+            { "matcher": { "id": "byName", "options": "Session (Wh)" }, "properties": [{ "id": "unit", "value": "watth" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] },
+            { "matcher": { "id": "byName", "options": "Today (kWh)" }, "properties": [{ "id": "unit", "value": "kwatth" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }, { "id": "custom.axisPlacement", "value": "right" }] }
+          ]
+        },
+        "targets": [
+          { "expr": "openevse_session_energy_wh", "legendFormat": "Session (Wh)" },
+          { "expr": "openevse_total_energy_day_kwh", "legendFormat": "Today (kWh)" }
+        ]
+      },
+
+      { "type": "row", "title": "Diagnostics", "gridPos": { "h": 1, "w": 24, "x": 0, "y": 25 }, "id": 103 },
+
+      {
+        "id": 30, "title": "Controller Temperature", "type": "timeseries",
+        "gridPos": { "h": 7, "w": 12, "x": 0, "y": 26 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "celsius",
+            "color": { "mode": "fixed", "fixedColor": "red" },
+            "custom": { "lineWidth": 2 },
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 55 }, { "color": "red", "value": 75 }] }
+          }
+        },
+        "targets": [
+          { "expr": "openevse_temperature_decidegc / 10", "legendFormat": "Temp (°C)" },
+          { "expr": "openevse_temperature_max_decidegc / 10", "legendFormat": "Max Temp (°C)" }
+        ]
+      },
+
+      {
+        "id": 31, "title": "WiFi Signal", "type": "timeseries",
+        "gridPos": { "h": 7, "w": 8, "x": 12, "y": 26 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "list", "placement": "bottom" } },
+        "fieldConfig": {
+          "defaults": {
+            "unit": "dBm",
+            "custom": { "lineWidth": 2 },
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "red", "value": null }, { "color": "yellow", "value": -80 }, { "color": "green", "value": -65 }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_wifi_rssi_dbm", "legendFormat": "RSSI (dBm)" }]
+      },
+
+      {
+        "id": 32, "title": "GFCI Faults", "type": "stat",
+        "gridPos": { "h": 3, "w": 4, "x": 20, "y": 26 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "reduceOptions": { "calcs": ["lastNotNull"] }, "colorMode": "background", "graphMode": "none" },
+        "fieldConfig": {
+          "defaults": {
+            "thresholds": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "red", "value": 1 }] }
+          }
+        },
+        "targets": [{ "expr": "openevse_gfci_count_total", "legendFormat": "GFCI Faults", "instant": true }]
+      },
+
+      {
+        "id": 33, "title": "Charger State History", "type": "timeseries",
+        "gridPos": { "h": 4, "w": 4, "x": 20, "y": 29 },
+        "datasource": { "type": "prometheus", "uid": "${datasource}" },
+        "options": { "tooltip": { "mode": "single" }, "legend": { "displayMode": "hidden" } },
+        "fieldConfig": {
+          "defaults": {
+            "mappings": [
+              { "type": "value", "options": { "1": { "text": "Not Connected" }, "2": { "text": "Connected" }, "3": { "text": "Charging" } } }
+            ],
+            "custom": { "lineWidth": 2, "fillOpacity": 20 },
+            "min": 0, "max": 4
+          }
+        },
+        "targets": [{ "expr": "openevse_state", "legendFormat": "State" }]
+      }
+
+    ],
+    "templating": {
+      "list": [
+        {
+          "type": "datasource", "name": "datasource", "label": "Datasource",
+          "pluginId": "prometheus", "query": "prometheus"
+        }
+      ]
+    }
+  },
+  "folderId": 0,
+  "overwrite": true
+}
