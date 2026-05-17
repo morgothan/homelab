@@ -121,9 +121,11 @@ async def check_proxmox_apt() -> dict:
     """Check Proxmox VE for available apt upgrades."""
     label = "Proxmox VE"
     ts = datetime.now(timezone.utc).isoformat()
+    # grep -v returns exit code 1 when nothing passes the filter (all packages current).
+    # Use || true so the pipeline always exits 0.
     ok, out = await _ssh_run(
         PVE_SSH_HOST,
-        "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...'",
+        "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
         timeout=90,
     )
     if not ok:
