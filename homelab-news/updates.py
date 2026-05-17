@@ -12,6 +12,7 @@ import httpx
 from lib import (
     UPDATE_INTERVAL, UPDATES_FILE, HOMELAB_INTEL_FILE, REMOTE_HOSTS, SSH_KEY,
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS, PLEX_LXC_ID,
+    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
@@ -37,6 +38,8 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
     "vaultwarden":    "https://github.com/dani-garcia/vaultwarden",
     "plex":           None,
     "plexmediaserver": None,
+    "home-assistant": "https://github.com/home-assistant/core",
+    "homeassistant":  "https://github.com/home-assistant/core",
 }
 
 
@@ -266,6 +269,43 @@ async def check_truenas_apps() -> dict:
     return {"label": label, "status": "done", "ts": ts, "updates": updates}
 
 
+async def check_homeassistant_update() -> dict:
+    """Check Home Assistant version via its REST API against latest GitHub release."""
+    label = "Home Assistant"
+    ts = datetime.now(timezone.utc).isoformat()
+    if not HOMEASSISTANT_TOKEN:
+        return {"label": label, "status": "error", "ts": ts,
+                "error": "HOMEASSISTANT_TOKEN not set", "updates": []}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{HOMEASSISTANT_URL}/api/config",
+                headers={"Authorization": f"Bearer {HOMEASSISTANT_TOKEN}",
+                         "Content-Type": "application/json"},
+            )
+            r.raise_for_status()
+            current_version = r.json().get("version", "")
+    except Exception as e:
+        log.warning("Home Assistant version check failed: %s", e)
+        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
+
+    release = await fetch_github_release_notes("https://github.com/home-assistant/core")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
+
+    updates = []
+    if new_version and new_version != current_version.lstrip("v"):
+        updates.append({
+            "app":             "home-assistant",
+            "current_version": current_version,
+            "new_version":     new_version,
+        })
+    log.info("Home Assistant: current=%s latest=%s updates=%d",
+             current_version, new_version, len(updates))
+    return {"label": label, "status": "done", "ts": ts,
+            "current_version": current_version, "updates": updates}
+
+
 async def run_homelab_checks() -> dict:
     """Run all non-Docker homelab update checks concurrently."""
     adguard_coros = [check_adguard_update(url, label) for url, label in ADGUARD_URLS]
@@ -274,6 +314,7 @@ async def run_homelab_checks() -> dict:
         *adguard_coros,
         check_plex_update(),
         check_truenas_apps(),
+        check_homeassistant_update(),
         return_exceptions=True,
     )
     def _key(label: str) -> str:
@@ -282,7 +323,7 @@ async def run_homelab_checks() -> dict:
     keys = (
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
-        + ["plex", "truenas"]
+        + ["plex", "truenas", "home_assistant"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
