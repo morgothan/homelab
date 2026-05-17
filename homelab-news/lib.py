@@ -60,7 +60,9 @@ ADGUARD_URLS: list[tuple[str, str]] = [
     (os.getenv("ADGUARD_PRIMARY_URL", "http://dns.hirschnet"),      "Primary DNS"),
     (os.getenv("ADGUARD_KIDS_URL",    "http://dns.kids.hirschnet"),  "Kids DNS"),
 ]
-PLEX_LXC_ID = os.getenv("PLEX_LXC_ID", "104")
+PLEX_LXC_ID         = os.getenv("PLEX_LXC_ID",         "104")
+HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "http://homeassistant.iot.hirschnet:8123")
+HOMEASSISTANT_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
