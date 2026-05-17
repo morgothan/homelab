@@ -51,7 +51,16 @@ TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
 ROLLING_FILE = os.path.join(DATA_DIR, "rolling.json")
 ARCHIVE_FILE = os.path.join(DATA_DIR, "archive.json")
 UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
-PERIODIC_FILE = os.path.join(DATA_DIR, "periodic.json")
+PERIODIC_FILE      = os.path.join(DATA_DIR, "periodic.json")
+HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
+
+PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "root@pve.hirschnet")
+TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "truenas_admin@smsf.hirschnet")
+ADGUARD_URLS: list[tuple[str, str]] = [
+    (os.getenv("ADGUARD_PRIMARY_URL", "http://dns.hirschnet"),      "Primary DNS"),
+    (os.getenv("ADGUARD_KIDS_URL",    "http://dns.kids.hirschnet"),  "Kids DNS"),
+]
+PLEX_LXC_ID = os.getenv("PLEX_LXC_ID", "104")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
@@ -1752,6 +1761,111 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         log.warning("Changelog LLM failed for %s: %s", container, e)
         return None
 
+async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[list[dict]]:
+    """Generate newspaper articles summarising all available homelab software updates."""
+    lines: list[str] = []
+
+    docker_updates: list[str] = []
+    for label, host in docker_hosts.items():
+        for r in host.get("results", []):
+            if r["status"] != "update_available":
+                continue
+            ver = f" → {r.get('new_version', '')}" if r.get("new_version") else ""
+            cl  = _sanitize_for_llm(r.get("changelog_analysis", ""), max_len=120)
+            docker_updates.append(
+                f"  {label}/{r['container']}: {r['image']}{ver}" + (f" — {cl}" if cl else "")
+            )
+    if docker_updates:
+        lines.append(f"DOCKER IMAGE UPDATES ({len(docker_updates)} available):")
+        lines.extend(docker_updates[:20])
+    else:
+        lines.append("DOCKER: all images current")
+
+    for key, src in sources.items():
+        lbl    = src.get("label", key)
+        status = src.get("status", "unknown")
+        if status == "error":
+            err = _sanitize_for_llm(src.get("error", "unknown"), max_len=80)
+            lines.append(f"{lbl.upper()}: check failed — {err}")
+            continue
+        updates = src.get("updates", [])
+        if not updates:
+            cur = src.get("current_version", "")
+            lines.append(f"{lbl.upper()}: current" + (f" (v{cur})" if cur else ""))
+            continue
+        for u in updates:
+            pkg = _sanitize_for_llm(u.get("package") or u.get("app", "?"), max_len=60)
+            cur = _sanitize_for_llm(u.get("current_version", "?"), max_len=30)
+            new = _sanitize_for_llm(u.get("new_version", "?"), max_len=30)
+            cl  = _sanitize_for_llm(u.get("changelog_analysis", ""), max_len=150)
+            lines.append(
+                f"{lbl.upper()} UPDATE: {pkg} {cur} → {new}" + (f" — {cl}" if cl else "")
+            )
+
+    situation = "\n".join(lines)
+    ctx = _load_context()
+    ctx_block = (
+        f"HOMELAB CONTEXT:\n{ctx}\n\n" if ctx else ""
+    )
+    plex_flag = (
+        "KNOWN ISSUE — Plex + Intel Arc HW transcoding is currently broken: Plex's bundled "
+        "iHD_drv_video.so (musl-compiled) references C23 glibc symbols not present in libgcompat.so.0. "
+        "GPU: 8086:7D55 (Meteor Lake Arc). If any Plex update is listed, scan its changelog for "
+        "Intel Arc, VA-API, musl, iHD, or C23 — and flag prominently if a fix is present.\n\n"
+    )
+    prompt = (
+        "You are the software intelligence desk editor for a homelab newspaper.\n\n"
+        + ctx_block
+        + plex_flag
+        + "Write 2–6 newspaper articles summarising the available software updates below.\n\n"
+        "Rules:\n"
+        "- Lead with security patches and kernel updates (most urgent).\n"
+        "- Group related items: multiple *arr app updates = 1 article; Docker rebuilds = 1 article.\n"
+        "- If everything is current, write a single brief 'All Systems Current' article.\n"
+        "- Name specific packages and version numbers in blurbs.\n"
+        "- Blurbs: 2 sentences, AP wire style, specific and factual.\n"
+        "- Assign sections: 'City Hall' (app/container updates), 'Public Safety' (security/CVE),\n"
+        "  'Weather' (system/kernel), 'Arts & Entertainment' (Plex/media), 'Public Works' (DNS/network).\n"
+        "- Output ONLY a valid JSON array. No markdown, no explanation.\n"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
+        f"SOFTWARE UPDATE STATUS:\n{situation}"
+    )
+    try:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+            resp = await client.post(
+                f"{OLLAMA_URL}/api/chat",
+                json={
+                    "model": OLLAMA_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "stream": False,
+                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 2000},
+                },
+            )
+            resp.raise_for_status()
+            content = resp.json()["message"]["content"].strip()
+            content = re.sub(r"^```(?:json)?\n?", "", content)
+            content = re.sub(r"\n?```$", "", content.strip())
+            articles = None
+            try:
+                articles = json.loads(content)
+            except json.JSONDecodeError:
+                pass
+            if not isinstance(articles, list):
+                m = re.search(r'\[[\s\S]*\]', content)
+                if m:
+                    try:
+                        articles = json.loads(m.group(0))
+                    except json.JSONDecodeError:
+                        pass
+            if isinstance(articles, list):
+                valid = _validate_articles(articles, max_count=10)
+                if valid:
+                    return valid
+    except Exception as e:
+        log.warning("generate_homelab_intel failed (%s): %s", type(e).__name__, e)
+    return None
+
+
 # ── GitHub release notes ──────────────────────────────────────────────────────
 
 async def fetch_github_release_notes(source_url: str) -> Optional[tuple[str, str]]:
@@ -2220,6 +2334,8 @@ def nav_bar(active: str) -> str:
         + " &nbsp;&middot;&nbsp; "
         + _item("/current", "Current Events", "current")
         + " &nbsp;&middot;&nbsp; "
+        + _item("/wire", "Wire Reports", "wire")
+        + " &nbsp;&middot;&nbsp; "
         + _item("/blotter", "Police Blotter", "blotter")
         + " &nbsp;&middot;&nbsp; "
         + _item("/archive", "Archive", "archive")
@@ -2262,6 +2378,18 @@ def masthead_archive(date_str: str) -> str:
         '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
         f'<div class="mast-meta">Edition for {_h(date_str)}</div>'
+        '<hr class="rule-sng" style="margin-top:10px"></header>'
+    )
+
+
+def masthead_wire(checked_at: str) -> str:
+    return (
+        '<header class="mast"><hr class="rule-dbl">'
+        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        '<div class="mast-sub">Wire Reports &mdash; Software Intelligence Desk</div>'
+        '<hr class="rule-sng" style="margin:10px 0">'
+        f'<div class="mast-meta">Last checked {_h(checked_at)}'
+        f' &nbsp;&middot;&nbsp; Updates every {UPDATE_INTERVAL // 60}m</div>'
         '<hr class="rule-sng" style="margin-top:10px"></header>'
     )
 
