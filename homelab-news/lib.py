@@ -30,13 +30,12 @@ OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
-MAX_ARCHIVE_DAYS = int(os.getenv("MAX_ARCHIVE_DAYS", "90"))
 PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
-NODE_EXPORTER_INSTANCE = os.getenv("NODE_EXPORTER_INSTANCE", "traefik.hirschnet:9100")
+NODE_EXPORTER_INSTANCE = os.getenv("NODE_EXPORTER_INSTANCE", "")
 KOPIA_URL        = os.getenv("KOPIA_URL", "https://kopia-webui:5151")
 KOPIA_USER       = os.getenv("KOPIA_USER", "admin")
 KOPIA_PASS       = os.getenv("KOPIA_PASS", "")
-BESZEL_URL       = os.getenv("BESZEL_URL", "http://beszel.hirschnet:8090")
+BESZEL_URL       = os.getenv("BESZEL_URL", "")
 BESZEL_EMAIL     = os.getenv("BESZEL_EMAIL", "")
 BESZEL_PASS      = os.getenv("BESZEL_PASS", "")
 TAUTULLI_URL     = os.getenv("TAUTULLI_URL", "http://tautulli:8181")
@@ -54,16 +53,16 @@ UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
 PERIODIC_FILE      = os.path.join(DATA_DIR, "periodic.json")
 HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
 
-PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "root@pve.hirschnet")
-TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "truenas_admin@smsf.hirschnet")
+PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
+TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
 ADGUARD_URLS: list[tuple[str, str]] = [
-    (os.getenv("ADGUARD_PRIMARY_URL", "http://dns.hirschnet"),      "Primary DNS"),
-    (os.getenv("ADGUARD_KIDS_URL",    "http://dns.kids.hirschnet"),  "Kids DNS"),
+    (os.getenv("ADGUARD_PRIMARY_URL", ""), "Primary DNS"),
+    (os.getenv("ADGUARD_KIDS_URL",    ""), "Kids DNS"),
 ]
-PLEX_LXC_ID         = os.getenv("PLEX_LXC_ID",         "104")
-HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "http://homeassistant.iot.hirschnet:8123")
+PLEX_LXC_ID         = os.getenv("PLEX_LXC_ID",         "")
+HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "")
 HOMEASSISTANT_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
-BESZEL_SSH_HOST     = os.getenv("BESZEL_SSH_HOST",     "nat@beszel.hirschnet")
+BESZEL_SSH_HOST     = os.getenv("BESZEL_SSH_HOST",     "")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
@@ -616,7 +615,7 @@ async def check_docker_logs(
     for i in all_issues:
         i["count"] = all_seen[i.pop("_key")]
     all_issues = _group_by_ip(all_issues)
-    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:60]
+    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:500]
 
 # ── Loki log fetching ─────────────────────────────────────────────────────────
 
@@ -702,7 +701,7 @@ async def check_loki(
     for i in all_issues:
         i["count"] = all_seen[i.pop("_key")]
     all_issues = _group_by_ip(all_issues)
-    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:60]
+    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:500]
 
 # ── fail2ban ban tracking ─────────────────────────────────────────────────────
 
