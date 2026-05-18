@@ -9,7 +9,7 @@ A self-hosted daily intelligence digest for your homelab, rendered as a newspape
 | **Front Page** | Full-day edition — Docker + Loki logs from midnight to now, LLM-generated articles | Hourly |
 | **Current Events** | Rolling 6-hour window, same sources | Every 15 min |
 | **Police Blotter** | All active Cloudflare-blocked IPs with geo/ASN/abuse intel, attack categories, probe paths | 60s live fetch |
-| **Archive** | Daily snapshots going back as far as you've backfilled | — |
+| **Archive** | Daily snapshots, infinite retention, grouped by month | — |
 | **Trends** | LLM-synthesised weekly, monthly, and yearly digests identifying patterns across periods | — |
 
 Articles are grouped into six sections: **City Hall** (container health, updates), **Public Safety** (bans, scanners), **Weather** (UPS/power), **City Archives** (backups), **Arts & Entertainment** (media pipeline), and **Public Works** (DNS, networking). The most important article of the day is promoted to a full-width **Lead Story**.
@@ -39,23 +39,27 @@ Data is persisted to `/data` (bind-mounted from the host):
 
 ```
 data/
-  archive.json        # daily editions (90-day rolling window)
-  periodic.json       # weekly/monthly/yearly digests
-  context.md          # optional homelab context fed to the LLM
-  ip_intel.json       # geo/ASN/abuse cache (7-day TTL)
+  today.json            # current front-page edition
+  rolling.json          # current rolling edition
+  archive/              # one YYYY-MM-DD.json per day, infinite retention
+    index.json          # lightweight index (date, headline, issue count) for fast listing
+  periodic.json         # weekly/monthly/yearly digests
+  context.md            # optional homelab context fed to the LLM
+  ip_intel.json         # geo/ASN/abuse cache (7-day TTL)
 ```
 
 ## Configuration
 
 All configuration is via environment variables. Set them in your `docker-compose.yml` or `.env` file.
 
-### Required
+### Core
 
-| Variable | Description |
-|----------|-------------|
-| `OLLAMA_URL` | Ollama API base URL (default: `http://ollama:11434`) |
-| `OLLAMA_MODEL` | Model to use (default: `gemma4:e4b`) |
-| `LOKI_URL` | Loki HTTP API base URL (default: `http://loki:3100`) |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SITE_NAME` | Publication name shown in the masthead and page title | `Homelab News` |
+| `OLLAMA_URL` | Ollama API base URL | `http://ollama:11434` |
+| `OLLAMA_MODEL` | Model to use | `gemma4:e4b` |
+| `LOKI_URL` | Loki HTTP API base URL | `http://loki:3100` |
 
 ### Docker / container health
 
@@ -69,8 +73,8 @@ All configuration is via environment variables. Set them in your `docker-compose
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `PROMETHEUS_URL` | Prometheus HTTP API base URL | `http://prometheus:9090` |
-| `NODE_EXPORTER_INSTANCE` | Node exporter instance label for disk checks | `hostname:9100` |
-| `BESZEL_URL` | Beszel PocketBase URL for host health data | `http://beszel:8090` |
+| `NODE_EXPORTER_INSTANCE` | Node exporter instance label used for disk/load checks | — |
+| `BESZEL_URL` | Beszel PocketBase URL for host health data | — |
 | `BESZEL_EMAIL` | Beszel login email | — |
 | `BESZEL_PASS` | Beszel login password | — |
 | `KOPIA_URL` | Kopia WebUI URL for backup health | `https://kopia-webui:5151` |
@@ -78,14 +82,44 @@ All configuration is via environment variables. Set them in your `docker-compose
 | `KOPIA_PASS` | Kopia server password | — |
 | `TAUTULLI_URL` | Tautulli base URL for Plex activity | `http://tautulli:8181` |
 | `TAUTULLI_KEY` | Tautulli API key | — |
+| `HOMEASSISTANT_URL` | Home Assistant base URL | — |
+| `HOMEASSISTANT_TOKEN` | Home Assistant long-lived access token | — |
+
+### Remote SSH checks (optional)
+
+These enable OS-level update checks via `midclt` / `apt` over SSH. The SSH key must be authorised on the target hosts.
+
+| Variable | Description |
+|----------|-------------|
+| `PVE_SSH_HOST` | SSH target for Proxmox VE apt update checks (e.g. `root@pve.local`) |
+| `TRUENAS_SSH_HOST` | SSH target for TrueNAS SCALE OS update checks (e.g. `admin@truenas.local`) |
+| `BESZEL_SSH_HOST` | SSH target for reading the Beszel container image version (e.g. `user@beszel.local`) |
+| `PLEX_LXC_ID` | Proxmox LXC container ID hosting Plex — used to fetch the Plex version via PVE API |
+
+### DNS / AdGuard (optional)
+
+| Variable | Description |
+|----------|-------------|
+| `ADGUARD_PRIMARY_URL` | AdGuard Home base URL for the primary DNS instance |
+| `ADGUARD_KIDS_URL` | AdGuard Home base URL for a secondary (e.g. filtered) DNS instance |
 
 ### Police blotter / IP intel (optional)
 
 | Variable | Description |
 |----------|-------------|
-| `ABUSEIPDB_KEY` | [AbuseIPDB](https://www.abuseipdb.com/) API key — enables abuse confidence scores on the blotter. IPs are geo/ASN enriched via ip-api.com regardless. |
+| `ABUSEIPDB_KEY` | [AbuseIPDB](https://www.abuseipdb.com/) API key — enables abuse confidence scores on the blotter |
+| `CROWDSEC_KEY` | [CrowdSec](https://www.crowdsec.net/) CTI API key — enriches blotter IPs with threat intelligence |
+
+IPs are geo/ASN enriched via ip-api.com regardless of whether these keys are set.
 
 The blotter reads ban state from `cf-fail2ban`'s state file (`traefik/monitor/fail2ban-state.json`). If that file is absent it falls back to reconstructing bans from the Traefik access log.
+
+### Notifications (optional)
+
+| Variable | Description |
+|----------|-------------|
+| `GOTIFY_URL` | Gotify base URL — enables push notifications for critical update findings |
+| `GOTIFY_TOKEN` | Gotify app token |
 
 ### GitHub (optional)
 
@@ -124,9 +158,6 @@ docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01
 # Preview without writing anything
 docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01 --dry-run
 
-# Backfill archive only (no trend digests)
-docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01
-
 # Also regenerate weekly/monthly/yearly trend digests
 docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01 --trends
 
@@ -149,11 +180,6 @@ docker exec lab-monitor supervisorctl status
 
 # View logs
 docker compose logs -f lab-monitor
-
-# Inject ABUSEIPDB_KEY without a container restart
-docker exec lab-monitor sed -i 's/\[program:web\]/[program:web]\nenvironment=ABUSEIPDB_KEY="your-key-here"/' /app/supervisord.conf
-docker exec lab-monitor supervisorctl update
-docker exec lab-monitor supervisorctl restart web
 ```
 
 ## First-run setup
