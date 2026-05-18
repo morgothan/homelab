@@ -1270,6 +1270,8 @@ services:
       - MAX_ARCHIVE_DAYS=400
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
       - CROWDSEC_KEY=${CROWDSEC_KEY}    # optional: enables CrowdSec CTI on police blotter
+      - GOTIFY_URL=${GOTIFY_URL}        # optional: push notifications for critical update findings
+      - GOTIFY_TOKEN=${GOTIFY_TOKEN}    # optional: Gotify app token
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
     labels:

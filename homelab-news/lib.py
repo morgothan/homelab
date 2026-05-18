@@ -73,6 +73,11 @@ IP_INTEL_FILE  = os.path.join(DATA_DIR, "ip_intel.json")
 IP_INTEL_TTL   = 7 * 86400  # re-query after 7 days
 ABUSEIPDB_KEY  = os.getenv("ABUSEIPDB_KEY", "")
 CROWDSEC_KEY   = os.getenv("CROWDSEC_KEY", "")
+GOTIFY_URL     = os.getenv("GOTIFY_URL", "")
+GOTIFY_TOKEN   = os.getenv("GOTIFY_TOKEN", "")
+
+ARCHIVE_DIR   = os.path.join(DATA_DIR, "archive")
+ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
 
 
 def _load_context() -> str:
@@ -80,7 +85,8 @@ def _load_context() -> str:
     Returns empty string if the file doesn't exist."""
     try:
         with open(CONTEXT_FILE) as f:
-            return f.read().strip()
+            ctx = f.read().strip()
+        return _sanitize_for_llm(ctx, max_len=3000)
     except FileNotFoundError:
         return ""
     except Exception as e:
@@ -115,30 +121,33 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
     dirty = False
 
     if stale:
-        # ── ip-api.com batch (free, no key, up to 100 IPs per request) ──────
+        # ── ip-api.com batch (free, no key, max 100 IPs per request) ─────────
+        _IPAPI_CHUNK = 100
         try:
             async with httpx.AsyncClient(timeout=10) as client:
-                resp = await client.post(
-                    "http://ip-api.com/batch",
-                    params={"fields": "status,country,countryCode,city,isp,org,as,query"},
-                    json=[{"query": ip} for ip in stale],
-                )
-                resp.raise_for_status()
-                for item in resp.json():
-                    ip = item.get("query", "")
-                    if ip and item.get("status") == "success":
-                        asn_raw = item.get("as", "")          # e.g. "AS12345 Some Org"
-                        asn_num = asn_raw.split()[0] if asn_raw else ""
-                        org     = item.get("org") or item.get("isp", "")
-                        cache[ip] = {
-                            "_ts":          now,
-                            "country":      item.get("country", ""),
-                            "country_code": item.get("countryCode", ""),
-                            "city":         item.get("city", ""),
-                            "isp":          item.get("isp", ""),
-                            "org":          org,
-                            "asn":          asn_num,
-                        }
+                for chunk_start in range(0, len(stale), _IPAPI_CHUNK):
+                    chunk = stale[chunk_start:chunk_start + _IPAPI_CHUNK]
+                    resp = await client.post(
+                        "http://ip-api.com/batch",
+                        params={"fields": "status,country,countryCode,city,isp,org,as,query"},
+                        json=[{"query": ip} for ip in chunk],
+                    )
+                    resp.raise_for_status()
+                    for item in resp.json():
+                        ip = item.get("query", "")
+                        if ip and item.get("status") == "success":
+                            asn_raw = item.get("as", "")      # e.g. "AS12345 Some Org"
+                            asn_num = asn_raw.split()[0] if asn_raw else ""
+                            org     = item.get("org") or item.get("isp", "")
+                            cache[ip] = {
+                                "_ts":          now,
+                                "country":      item.get("country", ""),
+                                "country_code": item.get("countryCode", ""),
+                                "city":         item.get("city", ""),
+                                "isp":          item.get("isp", ""),
+                                "org":          org,
+                                "asn":          asn_num,
+                            }
             dirty = True
         except Exception as e:
             log.warning("ip-api.com enrichment failed: %s", e)
@@ -258,7 +267,11 @@ _INJECTION_PATTERNS = re.compile(
     r'|you\s+are\s+now\s+(?:a\s+)?(?:an?\s+)?(?:\w+\s+)*(?:assistant|bot|model|AI)'
     r'|\[INST\]|\[/INST\]|<\|im_start\|>|<\|im_end\|>|</?s>'
     r'|\]\s*output\s*\[|output\s+json\s*:|output\s+only\s+json'
-    r'|\[\{"headline"|\[\s*\{\s*"headline"',
+    r'|\[\{"headline"|\[\s*\{\s*"headline"'
+    # Gemma and generic role-turn delimiters (prompt injection via turn-switching)
+    r'|<start_of_turn>|<end_of_turn>'
+    r'|<\|user\|>|<\|assistant\|>|<\|system\|>'
+    '\n\nHuman:|\n\nAssistant:',   # non-raw so \n matches actual newlines
     re.I,
 )
 
@@ -386,6 +399,20 @@ def save_json(path: str, data) -> None:
         os.replace(tmp, path)
     except Exception as e:
         log.warning("Failed to save %s: %s", path, e)
+
+async def notify_gotify(title: str, message: str, priority: int = 5) -> None:
+    if not GOTIFY_URL or not GOTIFY_TOKEN:
+        return
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            await client.post(
+                f"{GOTIFY_URL}/message",
+                headers={"X-Gotify-Key": GOTIFY_TOKEN},
+                json={"title": title, "message": message, "priority": priority},
+            )
+    except Exception as e:
+        log.warning("Gotify notification failed: %s", e)
+
 
 # ── Log filtering ─────────────────────────────────────────────────────────────
 
@@ -1023,6 +1050,132 @@ def _prom_val(result: list[dict], default: float = 0.0) -> float:
     return default
 
 
+async def _check_ups(client: httpx.AsyncClient) -> tuple[list, list]:
+    alerts, info = [], []
+    charge_r, runtime_r, load_r, ob_r, lb_r = await asyncio.gather(
+        _prom_query(client, "nut_battery_charge"),
+        _prom_query(client, "nut_battery_runtime_seconds"),
+        _prom_query(client, "nut_load"),
+        _prom_query(client, 'nut_ups_status{status="OB"}'),
+        _prom_query(client, 'nut_ups_status{status="LB"}'),
+    )
+    if not charge_r:
+        return alerts, info
+    charge    = _prom_val(charge_r)
+    runtime_m = int(_prom_val(runtime_r) / 60)
+    load      = _prom_val(load_r)
+    on_batt   = _prom_val(ob_r) == 1.0
+    low_bat   = _prom_val(lb_r) == 1.0
+    ups_name  = charge_r[0]["metric"].get("ups", "ups")
+    info.append(
+        f"UPS ({ups_name}): {'ON BATTERY — ' if on_batt else ''}"
+        f"battery {charge*100:.0f}%, runtime {runtime_m}m, load {load*100:.0f}%"
+    )
+    if on_batt:
+        alerts.append(
+            f"UPS ON BATTERY: {ups_name} running on battery power, "
+            f"{charge*100:.0f}% charge, {runtime_m}m runtime remaining"
+        )
+    elif low_bat:
+        alerts.append(f"UPS LOW BATTERY: {ups_name} at {charge*100:.0f}%, {runtime_m}m remaining")
+    elif charge < 0.5:
+        alerts.append(f"UPS WARNING: {ups_name} battery at {charge*100:.0f}%")
+    return alerts, info
+
+
+async def _check_disk(client: httpx.AsyncClient) -> tuple[list, list]:
+    alerts, info = [], []
+    host = NODE_EXPORTER_INSTANCE.split(":")[0]
+    avail_r, size_r = await asyncio.gather(
+        _prom_query(client,
+            f"node_filesystem_avail_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
+        _prom_query(client,
+            f"node_filesystem_size_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
+    )
+    avail_by_mp = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in avail_r}
+    size_by_mp  = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in size_r}
+    for mp, avail in avail_by_mp.items():
+        size     = size_by_mp.get(mp, 1)
+        avail_gb = avail / 1e9
+        used_pct = (1 - avail / size) * 100 if size else 0
+        info.append(f"Disk {mp} ({host}): {avail_gb:.1f} GB free ({used_pct:.0f}% used)")
+        if avail_gb < 5:
+            alerts.append(
+                f"DISK CRITICAL: {mp} on {host} has {avail_gb:.1f} GB free ({used_pct:.0f}% used)"
+            )
+        elif avail_gb < 15:
+            alerts.append(
+                f"DISK WARNING: {mp} on {host} at {used_pct:.0f}% used, {avail_gb:.1f} GB remaining"
+            )
+    return alerts, info
+
+
+async def _check_tls_certs(client: httpx.AsyncClient) -> tuple[list, list]:
+    alerts, info = [], []
+    certs_r  = await _prom_query(client, "traefik_tls_certs_not_after")
+    now_ts   = time.time()
+    seen_cns: set[str] = set()
+    for r in sorted(certs_r, key=lambda x: float(x["value"][1])):
+        days_left = (float(r["value"][1]) - now_ts) / 86400
+        if days_left >= 21:
+            continue
+        cn   = r["metric"].get("cn", "unknown")
+        sans = r["metric"].get("sans", "")
+        key  = f"{cn}|{sans}"
+        if key in seen_cns:
+            continue
+        seen_cns.add(key)
+        label = cn if not sans or cn == sans else f"{cn} ({sans})"
+        if days_left < 7:
+            alerts.append(f"CERT CRITICAL: {label} expires in {days_left:.0f} days")
+        else:
+            alerts.append(f"CERT WARNING: {label} expires in {days_left:.0f} days")
+    return alerts, info
+
+
+async def _check_adguard_metrics(client: httpx.AsyncClient) -> tuple[list, list]:
+    alerts, info = [], []
+    queries_r, blocked_r, prot_r = await asyncio.gather(
+        _prom_query(client, "adguard_queries"),
+        _prom_query(client, "adguard_queries_blocked"),
+        _prom_query(client, "adguard_protection_enabled"),
+    )
+    for r in prot_r:
+        if float(r["value"][1]) == 0:
+            alerts.append(f"ADGUARD CRITICAL: protection disabled on {r['metric'].get('server','adguard')}")
+    queries_by = {r["metric"]["server"]: float(r["value"][1]) for r in queries_r}
+    blocked_by = {r["metric"]["server"]: float(r["value"][1]) for r in blocked_r}
+    for server, total in sorted(queries_by.items(), key=lambda x: -x[1]):
+        blocked   = blocked_by.get(server, 0)
+        block_pct = (blocked / total * 100) if total > 0 else 0
+        label     = server.replace("http://", "").replace("https://", "")
+        info.append(f"AdGuard ({label}): {total/1e6:.1f}M lifetime queries, {block_pct:.1f}% blocked")
+    return alerts, info
+
+
+async def _check_media_pipeline(client: httpx.AsyncClient) -> tuple[list, list]:
+    alerts, info = [], []
+    sq_r, se_r, sm_r, rq_r, re_r, rm_r = await asyncio.gather(
+        _prom_query(client, "sonarr_queue_count"),
+        _prom_query(client, "sonarr_queue_error"),
+        _prom_query(client, "sonarr_missing_episodes"),
+        _prom_query(client, "radarr_queue_count"),
+        _prom_query(client, "radarr_queue_error"),
+        _prom_query(client, "radarr_missing_movies"),
+    )
+    if sq_r:
+        sonarr_q, sonarr_err, sonarr_miss = int(_prom_val(sq_r)), int(_prom_val(se_r)), int(_prom_val(sm_r))
+        info.append(f"Sonarr: {sonarr_q} downloads in queue, {sonarr_err} errors, {sonarr_miss} missing episodes")
+        if sonarr_err > 0:
+            alerts.append(f"Sonarr: {sonarr_err} queue error(s)")
+    if rq_r:
+        radarr_q, radarr_err, radarr_miss = int(_prom_val(rq_r)), int(_prom_val(re_r)), int(_prom_val(rm_r))
+        info.append(f"Radarr: {radarr_q} downloads in queue, {radarr_err} errors, {radarr_miss} missing movies")
+        if radarr_err > 0:
+            alerts.append(f"Radarr: {radarr_err} queue error(s)")
+    return alerts, info
+
+
 async def check_prometheus() -> dict:
     """Query Prometheus for infrastructure health metrics.
 
@@ -1030,155 +1183,34 @@ async def check_prometheus() -> dict:
     info lines are always-on statistics for the LLM prompt context.
     """
     out: dict = {"alerts": [], "info": []}
-
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            # ── UPS ──────────────────────────────────────────────────────────
-            (charge_r, runtime_r, load_r,
-             ob_r, lb_r) = await asyncio.gather(
-                _prom_query(client, "nut_battery_charge"),
-                _prom_query(client, "nut_battery_runtime_seconds"),
-                _prom_query(client, "nut_load"),
-                _prom_query(client, 'nut_ups_status{status="OB"}'),
-                _prom_query(client, 'nut_ups_status{status="LB"}'),
+            results = await asyncio.gather(
+                _check_ups(client),
+                _check_disk(client),
+                _check_tls_certs(client),
+                _check_adguard_metrics(client),
+                _check_media_pipeline(client),
+                return_exceptions=True,
             )
-            charge  = _prom_val(charge_r)
-            runtime_s = _prom_val(runtime_r)
-            load    = _prom_val(load_r)
-            on_batt = _prom_val(ob_r) == 1.0
-            low_bat = _prom_val(lb_r) == 1.0
-            ups_name = charge_r[0]["metric"].get("ups", "ups") if charge_r else "ups"
-
-            if charge_r:
-                runtime_m = int(runtime_s / 60)
-                out["info"].append(
-                    f"UPS ({ups_name}): {'ON BATTERY — ' if on_batt else ''}"
-                    f"battery {charge*100:.0f}%, runtime {runtime_m}m, load {load*100:.0f}%"
-                )
-                if on_batt:
-                    out["alerts"].append(
-                        f"UPS ON BATTERY: {ups_name} running on battery power, "
-                        f"{charge*100:.0f}% charge, {runtime_m}m runtime remaining"
-                    )
-                elif low_bat:
-                    out["alerts"].append(
-                        f"UPS LOW BATTERY: {ups_name} at {charge*100:.0f}%, {runtime_m}m remaining"
-                    )
-                elif charge < 0.5:
-                    out["alerts"].append(
-                        f"UPS WARNING: {ups_name} battery at {charge*100:.0f}%"
-                    )
-
-            # ── Disk ─────────────────────────────────────────────────────────
-            avail_r, size_r = await asyncio.gather(
-                _prom_query(client,
-                    f"node_filesystem_avail_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
-                _prom_query(client,
-                    f"node_filesystem_size_bytes{{instance='{NODE_EXPORTER_INSTANCE}',fstype='ext4'}}"),
-            )
-            avail_by_mp = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in avail_r}
-            size_by_mp  = {r["metric"]["mountpoint"]: float(r["value"][1]) for r in size_r}
-            for mp, avail in avail_by_mp.items():
-                size = size_by_mp.get(mp, 1)
-                avail_gb  = avail / 1e9
-                used_pct  = (1 - avail / size) * 100 if size else 0
-                out["info"].append(
-                    f"Disk {mp} ({NODE_EXPORTER_INSTANCE.split(':')[0]}): "
-                    f"{avail_gb:.1f} GB free ({used_pct:.0f}% used)"
-                )
-                if avail_gb < 5:
-                    out["alerts"].append(
-                        f"DISK CRITICAL: {mp} on {NODE_EXPORTER_INSTANCE.split(':')[0]} "
-                        f"has {avail_gb:.1f} GB free ({used_pct:.0f}% used)"
-                    )
-                elif avail_gb < 15:
-                    out["alerts"].append(
-                        f"DISK WARNING: {mp} on {NODE_EXPORTER_INSTANCE.split(':')[0]} "
-                        f"at {used_pct:.0f}% used, {avail_gb:.1f} GB remaining"
-                    )
-
-            # ── TLS certs ────────────────────────────────────────────────────
-            certs_r = await _prom_query(client, "traefik_tls_certs_not_after")
-            now_ts  = time.time()
-            seen_cns: set[str] = set()
-            for r in sorted(certs_r, key=lambda x: float(x["value"][1])):
-                days_left = (float(r["value"][1]) - now_ts) / 86400
-                if days_left >= 21:
-                    continue
-                cn   = r["metric"].get("cn", "unknown")
-                sans = r["metric"].get("sans", "")
-                key  = f"{cn}|{sans}"
-                if key in seen_cns:
-                    continue
-                seen_cns.add(key)
-                label = cn if not sans or cn == sans else f"{cn} ({sans})"
-                if days_left < 7:
-                    out["alerts"].append(f"CERT CRITICAL: {label} expires in {days_left:.0f} days")
-                else:
-                    out["alerts"].append(f"CERT WARNING: {label} expires in {days_left:.0f} days")
-
-            # ── AdGuard DNS ──────────────────────────────────────────────────
-            queries_r, blocked_r, prot_r = await asyncio.gather(
-                _prom_query(client, "adguard_queries"),
-                _prom_query(client, "adguard_queries_blocked"),
-                _prom_query(client, "adguard_protection_enabled"),
-            )
-            for r in prot_r:
-                if float(r["value"][1]) == 0:
-                    server = r["metric"].get("server", "adguard")
-                    out["alerts"].append(f"ADGUARD CRITICAL: protection disabled on {server}")
-
-            queries_by  = {r["metric"]["server"]: float(r["value"][1]) for r in queries_r}
-            blocked_by  = {r["metric"]["server"]: float(r["value"][1]) for r in blocked_r}
-            for server, total in sorted(queries_by.items(), key=lambda x: -x[1]):
-                blocked   = blocked_by.get(server, 0)
-                block_pct = (blocked / total * 100) if total > 0 else 0
-                label     = server.replace("http://", "").replace("https://", "")
-                out["info"].append(
-                    f"AdGuard ({label}): {total/1e6:.1f}M lifetime queries, {block_pct:.1f}% blocked"
-                )
-
-            # ── Media pipeline ────────────────────────────────────────────────
-            (sq_r, se_r, sm_r,
-             rq_r, re_r, rm_r) = await asyncio.gather(
-                _prom_query(client, "sonarr_queue_count"),
-                _prom_query(client, "sonarr_queue_error"),
-                _prom_query(client, "sonarr_missing_episodes"),
-                _prom_query(client, "radarr_queue_count"),
-                _prom_query(client, "radarr_queue_error"),
-                _prom_query(client, "radarr_missing_movies"),
-            )
-            sonarr_q    = int(_prom_val(sq_r))
-            sonarr_err  = int(_prom_val(se_r))
-            sonarr_miss = int(_prom_val(sm_r))
-            radarr_q    = int(_prom_val(rq_r))
-            radarr_err  = int(_prom_val(re_r))
-            radarr_miss = int(_prom_val(rm_r))
-
-            if sq_r:
-                out["info"].append(
-                    f"Sonarr: {sonarr_q} downloads in queue, "
-                    f"{sonarr_err} errors, {sonarr_miss} missing episodes"
-                )
-            if rq_r:
-                out["info"].append(
-                    f"Radarr: {radarr_q} downloads in queue, "
-                    f"{radarr_err} errors, {radarr_miss} missing movies"
-                )
-            if sonarr_err > 0:
-                out["alerts"].append(f"Sonarr: {sonarr_err} queue error(s)")
-            if radarr_err > 0:
-                out["alerts"].append(f"Radarr: {radarr_err} queue error(s)")
-
+        for result in results:
+            if isinstance(result, tuple):
+                alerts, info = result
+                out["alerts"].extend(alerts)
+                out["info"].extend(info)
+            else:
+                log.warning("Prometheus sub-check raised: %s", result)
     except Exception as e:
         log.warning("check_prometheus failed: %s", e)
-
     return out
 
 
 # ── Kopia backup health ───────────────────────────────────────────────────────
 
 def _kopia_ssl_ctx() -> ssl.SSLContext:
+    # Kopia uses a self-signed cert on its WebUI (kopia-webui:5151).
+    # Verification is intentionally disabled: this connection is Docker-internal
+    # on the proxy network only, so MITM risk is negligible.
     ctx = ssl.create_default_context()
     ctx.check_hostname = False
     ctx.verify_mode = ssl.CERT_NONE
@@ -1596,32 +1628,8 @@ async def generate_newspaper(
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"].strip()
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content.strip())
-
-            articles = None
-            try:
-                articles = json.loads(content)
-            except json.JSONDecodeError:
-                pass
-            if not isinstance(articles, list):
-                m = re.search(r'\[[\s\S]*\]', content)
-                if m:
-                    try:
-                        articles = json.loads(m.group(0))
-                    except json.JSONDecodeError:
-                        pass
-            if not isinstance(articles, list):
-                articles = []
-                for m in re.finditer(r'\{[^{}]+\}', content, re.DOTALL):
-                    try:
-                        obj = json.loads(m.group(0))
-                        if "headline" in obj and "blurb" in obj:
-                            articles.append(obj)
-                    except json.JSONDecodeError:
-                        pass
-
-            if isinstance(articles, list):
+            articles = _parse_llm_json(content)
+            if articles:
                 valid = _validate_articles(articles)
                 if valid:
                     return valid
@@ -1748,27 +1756,43 @@ async def generate_periodic_summary(
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"].strip()
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content.strip())
-            articles = None
-            try:
-                articles = json.loads(content)
-            except json.JSONDecodeError:
-                pass
-            if not isinstance(articles, list):
-                m = re.search(r'\[[\s\S]*\]', content)
-                if m:
-                    try:
-                        articles = json.loads(m.group(0))
-                    except json.JSONDecodeError:
-                        pass
-            if isinstance(articles, list):
+            articles = _parse_llm_json(content)
+            if articles:
                 valid = _validate_articles(articles, max_count=10)
                 if valid:
                     return valid
     except Exception as e:
         log.warning("Periodic summary failed (%s): %s", type(e).__name__, e)
     return None
+
+
+def _parse_llm_json(content: str) -> list:
+    """Parse LLM output as a JSON array using three progressively looser strategies."""
+    content = re.sub(r"^```(?:json)?\n?", "", content)
+    content = re.sub(r"\n?```$", "", content.strip())
+    try:
+        result = json.loads(content)
+        if isinstance(result, list):
+            return result
+    except json.JSONDecodeError:
+        pass
+    m = re.search(r'\[[\s\S]*\]', content)
+    if m:
+        try:
+            result = json.loads(m.group(0))
+            if isinstance(result, list):
+                return result
+        except json.JSONDecodeError:
+            pass
+    articles = []
+    for m in re.finditer(r'\{[^{}]+\}', content, re.DOTALL):
+        try:
+            obj = json.loads(m.group(0))
+            if "headline" in obj and "blurb" in obj:
+                articles.append(obj)
+        except json.JSONDecodeError:
+            pass
+    return articles
 
 
 async def llm_changelog_analysis(container: str, image: str, tag: str, notes: str) -> Optional[str]:
@@ -1896,27 +1920,80 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
             )
             resp.raise_for_status()
             content = resp.json()["message"]["content"].strip()
-            content = re.sub(r"^```(?:json)?\n?", "", content)
-            content = re.sub(r"\n?```$", "", content.strip())
-            articles = None
-            try:
-                articles = json.loads(content)
-            except json.JSONDecodeError:
-                pass
-            if not isinstance(articles, list):
-                m = re.search(r'\[[\s\S]*\]', content)
-                if m:
-                    try:
-                        articles = json.loads(m.group(0))
-                    except json.JSONDecodeError:
-                        pass
-            if isinstance(articles, list):
+            articles = _parse_llm_json(content)
+            if articles:
                 valid = _validate_articles(articles, max_count=10)
                 if valid:
                     return valid
     except Exception as e:
         log.warning("generate_homelab_intel failed (%s): %s", type(e).__name__, e)
     return None
+
+
+# ── Shared news-cycle worker ─────────────────────────────────────────────────
+
+async def run_news_cycle(since: datetime, target_file: str) -> None:
+    """Gather data, two-phase save (preserve existing newspaper), then run LLM.
+
+    Shared by today.py (since=midnight, target=TODAY_FILE) and rolling.py
+    (since=now-ROLLING_HOURS, target=ROLLING_FILE). The only difference between
+    those two workers is the time window and output path.
+    """
+    since_ts = int(since.timestamp())
+    log.info("run_news_cycle: %s → %s", since.strftime("%Y-%m-%d %H:%M UTC"), target_file)
+
+    (docker_issues, loki_issues, (bans, probes),
+     prometheus, kopia, beszel, tautulli) = await asyncio.gather(
+        check_docker_logs(since_ts=since_ts),
+        check_loki(start=since),
+        check_fail2ban_bans(),
+        check_prometheus(),
+        check_kopia(),
+        check_beszel(),
+        check_tautulli(),
+    )
+
+    # Phase 1: persist raw data immediately; keep the previous newspaper so the
+    # page stays readable while the LLM re-renders.
+    existing = load_json(target_file) or {}
+    save_json(target_file, {
+        "built_at":       datetime.now(timezone.utc).isoformat(),
+        "newspaper":      existing.get("newspaper"),
+        "docker_issues":  docker_issues,
+        "docker_analysis": existing.get("docker_analysis"),
+        "loki_issues":    loki_issues,
+        "loki_analysis":  existing.get("loki_analysis"),
+        "bans":           bans,
+    })
+
+    unhealthy, _, _ = await get_container_status_async()
+    unhealthy_names = [c.name for c in unhealthy]
+    updates_raw  = load_json(UPDATES_FILE) or {}
+    update_hosts = updates_raw.get("hosts", {})
+
+    # Phase 2: LLM calls — run analysis and newspaper in parallel.
+    (docker_analysis, loki_analysis), newspaper = await asyncio.gather(
+        asyncio.gather(
+            llm_analysis(docker_issues, "Docker container"),
+            llm_analysis(loki_issues,   "network/syslog (from Loki)"),
+        ),
+        generate_newspaper(
+            docker_issues, loki_issues, update_hosts, unhealthy_names,
+            bans, probes, prometheus, kopia, beszel, tautulli,
+        ),
+    )
+    log.info("run_news_cycle complete: %d articles, %d bans",
+             len(newspaper) if newspaper else 0, len(bans))
+
+    save_json(target_file, {
+        "built_at":       datetime.now(timezone.utc).isoformat(),
+        "newspaper":      newspaper or [],
+        "docker_issues":  docker_issues,
+        "docker_analysis": docker_analysis,
+        "loki_issues":    loki_issues,
+        "loki_analysis":  loki_analysis,
+        "bans":           bans,
+    })
 
 
 # ── GitHub release notes ──────────────────────────────────────────────────────

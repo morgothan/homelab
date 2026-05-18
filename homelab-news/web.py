@@ -1,17 +1,20 @@
 """Web server — reads /data/*.json and serves HTML. No LLM dependency."""
 
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
+from html import escape as _h
+
 from fastapi import FastAPI, Response
-from fastapi.responses import RedirectResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
-    TODAY_FILE, ROLLING_FILE, ARCHIVE_FILE, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
+    TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, get_container_status, check_fail2ban_bans, enrich_ips,
+    load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, log_card, containers_card, updates_card,
 )
@@ -20,6 +23,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+
+# Blotter cache — check_fail2ban_bans reads up to 60 MB of access log on every call.
+# Cache the result for BLOTTER_TTL seconds; bans change at most every few minutes.
+_blotter_cache: Optional[tuple[list, list, float]] = None  # (bans, probes, ts)
+BLOTTER_TTL = 60
 
 
 def _init_page() -> str:
@@ -67,7 +75,6 @@ def _status_bar(
     if n_unhealthy:
         parts.append(_dot("c-err", f"⚠ {n_unhealthy} unhealthy"))
     if n_updates:
-        from html import escape as _h
         tip = _h("\n".join(pending))
         parts.append(f'<span class="c-warn has-tip" data-tip="{tip}">{n_updates} image updates available</span>')
     else:
@@ -83,7 +90,7 @@ def _status_bar(
 async def index():
     today = load_json(TODAY_FILE)
     updates_raw = load_json(UPDATES_FILE) or {}
-    unhealthy, _, n_running = get_container_status()
+    unhealthy, _, n_running = await get_container_status_async()
     update_hosts = updates_raw.get("hosts", {})
     if updates_raw.get("checked_at"):
         update_hosts["_checked_at"] = updates_raw["checked_at"][11:16] + " UTC"
@@ -132,7 +139,7 @@ async def index():
 async def current_events():
     rolling = load_json(ROLLING_FILE)
     updates_raw = load_json(UPDATES_FILE) or {}
-    unhealthy, starting, n_running = get_container_status()
+    unhealthy, starting, n_running = await get_container_status_async()
     update_hosts = updates_raw.get("hosts", {})
     if updates_raw.get("checked_at"):
         update_hosts["_checked_at"] = updates_raw["checked_at"][11:16] + " UTC"
@@ -180,7 +187,6 @@ async def current_events():
 
 @app.get("/wire")
 async def wire_reports():
-    from html import escape as _h
     intel = load_json(HOMELAB_INTEL_FILE)
     updates_raw = load_json(UPDATES_FILE) or {}
     update_hosts = updates_raw.get("hosts", {})
@@ -278,7 +284,13 @@ async def wire_reports():
 
 @app.get("/blotter")
 async def blotter():
-    bans, _ = await check_fail2ban_bans()
+    global _blotter_cache
+    now = time.monotonic()
+    if _blotter_cache is None or now - _blotter_cache[2] > BLOTTER_TTL:
+        bans, probes = await check_fail2ban_bans()
+        _blotter_cache = (bans, probes, now)
+    else:
+        bans, probes, _ = _blotter_cache
     intel = await enrich_ips([b["ip"] for b in bans])
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     body = (
@@ -297,18 +309,17 @@ async def detailed():
 
 @app.get("/archive")
 async def archive_index():
-    archive = load_json(ARCHIVE_FILE) or []
+    import os as _os
+    index = load_json(ARCHIVE_INDEX) or []
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    if not archive:
+    if not index:
         content = '<div class="arch-empty">No archives yet &mdash; the first edition will appear tomorrow morning.</div>'
     else:
-        from html import escape as _h
         rows = []
-        for rec in archive:
-            d = rec["date"]
-            articles = rec.get("newspaper") or []
-            headline = _h(articles[0]["headline"]) if articles else '<span class="c-dim">No articles</span>'
-            n_issues = len(rec.get("docker_issues", [])) + len(rec.get("loki_issues", []))
+        for entry in index:
+            d = entry["date"]
+            headline = _h(entry["headline"]) if entry.get("headline") else '<span class="c-dim">No articles</span>'
+            n_issues = entry.get("n_issues", 0)
             rows.append(
                 f'<a class="arch-day" href="/archive/{_h(d)}">'
                 f'<span class="arch-date">{_h(d)}</span>'
@@ -324,15 +335,14 @@ async def archive_index():
 
 @app.get("/archive/{date_str}")
 async def archive_day(date_str: str):
+    import os as _os
     from datetime import datetime as _dt
     try:
         _dt.strptime(date_str, "%Y-%m-%d")
     except ValueError:
         return Response(content="Invalid date. Use YYYY-MM-DD.", status_code=400,
                         media_type="text/plain")
-    from html import escape as _h
-    archive = load_json(ARCHIVE_FILE) or []
-    rec = next((r for r in archive if r["date"] == date_str), None)
+    rec = load_json(_os.path.join(ARCHIVE_DIR, f"{date_str}.json"))
     if rec is None:
         return Response(content=f"No archive found for {date_str}.", status_code=404,
                         media_type="text/plain")
@@ -355,39 +365,38 @@ async def archive_day(date_str: str):
                     media_type="text/html; charset=utf-8")
 
 
+def _section(title: str, items: list[dict], label_key: str, empty_msg: str) -> str:
+    html = f'<div class="arch-section-head">{_h(title)}</div>'
+    if not items:
+        return html + f'<div class="np-pending">{_h(empty_msg)}</div>'
+    parts = []
+    for idx, item in enumerate(items):
+        label    = item.get(label_key, "")
+        articles = item.get("articles") or []
+        lead     = articles[0]["headline"] if articles else ""
+        count    = len(articles)
+        open_attr = " open" if idx == 0 else ""
+        parts.append(
+            f'<details class="arch-period"{open_attr}>'
+            f'<summary>'
+            f'<div class="arch-period-hd">'
+            f'<span class="arch-date">{_h(label)}</span>'
+            f'<span class="arch-meta">{count} article{"s" if count != 1 else ""}</span>'
+            f'</div>'
+            + (f'<div class="arch-period-lead">{_h(lead)}</div>' if lead else '')
+            + f'</summary>'
+            f'<div class="arch-period-body">{render_articles_html(articles)}</div>'
+            f'</details>'
+        )
+    return html + "".join(parts)
+
+
 @app.get("/trends")
 async def trends():
-    from html import escape as _h
     periodic = load_json(PERIODIC_FILE) or {}
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections: list[str] = []
-
-    def _section(title: str, items: list[dict], label_key: str, empty_msg: str) -> str:
-        html = f'<div class="arch-section-head">{_h(title)}</div>'
-        if not items:
-            return html + f'<div class="np-pending">{_h(empty_msg)}</div>'
-        parts = []
-        # JSON is stored newest-first; open the first (most recent) entry by default
-        for idx, item in enumerate(items):
-            label    = item.get(label_key, "")
-            articles = item.get("articles") or []
-            lead     = articles[0]["headline"] if articles else ""
-            count    = len(articles)
-            open_attr = " open" if idx == 0 else ""
-            parts.append(
-                f'<details class="arch-period"{open_attr}>'
-                f'<summary>'
-                f'<div class="arch-period-hd">'
-                f'<span class="arch-date">{_h(label)}</span>'
-                f'<span class="arch-meta">{count} article{"s" if count != 1 else ""}</span>'
-                f'</div>'
-                + (f'<div class="arch-period-lead">{_h(lead)}</div>' if lead else '')
-                + f'</summary>'
-                f'<div class="arch-period-body">{render_articles_html(articles)}</div>'
-                f'</details>'
-            )
-        return html + "".join(parts)
 
     sections.append(_section(
         "Annual Reports", periodic.get("yearly", []), "year",
@@ -417,3 +426,8 @@ async def favicon_svg():
 async def favicon_ico():
     return Response(content=_FAVICON_SVG, media_type="image/svg+xml",
                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/health")
+async def health():
+    return JSONResponse({"status": "ok", "ts": datetime.now(timezone.utc).isoformat()})
