@@ -29,6 +29,7 @@ SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 SITE_NAME        = os.getenv("SITE_NAME", "Homelab News")
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_NUM_GPU   = int(os.getenv("OLLAMA_NUM_GPU", "-1"))  # -1 = server decides
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
@@ -1444,6 +1445,12 @@ async def check_tautulli() -> dict:
 
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
+def _ollama_opts(**kwargs) -> dict:
+    """Merge caller-supplied options with the global OLLAMA_NUM_GPU override."""
+    if OLLAMA_NUM_GPU >= 0:
+        kwargs["num_gpu"] = OLLAMA_NUM_GPU
+    return kwargs
+
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
     if not issues:
         return None
@@ -1469,7 +1476,7 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 500},
+                    "options": _ollama_opts(num_ctx=4096, temperature=0.1, num_predict=500),
                 },
             )
             resp.raise_for_status()
@@ -1623,7 +1630,7 @@ async def generate_newspaper(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 2500},
+                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=2500),
                 },
             )
             resp.raise_for_status()
@@ -1751,7 +1758,7 @@ async def generate_periodic_summary(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 3000},
+                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=3000),
                 },
             )
             resp.raise_for_status()
@@ -1829,7 +1836,7 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 4096, "temperature": 0.1, "num_predict": 1500},
+                    "options": _ollama_opts(num_ctx=4096, temperature=0.1, num_predict=1500),
                 },
             )
             resp.raise_for_status()
@@ -1915,7 +1922,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": {"num_ctx": 8192, "temperature": 0.3, "num_predict": 2000},
+                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=2000),
                 },
             )
             resp.raise_for_status()
