@@ -1266,8 +1266,16 @@ services:
       - KOPIA_PASS=${KOPIA_PASS}
       - BESZEL_EMAIL=${BESZEL_EMAIL}
       - BESZEL_PASS=${BESZEL_PASS}
+      - BESZEL_URL=${BESZEL_URL}
+      - BESZEL_SSH_HOST=${BESZEL_SSH_HOST}
       - TAUTULLI_KEY=${TAUTULLI_KEY}
       - SITE_NAME=${SITE_NAME}
+      - NODE_EXPORTER_INSTANCE=${NODE_EXPORTER_INSTANCE}
+      - PVE_SSH_HOST=${PVE_SSH_HOST}
+      - TRUENAS_SSH_HOST=${TRUENAS_SSH_HOST}
+      - PLEX_LXC_ID=${PLEX_LXC_ID}
+      - ADGUARD_PRIMARY_URL=${ADGUARD_PRIMARY_URL}
+      - ADGUARD_KIDS_URL=${ADGUARD_KIDS_URL}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
       - CROWDSEC_KEY=${CROWDSEC_KEY}    # optional: enables CrowdSec CTI on police blotter
       - GOTIFY_URL=${GOTIFY_URL}        # optional: push notifications for critical update findings
