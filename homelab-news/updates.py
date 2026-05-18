@@ -319,28 +319,30 @@ async def check_truenas_update() -> dict:
     """Check TrueNAS Scale OS itself for a pending system update via midclt."""
     label = "TrueNAS Scale"
     ts = datetime.now(timezone.utc).isoformat()
-    cmd = "midclt call update.check_available 2>/dev/null || true"
-    ok, out = await _ssh_run(TRUENAS_SSH_HOST, cmd, timeout=60)
-    if not ok:
-        ok, out = await _ssh_run(TRUENAS_SSH_HOST, "sudo " + cmd, timeout=60)
-    if not ok:
-        return {"label": label, "status": "error", "ts": ts, "error": out[:100], "updates": []}
+
+    ok, ver_out = await _ssh_run(TRUENAS_SSH_HOST, "midclt call system.version 2>/dev/null", timeout=30)
+    current_version = ver_out.strip() if ok else "?"
+
+    ok, out = await _ssh_run(TRUENAS_SSH_HOST, "midclt call update.available_versions 2>/dev/null", timeout=60)
+    if not ok or not out.strip():
+        return {"label": label, "status": "error", "ts": ts,
+                "error": out[:100] if not ok else "empty response", "updates": []}
     try:
-        data = json.loads(out)
+        versions = json.loads(out)
     except Exception as e:
         return {"label": label, "status": "error", "ts": ts,
                 "error": f"parse error: {e}", "updates": []}
 
-    status = data.get("status", "")
-    new_version = data.get("version", "")
     updates = []
-    if status == "AVAILABLE" and new_version:
-        updates.append({
-            "app":             "truenas",
-            "current_version": data.get("installed_version", "?"),
-            "new_version":     new_version,
-        })
-    log.info("TrueNAS system: status=%s version=%s", status, new_version)
+    for entry in versions:
+        new_version = entry.get("version", {}).get("version", "")
+        if new_version:
+            updates.append({
+                "app":             "truenas",
+                "current_version": current_version,
+                "new_version":     new_version,
+            })
+    log.info("TrueNAS system: current=%s available_updates=%d", current_version, len(updates))
     return {"label": label, "status": "done", "ts": ts, "updates": updates}
 
 
