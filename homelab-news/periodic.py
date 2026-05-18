@@ -10,8 +10,10 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+import os
+
 from lib import (
-    PERIODIC_FILE, ARCHIVE_FILE,
+    PERIODIC_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
     MAX_WEEKLY, MAX_MONTHLY,
     generate_periodic_summary, _ban_summary, load_json, save_json,
 )
@@ -46,8 +48,13 @@ def _next_jan1() -> datetime:
 # ── Builders ───────────────────────────────────────────────────────────────────
 
 async def build_weekly() -> None:
-    archive = load_json(ARCHIVE_FILE) or []
-    days = [r for r in archive[:7] if r.get("newspaper")]
+    index = load_json(ARCHIVE_INDEX) or []
+    days = []
+    for entry in index[:7]:
+        rec = load_json(os.path.join(ARCHIVE_DIR, f"{entry['date']}.json")) or {}
+        if rec.get("newspaper"):
+            days.append(rec)
+    days = days[:7]
     if not days:
         log.warning("No daily archives with content available for weekly digest")
         return
@@ -214,7 +221,40 @@ async def yearly_loop() -> None:
         log.info("Next yearly report: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
 
 
+async def _recover_missed_runs() -> None:
+    """Build any digests missed while the container was down."""
+    now = datetime.now(timezone.utc)
+    periodic = load_json(PERIODIC_FILE) or {}
+
+    # Weekly: fires every Sunday; rebuild if last build was ≥7 days ago
+    weekly = periodic.get("weekly", [])
+    if not weekly:
+        log.info("Recovery: no weekly digests — building now")
+        await build_weekly()
+    else:
+        last_built = datetime.fromisoformat(weekly[0]["built_at"].replace("Z", "+00:00"))
+        age_days = (now - last_built).total_seconds() / 86400
+        if age_days >= 7:
+            log.info("Recovery: weekly digest is %.0f days old — rebuilding", age_days)
+            await build_weekly()
+
+    # Monthly: fires on the 1st; recover if previous month is not covered
+    prev_month = (now.replace(day=1) - timedelta(days=1)).strftime("%Y-%m")
+    monthly = periodic.get("monthly", [])
+    if now.day >= 2 and not any(m["month"] == prev_month for m in monthly):
+        log.info("Recovery: missing monthly digest for %s — building now", prev_month)
+        await build_monthly()
+
+    # Yearly: fires Jan 1; recover if we're past Jan 1 and previous year is missing
+    prev_year = str(now.year - 1)
+    yearly = periodic.get("yearly", [])
+    if (now.month > 1 or now.day >= 2) and not any(y["year"] == prev_year for y in yearly):
+        log.info("Recovery: missing yearly report for %s — building now", prev_year)
+        await build_yearly()
+
+
 async def main() -> None:
+    await _recover_missed_runs()
     await asyncio.gather(weekly_loop(), monthly_loop(), yearly_loop())
 
 
