@@ -1896,6 +1896,12 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         "iHD_drv_video.so (musl-compiled) references C23 glibc symbols not present in libgcompat.so.0. "
         "GPU: 8086:7D55 (Meteor Lake Arc). If any Plex update is listed, scan its changelog for "
         "Intel Arc, VA-API, musl, iHD, or C23 — and flag prominently if a fix is present.\n\n"
+        "KNOWN ISSUE — Ollama/llama.cpp ggml-vulkan backend produces garbled output for gemma4 models "
+        "on Intel Arc Xe-LPG (Meteor Lake) iGPU (upstream bugs: ollama#15248, ollama#15328). "
+        "Workaround active: OLLAMA_NUM_GPU=0 forces gemma4 to CPU. "
+        "If any Ollama update is listed, scan its changelog for: gemma4, Vulkan, Intel Arc, ggml-vulkan, "
+        "sliding window attention, or garbled output — and flag prominently if a fix is present so the "
+        "workaround can be removed.\n\n"
     )
     prompt = (
         "You are the software intelligence desk editor for a homelab newspaper.\n\n"
