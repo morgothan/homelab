@@ -16,7 +16,7 @@ from lib import (
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
-    save_json,
+    save_json, notify_gotify,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -583,6 +583,32 @@ async def run() -> None:
                 u["changelog_analysis"] = raw.strip()
             log.info("Changelog %s/%s: %s", key, name,
                      (u.get("changelog_analysis") or "")[:80])
+
+    # Gotify notification for critical/breaking changelog findings
+    _CRITICAL_KW = re.compile(
+        r'\b(breaking|CVE-\d{4}-\d+|critical|security|migration required)\b', re.IGNORECASE
+    )
+    critical_items: list[str] = []
+    notable_items: list[str] = []
+    for label, host in hosts.items():
+        for r in host.get("results", []):
+            analysis = r.get("changelog_analysis", "")
+            if _CRITICAL_KW.search(analysis):
+                critical_items.append(f"[{label}] {r['container']}: {analysis[:120]}")
+    for key, src in sources.items():
+        for u in src.get("updates", []):
+            analysis = u.get("changelog_analysis", "")
+            if _CRITICAL_KW.search(analysis):
+                name = u.get("app") or u.get("package", key)
+                notable_items.append(f"{name}: {analysis[:120]}")
+    if critical_items or notable_items:
+        all_items = critical_items + notable_items
+        priority = 7 if critical_items else 5
+        await notify_gotify(
+            title="Lab Monitor: Critical update findings",
+            message="\n\n".join(all_items),
+            priority=priority,
+        )
 
     # Save Docker-only results (for sidebar updates_card on /current)
     save_json(UPDATES_FILE, {"checked_at": now_ts, "hosts": hosts})
