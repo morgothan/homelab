@@ -1264,10 +1264,10 @@ services:
       - PROMETHEUS_URL=http://prometheus:9090
       - KOPIA_USER=${KOPIA_USER}
       - KOPIA_PASS=${KOPIA_PASS}
-      - BESZEL_EMAIL=morgothan@gmail.com
+      - BESZEL_EMAIL=${BESZEL_EMAIL}
       - BESZEL_PASS=${BESZEL_PASS}
       - TAUTULLI_KEY=${TAUTULLI_KEY}
-      - MAX_ARCHIVE_DAYS=400
+      - SITE_NAME=${SITE_NAME}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
       - CROWDSEC_KEY=${CROWDSEC_KEY}    # optional: enables CrowdSec CTI on police blotter
       - GOTIFY_URL=${GOTIFY_URL}        # optional: push notifications for critical update findings
