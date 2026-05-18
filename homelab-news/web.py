@@ -309,24 +309,59 @@ async def detailed():
 
 @app.get("/archive")
 async def archive_index():
-    import os as _os
+    from itertools import groupby
     index = load_json(ARCHIVE_INDEX) or []
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if not index:
         content = '<div class="arch-empty">No archives yet &mdash; the first edition will appear tomorrow morning.</div>'
     else:
-        rows = []
-        for entry in index:
-            d = entry["date"]
-            headline = _h(entry["headline"]) if entry.get("headline") else '<span class="c-dim">No articles</span>'
-            n_issues = entry.get("n_issues", 0)
-            rows.append(
-                f'<a class="arch-day" href="/archive/{_h(d)}">'
-                f'<span class="arch-date">{_h(d)}</span>'
-                f'<span class="arch-headline">{headline}</span>'
-                f'<span class="arch-meta">{n_issues} issues</span></a>'
+        # Group by YYYY-MM, preserving newest-first order from the index
+        def _ym(entry): return entry["date"][:7]
+        def _year(ym): return ym[:4]
+
+        sections = []
+        prev_year = None
+        for ym, group in groupby(index, key=_ym):
+            year = _year(ym)
+            entries = list(group)
+            month_label = datetime.strptime(ym, "%Y-%m").strftime("%B %Y")
+            is_first = not sections  # open the most recent month
+
+            if year != prev_year:
+                sections.append(f'<div class="arch-section-head">{_h(year)}</div>')
+                prev_year = year
+
+            top = entries[0]
+            lead_headline = _h(top["headline"]) if top.get("headline") else ""
+            day_count = len(entries)
+
+            rows = []
+            for entry in entries:
+                d = entry["date"]
+                headline = _h(entry["headline"]) if entry.get("headline") else '<span class="c-dim">No articles</span>'
+                n_issues = entry.get("n_issues", 0)
+                rows.append(
+                    f'<a class="arch-day" href="/archive/{_h(d)}">'
+                    f'<span class="arch-date">{_h(d)}</span>'
+                    f'<span class="arch-headline">{headline}</span>'
+                    f'<span class="arch-meta">{n_issues} issues</span></a>'
+                )
+
+            open_attr = " open" if is_first else ""
+            sections.append(
+                f'<details class="arch-period"{open_attr}>'
+                f'<summary>'
+                f'<div class="arch-period-hd">'
+                f'<span class="arch-date">{_h(month_label)}</span>'
+                f'<span class="arch-meta">{day_count} edition{"s" if day_count != 1 else ""}</span>'
+                f'</div>'
+                f'<div class="arch-period-lead">{lead_headline}</div>'
+                f'</summary>'
+                f'<div class="arch-period-body arch-index">{"".join(rows)}</div>'
+                f'</details>'
             )
-        content = '<div class="arch-index">' + "".join(rows) + '</div>'
+
+        content = '<div class="arch-index">' + "".join(sections) + '</div>'
 
     body = masthead_rolling(now_str) + nav_bar("archive") + content
     return Response(content=page_wrap(body, refresh=3600),

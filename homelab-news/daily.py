@@ -9,7 +9,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from lib import (
-    MAX_ARCHIVE_DAYS, ARCHIVE_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
+    ARCHIVE_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
     TODAY_FILE, load_json, save_json,
 )
 
@@ -25,7 +25,7 @@ def _rebuild_index() -> None:
             (n for n in os.listdir(ARCHIVE_DIR) if n.endswith(".json") and n != "index.json"),
             reverse=True,
         )
-        for name in names[:MAX_ARCHIVE_DAYS]:
+        for name in names:
             date_str = name[:-5]  # strip .json
             rec = load_json(os.path.join(ARCHIVE_DIR, name)) or {}
             articles = rec.get("newspaper") or []
@@ -86,18 +86,6 @@ def snapshot(date_str: str) -> None:
         "newspaper":       newspaper,
     }
     save_json(day_path, record)
-
-    # Trim old day files beyond the retention limit
-    try:
-        all_days = sorted(
-            (n for n in os.listdir(ARCHIVE_DIR) if n.endswith(".json") and n != "index.json"),
-            reverse=True,
-        )
-        for old in all_days[MAX_ARCHIVE_DAYS:]:
-            os.remove(os.path.join(ARCHIVE_DIR, old))
-    except Exception as e:
-        log.warning("Failed to trim old archive files: %s", e)
-
     _rebuild_index()
     log.info("Archived %s edition (%d articles)", date_str, len(newspaper))
 
