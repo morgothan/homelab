@@ -26,6 +26,7 @@ UPDATE_INTERVAL  = int(os.getenv("UPDATE_INTERVAL", "3600"))
 LOG_HOURS        = int(os.getenv("LOG_HOURS", "1"))
 DOCKER_AUTH      = os.getenv("DOCKER_AUTH_FILE", "/root/.docker/config.json")
 SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
+SITE_NAME        = os.getenv("SITE_NAME", "Homelab News")
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
@@ -2448,7 +2449,7 @@ def page_wrap(body: str, refresh: Optional[int] = None) -> str:
         )
     return (
         '<!DOCTYPE html><html lang="en"><head>'
-        '<meta charset="utf-8"><title>Sketchyasfuckistan News</title>'
+        f'<meta charset="utf-8"><title>{SITE_NAME}</title>'
         '<link rel="icon" href="/favicon.svg" type="image/svg+xml">'
         '<meta name="viewport" content="width=device-width,initial-scale=1">'
         '<style>' + _CSS + '</style>'
@@ -2478,8 +2479,8 @@ def nav_bar(active: str) -> str:
 
 def masthead_rolling(now_str: str) -> str:
     return (
-        '<header class="mast"><hr class="rule-dbl">'
-        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        f'<header class="mast"><hr class="rule-dbl">'
+        f'<div class="mast-name">{SITE_NAME}</div>'
         '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
         f'<div class="mast-meta">Generated {_h(now_str)}'
@@ -2492,8 +2493,8 @@ def masthead_rolling(now_str: str) -> str:
 def masthead_today() -> str:
     today_str = datetime.now(timezone.utc).strftime("%A, %B %-d, %Y")
     return (
-        '<header class="mast"><hr class="rule-dbl">'
-        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        f'<header class="mast"><hr class="rule-dbl">'
+        f'<div class="mast-name">{SITE_NAME}</div>'
         '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
         f'<div class="mast-meta">Today\'s Edition &mdash; {_h(today_str)}'
@@ -2504,8 +2505,8 @@ def masthead_today() -> str:
 
 def masthead_archive(date_str: str) -> str:
     return (
-        '<header class="mast"><hr class="rule-dbl">'
-        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        f'<header class="mast"><hr class="rule-dbl">'
+        f'<div class="mast-name">{SITE_NAME}</div>'
         '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
         f'<div class="mast-meta">Edition for {_h(date_str)}</div>'
@@ -2515,8 +2516,8 @@ def masthead_archive(date_str: str) -> str:
 
 def masthead_wire(checked_at: str) -> str:
     return (
-        '<header class="mast"><hr class="rule-dbl">'
-        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        f'<header class="mast"><hr class="rule-dbl">'
+        f'<div class="mast-name">{SITE_NAME}</div>'
         '<div class="mast-sub">Wire Reports &mdash; Software Intelligence Desk</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
         f'<div class="mast-meta">Last checked {_h(checked_at)}'
