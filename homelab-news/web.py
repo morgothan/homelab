@@ -11,7 +11,7 @@ from fastapi import FastAPI, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from lib import (
-    REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS,
+    REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS, SITE_NAME,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
@@ -33,7 +33,7 @@ BLOTTER_TTL = 60
 def _init_page() -> str:
     body = (
         '<header class="mast"><hr class="rule-dbl">'
-        '<div class="mast-name">Sketchyasfuckistan News</div>'
+        f'<div class="mast-name">{SITE_NAME}</div>'
         '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
         '</header>'
         '<div style="text-align:center;margin-top:60px;font-family:\'Courier New\',monospace">'
