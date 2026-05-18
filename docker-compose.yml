@@ -1253,6 +1253,7 @@ services:
       - ${USERDIR}/docker/homelab-news/data:/data
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
       - ${USERDIR}/docker/traefik/monitor:/traefik/monitor:ro
+      - ${USERDIR}/docker/traefik/traefik.yml:/traefik/traefik.yml:ro
     environment:
       - LOKI_URL=${LOKI_URL}
       - OLLAMA_URL=${OLLAMA_URL}
