@@ -43,6 +43,12 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
     "beszel":         "https://github.com/henrygd/beszel",
     "ollama":         "https://github.com/ollama/ollama",
     "truenas":        None,
+    # Traefik plugins (keyed by moduleName path)
+    "madebymode/traefik-modsecurity-plugin":       "https://github.com/madebymode/traefik-modsecurity-plugin",
+    "paxxs/traefik-get-real-ip":                   "https://github.com/Paxxs/traefik-get-real-ip",
+    "solution-libre/traefik-plugin-robots-txt":    "https://github.com/solution-libre/traefik-plugin-robots-txt",
+    "pascalminder/geoblock":                       "https://github.com/PascalMinder/geoblock",
+    "tommoulard/fail2ban":                         "https://github.com/tomMoulard/fail2ban",
 }
 
 
@@ -397,6 +403,90 @@ async def check_ollama_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
+_TRAEFIK_YML_PATH = "/traefik/traefik.yml"
+
+
+async def check_traefik_plugins() -> dict:
+    """Check Traefik plugin versions against latest GitHub releases.
+
+    Reads active plugin definitions from the mounted traefik.yml so the check
+    stays in sync automatically when plugin versions are bumped there.
+    """
+    label = "Traefik Plugins"
+    ts = datetime.now(timezone.utc).isoformat()
+
+    raw_plugins: dict = {}
+    try:
+        with open(_TRAEFIK_YML_PATH) as f:
+            text = f.read()
+        in_plugins = False
+        cur_name: Optional[str] = None
+        cur: dict = {}
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            if stripped.startswith("#"):
+                continue
+            if re.match(r"^\s*plugins\s*:", line):
+                in_plugins = True
+                continue
+            if not in_plugins:
+                continue
+            if re.match(r"^\S", line):
+                break
+            m = re.match(r"^    ([\w][\w-]*):\s*$", line)
+            if m:
+                if cur_name and cur:
+                    raw_plugins[cur_name] = cur
+                cur_name = m.group(1)
+                cur = {}
+                continue
+            m2 = re.match(r"^\s+moduleName:\s*[\"']?(.+?)[\"']?\s*$", line)
+            if m2 and cur_name is not None:
+                cur["moduleName"] = m2.group(1).strip()
+                continue
+            m3 = re.match(r"^\s+version:\s*[\"']?(.+?)[\"']?\s*$", line)
+            if m3 and cur_name is not None:
+                cur["version"] = m3.group(1).strip()
+        if cur_name and cur:
+            raw_plugins[cur_name] = cur
+    except Exception as e:
+        return {"label": label, "status": "error", "ts": ts,
+                "error": f"could not read {_TRAEFIK_YML_PATH}: {e}", "updates": []}
+
+    updates = []
+    for plugin_name, meta in raw_plugins.items():
+        module = meta.get("moduleName", "")
+        current = meta.get("version", "")
+        if not module or not current:
+            continue
+        # Build lookup key: lowercase the org/repo portion of the module path
+        # e.g. "github.com/PascalMinder/geoblock" → "pascalminder/geoblock"
+        key = "/".join(module.split("/")[-2:]).lower()
+        github_url = _GITHUB_URLS.get(key)
+        if not github_url:
+            log.debug("No GitHub URL for traefik plugin %s (%s)", plugin_name, module)
+            continue
+        release = await fetch_github_release_notes(github_url)
+        latest_tag = release[0] if release else None
+        latest = (latest_tag or "").lstrip("v")
+        if not latest:
+            continue
+        if latest != current.lstrip("v"):
+            u = {
+                "app":             plugin_name,
+                "module":          module,
+                "current_version": current,
+                "new_version":     latest_tag or latest,
+            }
+            # Stash for changelog LLM lookup
+            u["_github_url"] = github_url
+            updates.append(u)
+
+    log.info("Traefik plugins: %d updates available out of %d checked",
+             len(updates), len(raw_plugins))
+    return {"label": label, "status": "done", "ts": ts, "updates": updates}
+
+
 async def run_homelab_checks() -> dict:
     """Run all non-Docker homelab update checks concurrently."""
     adguard_coros = [check_adguard_update(url, label) for url, label in ADGUARD_URLS]
@@ -409,6 +499,7 @@ async def run_homelab_checks() -> dict:
         check_truenas_update(),
         check_beszel_update(),
         check_ollama_update(),
+        check_traefik_plugins(),
         return_exceptions=True,
     )
     def _key(label: str) -> str:
@@ -417,7 +508,8 @@ async def run_homelab_checks() -> dict:
     keys = (
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
-        + ["plex", "truenas", "home_assistant", "truenas_system", "beszel", "ollama"]
+        + ["plex", "truenas", "home_assistant", "truenas_system", "beszel", "ollama",
+           "traefik_plugins"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
@@ -479,7 +571,7 @@ async def run() -> None:
             if u.get("changelog_analysis"):
                 continue
             name = u.get("app") or u.get("package", "")
-            github_url = _known_github_url(name)
+            github_url = u.pop("_github_url", None) or _known_github_url(name)
             if not github_url:
                 continue
             release = await fetch_github_release_notes(github_url)
