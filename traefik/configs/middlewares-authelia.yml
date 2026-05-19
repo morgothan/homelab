@@ -7,3 +7,5 @@ http:
         authResponseHeaders:
           - "Remote-User"
           - "Remote-Groups"
+          - "Remote-Email"
+          - "Remote-Name"
