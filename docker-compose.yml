@@ -1318,11 +1318,18 @@ services:
     volumes:
       - ${DOCKERDIR}/openwebui:/app/backend/data
     environment:
-      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=Remote-Email
-      - WEBUI_AUTH_TRUSTED_NAME_HEADER=Remote-Name
-      - ENABLE_SIGNUP=False
+      - OAUTH_CLIENT_ID=${OIDC_OPENWEBUI_CLIENT_ID}
+      - OAUTH_CLIENT_SECRET=${OPENWEBUI_OIDC_CLIENT_SECRET}
+      - OPENID_PROVIDER_URL=https://authelia.${DOMAIN}/.well-known/openid-configuration
+      - OAUTH_PROVIDER_NAME=Authelia
+      - OAUTH_SCOPES=openid profile email groups
+      - ENABLE_OAUTH_SIGNUP=True
+      - OAUTH_MERGE_ACCOUNTS_BY_EMAIL=True
       - ENABLE_LOGIN_FORM=False
-      - DEFAULT_USER_ROLE=user
+      - ENABLE_OAUTH_ROLE_MANAGEMENT=True
+      - OAUTH_ROLES_CLAIM=groups
+      - OAUTH_ADMIN_ROLES=openwebui-admin
+      - OAUTH_DEFAULT_ROLE=user
       - OLLAMA_BASE_URL=${OLLAMA_URL}
       - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET_KEY}
     labels:
