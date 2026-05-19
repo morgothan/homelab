@@ -307,8 +307,7 @@ identity_providers:
         client_secret: '{{ env "OIDC_OPENWEBUI_CLIENT_SECRET" }}'
         public: false
         authorization_policy: 'two_factor'
-        require_pkce: true
-        pkce_challenge_method: 'S256'
+        require_pkce: false
         redirect_uris:
           - 'https://ai.{{ env "DOMAIN" }}/oauth/oidc/callback'
         scopes:
