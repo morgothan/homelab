@@ -1300,6 +1300,43 @@ services:
       - traefik.http.routers.lab-monitor-local.service=lab-monitor
 
 
+########## Open WebUI
+# Chat interface for Ollama — Authelia trusted-header SSO, no login form shown
+  open-webui:
+    image: ghcr.io/open-webui/open-webui:main
+    container_name: open-webui
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - ${DOCKERDIR}/openwebui:/app/backend/data
+    environment:
+      - WEBUI_AUTH_TRUSTED_EMAIL_HEADER=Remote-Email
+      - WEBUI_AUTH_TRUSTED_NAME_HEADER=Remote-Name
+      - ENABLE_SIGNUP=False
+      - ENABLE_LOGIN_FORM=False
+      - DEFAULT_USER_ROLE=user
+      - OLLAMA_BASE_URL=${OLLAMA_URL}
+      - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET_KEY}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.open-webui-https.entrypoints=https
+      - traefik.http.routers.open-webui-https.rule=Host(`ai.${DOMAIN}`)
+      - traefik.http.routers.open-webui-https.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.open-webui-https.service=open-webui
+      - traefik.http.routers.open-webui-https.tls.certresolver=letsencrypt
+      - traefik.http.routers.open-webui-https.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.open-webui-https.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.open-webui.loadbalancer.server.port=8080
+
+
 networks:
   proxy:  #create with docker network create proxy
     external: {}
