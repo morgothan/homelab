@@ -3,6 +3,8 @@
 # Start with: docker compose -f docker-compose.infisical.yml --env-file .env.infisical up -d
 # Requires: .env.infisical (not committed)
 
+name: infisical
+
 x-logging: &logging
   driver: "json-file"
   options:
