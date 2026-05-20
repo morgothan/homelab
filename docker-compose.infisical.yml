@@ -53,6 +53,8 @@ services:
         condition: service_healthy
       infisical-redis:
         condition: service_healthy
+    ports:
+      - "127.0.0.1:8090:8080"
     environment:
       - ENCRYPTION_KEY=${INFISICAL_ENCRYPTION_KEY}
       - AUTH_SECRET=${INFISICAL_AUTH_SECRET}
