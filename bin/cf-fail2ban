@@ -6,14 +6,16 @@ Watches docker logs for "Plugin: FailToBan: IP blocked" events, blocks those IPs
 in Cloudflare at the edge, and removes the blocks after the ban period expires.
 Maintains a state file so Traefik restarts don't orphan Cloudflare blocks.
 
-Required .env vars (in ~/docker/.env):
-  CFAPI          Cloudflare Global API Key
-  CF_API_EMAIL   Cloudflare account email
-  CF_ACCOUNT_ID  Cloudflare account ID
+Required env vars (from Infisical or ~/docker/.env):
+  CF_FAIL2BAN_TOKEN     Cloudflare API token with Account:Firewall Services:Edit
+  CF_ACCOUNT_ID         Cloudflare account ID
 
-Optional .env vars:
+Optional env vars:
   CF_FAIL2BAN_BANTIME   Ban duration in seconds (default: 86400 = 24h, must match
                         traefik fail2ban bantime config)
+
+Secrets are pulled from Infisical automatically when ~/docker/.env.infisical is
+present and INFISICAL_TOKEN is not already set. Falls back to ~/docker/.env.
 
 State file: ~/docker/traefik/fail2ban-state.json
 """
@@ -51,11 +53,65 @@ def load_env(path):
     return env
 
 
-ENV_FILE   = Path(__file__).resolve().parent.parent / ".env"
+DOCKER_DIR     = Path(__file__).resolve().parent.parent
+ENV_FILE       = DOCKER_DIR / ".env"
+INFISICAL_FILE = DOCKER_DIR / ".env.infisical"
+
 _env       = load_env(ENV_FILE)
-STATE_FILE = Path(__file__).resolve().parent.parent / "traefik/monitor/fail2ban-state.json"
-ACCESS_LOG = Path(__file__).resolve().parent.parent / "traefik/logs/access.log"
+STATE_FILE = DOCKER_DIR / "traefik/monitor/fail2ban-state.json"
+ACCESS_LOG = DOCKER_DIR / "traefik/logs/access.log"
 CF_API     = "https://api.cloudflare.com/client/v4"
+
+
+def _find_infisical():
+    candidate = os.environ.get("INFISICAL_BIN", "")
+    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    result = subprocess.run(["which", "infisical"], capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    local_bin = Path.home() / ".local" / "bin" / "infisical"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return str(local_bin)
+    return None
+
+
+# If not already injected by infisical run, and .env.infisical exists, re-exec
+# under `infisical run` so all secrets land in os.environ.
+if not os.environ.get("INFISICAL_TOKEN") and INFISICAL_FILE.exists():
+    _bootstrap = load_env(INFISICAL_FILE)
+    _client_id     = _bootstrap.get("INFISICAL_MACHINE_CLIENT_ID", "")
+    _client_secret = _bootstrap.get("INFISICAL_MACHINE_CLIENT_SECRET", "")
+    _project_id    = _bootstrap.get("INFISICAL_PROJECT_ID", "")
+    _env_name      = _bootstrap.get("INFISICAL_ENV", "prod")
+    _site_url      = _bootstrap.get("INFISICAL_SITE_URL", "")
+    _infisical     = _find_infisical()
+    if _client_id and _client_secret and _project_id and _site_url and _infisical:
+        _token_result = subprocess.run(
+            [
+                _infisical, "login",
+                "--method=universal-auth",
+                f"--client-id={_client_id}",
+                f"--client-secret={_client_secret}",
+                f"--domain={_site_url}",
+                "--plain", "--silent",
+            ],
+            capture_output=True, text=True,
+        )
+        _token = _token_result.stdout.strip()
+        if _token:
+            _env_with_token = {**os.environ, "INFISICAL_TOKEN": _token}
+            _result = subprocess.run(
+                [
+                    _infisical, "run",
+                    f"--projectId={_project_id}",
+                    f"--env={_env_name}",
+                    f"--domain={_site_url}",
+                    "--", sys.executable, *sys.argv,
+                ],
+                env=_env_with_token,
+            )
+            sys.exit(_result.returncode)
 
 
 def cfg(key, default=""):
