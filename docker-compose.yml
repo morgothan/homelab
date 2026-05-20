@@ -528,6 +528,8 @@ services:
       - OIDC_SYNOLOGY_CLIENT_SECRET
       - OIDC_INFISICAL_CLIENT_ID
       - OIDC_INFISICAL_CLIENT_SECRET
+      - OIDC_OPENBAO_CLIENT_ID
+      - OIDC_OPENBAO_CLIENT_SECRET
     secrets:
       - authelia_jwt_secret
       - authelia_storage_encryption_key
