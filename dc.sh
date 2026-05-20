@@ -103,7 +103,8 @@ while IFS= read -r service; do
     secret_data=$(curl -sf --max-time 5 \
         -H "X-Vault-Token: ${BAO_TOKEN}" \
         "${BAO_ADDR}/v1/kv/data/docker/${service}" \
-        | jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"')
+        | jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"') \
+        || { echo "Error: failed to fetch kv/docker/${service} from OpenBao" >&2; exit 1; }
 
     while IFS= read -r kv; do
         if [[ -n "${kv}" ]]; then
