@@ -7,6 +7,8 @@
 
 # Infisical bootstrap (machine identity, encryption key)
 .env.infisical
+# .env backup files (e.g. .env.backup-pre-infisical created during migration)
+.env.*
 
 # Authelia secrets directory (JWT, session, storage, SMTP, HMAC, RSA key)
 authelia/secrets/
