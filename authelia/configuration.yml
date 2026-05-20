@@ -391,24 +391,6 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
         token_endpoint_auth_method: 'client_secret_basic'
 
-############ Infisical #####################
-      - client_id: '{{ env "OIDC_INFISICAL_CLIENT_ID" }}'
-        client_name: 'Infisical'
-        client_secret: '{{ env "OIDC_INFISICAL_CLIENT_SECRET" }}'
-        public: false
-        authorization_policy: 'two_factor'
-        require_pkce: true
-        pkce_challenge_method: 'S256'
-        redirect_uris:
-          - 'https://infisical.{{ env "DOMAIN" }}/api/v1/sso/oidc/callback'
-        scopes:
-          - 'openid'
-          - 'profile'
-          - 'email'
-        userinfo_signed_response_alg: 'none'
-        token_endpoint_auth_method: 'client_secret_basic'
-        claims_policy: 'default'
-
 ############ OpenBao #####################
       - client_id: '{{ env "OIDC_OPENBAO_CLIENT_ID" }}'
         client_name: 'OpenBao'
