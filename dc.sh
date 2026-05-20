@@ -64,4 +64,5 @@ exec "${INFISICAL_BIN}" run \
     --projectId="${INFISICAL_PROJECT_ID}" \
     --env="${INFISICAL_ENV}" \
     --domain="${INFISICAL_SITE_URL}" \
+    --recursive \
     -- docker compose "$@"

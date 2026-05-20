@@ -102,6 +102,7 @@ if not os.environ.get("INFISICAL_TOKEN") and INFISICAL_FILE.exists():
                     f"--projectId={_project_id}",
                     f"--env={_env_name}",
                     f"--domain={_site_url}",
+                    "--recursive",
                     "--", sys.executable, *sys.argv,
                 ],
                 env=_env_with_token,
