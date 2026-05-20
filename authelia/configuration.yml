@@ -151,6 +151,7 @@ identity_providers:
         - 'https://sketchy-nas.{{ env "DOMAIN" }}'
         - 'https://guac.{{ env "DOMAIN" }}'
         - 'https://ntfy.{{ env "DOMAIN" }}'
+        - 'https://openbao.{{ env "DOMAIN" }}'
       allowed_origins_from_client_redirect_uris: false
 
     ## Added new stuff to restore prior claims parameters. https://www.authelia.com/integration/openid-connect/openid-connect-1.0-claims/#restore-functionality-prior-to-claims-parameter
@@ -407,3 +408,20 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
         token_endpoint_auth_method: 'client_secret_basic'
         claims_policy: 'default'
+
+############ OpenBao #####################
+      - client_id: '{{ env "OIDC_OPENBAO_CLIENT_ID" }}'
+        client_name: 'OpenBao'
+        client_secret: '{{ env "OIDC_OPENBAO_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://openbao.{{ env "DOMAIN" }}/ui/vault/auth/oidc/oidc/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_basic'
