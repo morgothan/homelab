@@ -1,47 +1,44 @@
 #!/usr/bin/env bash
-# dc.sh — wrapper for docker compose that injects secrets from Infisical
+# dc.sh — wrapper for docker compose that injects secrets from OpenBao
 #
 # Usage: ./dc.sh <docker compose args>
 # Example: ./dc.sh up -d
 #          ./dc.sh restart authelia
 #          ./dc.sh config
 #
-# Reads auth credentials from .env.infisical (in the same directory as this
-# script), authenticates with Infisical, then runs docker compose with all
-# secrets injected into the environment.
+# Reads AppRole credentials from .env.openbao (same directory as this script),
+# authenticates with OpenBao, fetches all secrets from kv/docker/*, and runs
+# docker compose with all secrets injected into the environment.
+#
+# If OpenBao is unreachable, dc.sh auto-starts the openbao stack and waits.
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
-ENV_FILE="${SCRIPT_DIR}/.env.infisical"
+ENV_FILE="${SCRIPT_DIR}/.env.openbao"
 
 if [[ ! -f "${ENV_FILE}" ]]; then
     echo "Error: ${ENV_FILE} not found." >&2
-    echo "Create it with INFISICAL_MACHINE_CLIENT_ID, INFISICAL_MACHINE_CLIENT_SECRET," >&2
-    echo "INFISICAL_PROJECT_ID, INFISICAL_ENV, and INFISICAL_SITE_URL defined." >&2
+    echo "Create it with BAO_ADDR, BAO_ROLE_ID, BAO_SECRET_ID defined." >&2
     exit 1
 fi
 
-# shellcheck source=.env.infisical
+# shellcheck source=.env.openbao
 source "${ENV_FILE}"
 
-: "${INFISICAL_MACHINE_CLIENT_ID:?Missing INFISICAL_MACHINE_CLIENT_ID in ${ENV_FILE}}"
-: "${INFISICAL_MACHINE_CLIENT_SECRET:?Missing INFISICAL_MACHINE_CLIENT_SECRET in ${ENV_FILE}}"
-: "${INFISICAL_PROJECT_ID:?Missing INFISICAL_PROJECT_ID in ${ENV_FILE}}"
-: "${INFISICAL_ENV:?Missing INFISICAL_ENV in ${ENV_FILE}}"
-: "${INFISICAL_SITE_URL:?Missing INFISICAL_SITE_URL in ${ENV_FILE}}"
+: "${BAO_ADDR:?Missing BAO_ADDR in ${ENV_FILE}}"
+: "${BAO_ROLE_ID:?Missing BAO_ROLE_ID in ${ENV_FILE}}"
+: "${BAO_SECRET_ID:?Missing BAO_SECRET_ID in ${ENV_FILE}}"
 
-# Prefer local URL for CLI auth so this works even when the main stack (Traefik/tunnel) is down
-INFISICAL_CLI_URL="${INFISICAL_LOCAL_URL:-${INFISICAL_SITE_URL}}"
+BAO_COMPOSE="${SCRIPT_DIR}/docker-compose.openbao.yml"
 
-# If the local Infisical endpoint isn't up, start the infisical stack and wait for it
-if ! curl -sf --max-time 2 "${INFISICAL_CLI_URL}/api/status" >/dev/null 2>&1; then
-    INFISICAL_COMPOSE="${SCRIPT_DIR}/docker-compose.infisical.yml"
-    echo "Infisical not reachable — starting infisical stack..."
-    docker compose -f "${INFISICAL_COMPOSE}" --env-file "${ENV_FILE}" up -d
-    echo -n "Waiting for Infisical to be ready..."
+# ── Auto-start OpenBao stack if unreachable ──────────────────────────────────
+if ! curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+    echo "OpenBao not reachable — starting openbao stack..."
+    docker compose -f "${BAO_COMPOSE}" up -d
+    echo -n "Waiting for OpenBao to be ready..."
     for i in $(seq 1 30); do
-        if curl -sf --max-time 2 "${INFISICAL_CLI_URL}/api/status" >/dev/null 2>&1; then
+        if curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
             echo " ready."
             break
         fi
@@ -49,44 +46,74 @@ if ! curl -sf --max-time 2 "${INFISICAL_CLI_URL}/api/status" >/dev/null 2>&1; th
         sleep 2
         if [[ "${i}" -eq 30 ]]; then
             echo ""
-            echo "Error: Infisical did not become ready in time." >&2
+            echo "Error: OpenBao did not become ready in time." >&2
             exit 1
         fi
     done
 fi
 
-if [[ -n "${INFISICAL_BIN:-}" ]]; then
-    # Caller provided an explicit path
-    if [[ ! -x "${INFISICAL_BIN}" ]]; then
-        echo "Error: INFISICAL_BIN=${INFISICAL_BIN} is not executable." >&2
-        exit 1
-    fi
-elif command -v infisical &>/dev/null; then
-    INFISICAL_BIN="$(command -v infisical)"
-elif [[ -x ~/.local/bin/infisical ]]; then
-    INFISICAL_BIN=~/.local/bin/infisical
-else
-    echo "Error: infisical CLI not found. Install it or set INFISICAL_BIN." >&2
+# ── Wait for unsealed state ───────────────────────────────────────────────────
+health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+    "${BAO_ADDR}/v1/sys/health" 2>/dev/null || echo "000")
+if [[ "${health_code}" == "503" ]]; then
+    echo -n "OpenBao is sealed, waiting for auto-unseal..."
+    for i in $(seq 1 30); do
+        health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+            "${BAO_ADDR}/v1/sys/health" 2>/dev/null || echo "000")
+        if [[ "${health_code}" == "200" ]]; then
+            echo " unsealed."
+            break
+        fi
+        echo -n "."
+        sleep 2
+        if [[ "${i}" -eq 30 ]]; then
+            echo ""
+            echo "Error: OpenBao did not unseal in time." >&2
+            exit 1
+        fi
+    done
+fi
+
+# ── Authenticate with AppRole ─────────────────────────────────────────────────
+BAO_TOKEN=$(curl -sf --max-time 5 \
+    -X POST \
+    -H "Content-Type: application/json" \
+    -d "{\"role_id\":\"${BAO_ROLE_ID}\",\"secret_id\":\"${BAO_SECRET_ID}\"}" \
+    "${BAO_ADDR}/v1/auth/approle/login" \
+    | jq -r '.auth.client_token')
+
+if [[ -z "${BAO_TOKEN}" || "${BAO_TOKEN}" == "null" ]]; then
+    echo "Error: Failed to authenticate with OpenBao AppRole." >&2
     exit 1
 fi
 
-INFISICAL_TOKEN="$("${INFISICAL_BIN}" login \
-    --method=universal-auth \
-    --client-id="${INFISICAL_MACHINE_CLIENT_ID}" \
-    --client-secret="${INFISICAL_MACHINE_CLIENT_SECRET}" \
-    --domain="${INFISICAL_CLI_URL}" \
-    --plain --silent)"
+# ── List service paths ────────────────────────────────────────────────────────
+PATHS=$(curl -sf --max-time 5 \
+    -H "X-Vault-Token: ${BAO_TOKEN}" \
+    "${BAO_ADDR}/v1/kv/metadata/docker?list=true" \
+    | jq -r '.data.keys[] | rtrimstr("/")')
 
-if [[ -z "${INFISICAL_TOKEN}" ]]; then
-    echo "Error: Failed to obtain Infisical token." >&2
+if [[ -z "${PATHS}" ]]; then
+    echo "Error: No secret paths found at kv/docker/ in OpenBao." >&2
     exit 1
 fi
 
-export INFISICAL_TOKEN
+# ── Fetch and export all secrets ─────────────────────────────────────────────
+while IFS= read -r service; do
+    secret_data=$(curl -sf --max-time 5 \
+        -H "X-Vault-Token: ${BAO_TOKEN}" \
+        "${BAO_ADDR}/v1/kv/data/docker/${service}" \
+        | jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"')
 
-exec "${INFISICAL_BIN}" run \
-    --projectId="${INFISICAL_PROJECT_ID}" \
-    --env="${INFISICAL_ENV}" \
-    --domain="${INFISICAL_CLI_URL}" \
-    --recursive \
-    -- docker compose "$@"
+    while IFS= read -r kv; do
+        if [[ -n "${kv}" ]]; then
+            key="${kv%%=*}"
+            value="${kv#*=}"
+            if [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]]; then
+                export "${key}=${value}"
+            fi
+        fi
+    done <<< "${secret_data}"
+done <<< "${PATHS}"
+
+exec docker compose "$@"
