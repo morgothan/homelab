@@ -9,27 +9,31 @@ Default behaviour: add-only (never removes existing entries).
 Pass --sync to also remove entries no longer present in Traefik.
 Pass --dry-run to print the diff without making any changes.
 
-Required .env vars (in ~/docker/.env):
+Required env vars (from Infisical or ~/docker/.env):
   CF_TUNNEL_API_TOKEN   Cloudflare API token with Cloudflare Tunnel:Edit permission
   CF_ACCOUNT_ID         Cloudflare account ID (visible in the dashboard URL)
   CF_TUNNEL_ID          Tunnel ID (Zero Trust → Access → Tunnels → your tunnel)
   CF_TUNNEL_DOMAINS     Comma-separated domain suffixes to include, e.g.:
                           example.com,myotherdomain.com
 
-Optional .env vars:
+Optional env vars:
   CF_TUNNEL_SERVICE     URL cloudflared routes traffic to (default: http://traefik:80)
   TRAEFIK_API           Traefik API base URL (default: http://traefik/api)
+
+Secrets are pulled from Infisical automatically when ~/docker/.env.infisical is
+present and INFISICAL_TOKEN is not already set. Falls back to ~/docker/.env.
 """
 
 import json
 import os
 import re
+import subprocess
 import sys
 import urllib.request
 import urllib.error
 from pathlib import Path
 
-# ── Load .env ──────────────────────────────────────────────────────────────────
+# ── Load .env / Infisical ──────────────────────────────────────────────────────
 
 def load_env(path):
     env = {}
@@ -48,8 +52,62 @@ def load_env(path):
         pass
     return env
 
-ENV_FILE = Path(__file__).resolve().parent.parent / ".env"
+
+DOCKER_DIR     = Path(__file__).resolve().parent.parent
+ENV_FILE       = DOCKER_DIR / ".env"
+INFISICAL_FILE = DOCKER_DIR / ".env.infisical"
+
 _env = load_env(ENV_FILE)
+
+# If not already injected by infisical run, and .env.infisical exists, re-exec
+# under `infisical run` so all secrets land in os.environ.
+def _find_infisical():
+    candidate = os.environ.get("INFISICAL_BIN", "")
+    if candidate and os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+        return candidate
+    result = subprocess.run(["which", "infisical"], capture_output=True, text=True)
+    if result.returncode == 0 and result.stdout.strip():
+        return result.stdout.strip()
+    local_bin = Path.home() / ".local" / "bin" / "infisical"
+    if local_bin.is_file() and os.access(local_bin, os.X_OK):
+        return str(local_bin)
+    return None
+
+if not os.environ.get("INFISICAL_TOKEN") and INFISICAL_FILE.exists():
+    _bootstrap = load_env(INFISICAL_FILE)
+    _client_id     = _bootstrap.get("INFISICAL_MACHINE_CLIENT_ID", "")
+    _client_secret = _bootstrap.get("INFISICAL_MACHINE_CLIENT_SECRET", "")
+    _project_id    = _bootstrap.get("INFISICAL_PROJECT_ID", "")
+    _env_name      = _bootstrap.get("INFISICAL_ENV", "prod")
+    _site_url      = _bootstrap.get("INFISICAL_SITE_URL", "")
+    _infisical     = _find_infisical()
+    if _client_id and _client_secret and _project_id and _site_url and _infisical:
+        _token_result = subprocess.run(
+            [
+                _infisical, "login",
+                "--method=universal-auth",
+                f"--client-id={_client_id}",
+                f"--client-secret={_client_secret}",
+                f"--domain={_site_url}",
+                "--plain", "--silent",
+            ],
+            capture_output=True, text=True,
+        )
+        _token = _token_result.stdout.strip()
+        if _token:
+            _env_with_token = {**os.environ, "INFISICAL_TOKEN": _token}
+            _result = subprocess.run(
+                [
+                    _infisical, "run",
+                    f"--projectId={_project_id}",
+                    f"--env={_env_name}",
+                    f"--domain={_site_url}",
+                    "--", sys.executable, *sys.argv,
+                ],
+                env=_env_with_token,
+            )
+            sys.exit(_result.returncode)
+
 
 def cfg(key, default=""):
     return os.environ.get(key, _env.get(key, default))
