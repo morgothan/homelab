@@ -5,6 +5,9 @@
 # Environment file (contains all real credentials)
 .env
 
+# Infisical bootstrap (machine identity, encryption key)
+.env.infisical
+
 # Authelia secrets directory (JWT, session, storage, SMTP, HMAC, RSA key)
 authelia/secrets/
 
