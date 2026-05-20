@@ -16,8 +16,10 @@ KEY_FILE="/bao-unseal-key"
 }
 
 UNSEAL_KEY=""
-while IFS='=' read -r k v; do
-  [ "$k" = "UNSEAL_KEY" ] && UNSEAL_KEY="$v"
+while read -r line; do
+  case "$line" in
+    UNSEAL_KEY=*) UNSEAL_KEY="${line#UNSEAL_KEY=}" ;;
+  esac
 done < "$KEY_FILE"
 
 [ -n "$UNSEAL_KEY" ] || { echo "[unsealer] ERROR: UNSEAL_KEY not found in $KEY_FILE"; exit 1; }
@@ -33,7 +35,7 @@ sleep 2
 
 check_and_unseal() {
   code=$(wget -S -O/dev/null "$BAO_ADDR/v1/sys/health" 2>&1 \
-         | awk '/HTTP\//{print $2}' | tail -1)
+         | awk '/^  HTTP\//{print $2}' | tail -1)
   case "$code" in
     200|429|473)
       ;; # active or standby — nothing to do
