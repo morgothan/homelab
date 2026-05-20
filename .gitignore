@@ -25,6 +25,11 @@ scraparr/config.yaml
 # Homepage services (contains API keys, JWT tokens for HA, Immich, Plex, etc.)
 homepage/services.yaml
 
+# OpenBao bootstrap (unseal key, init output, AppRole credentials)
+.env.openbao
+.bao-unseal-key
+.bao-init-output
+
 # NUT UPS daemon users (contains passwords)
 nut/upsd.users
 
