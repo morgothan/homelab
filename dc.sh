@@ -31,6 +31,9 @@ source "${ENV_FILE}"
 : "${INFISICAL_ENV:?Missing INFISICAL_ENV in ${ENV_FILE}}"
 : "${INFISICAL_SITE_URL:?Missing INFISICAL_SITE_URL in ${ENV_FILE}}"
 
+# Prefer local URL for CLI auth so this works even when the main stack (Traefik/tunnel) is down
+INFISICAL_CLI_URL="${INFISICAL_LOCAL_URL:-${INFISICAL_SITE_URL}}"
+
 if [[ -n "${INFISICAL_BIN:-}" ]]; then
     # Caller provided an explicit path
     if [[ ! -x "${INFISICAL_BIN}" ]]; then
@@ -50,7 +53,7 @@ INFISICAL_TOKEN="$("${INFISICAL_BIN}" login \
     --method=universal-auth \
     --client-id="${INFISICAL_MACHINE_CLIENT_ID}" \
     --client-secret="${INFISICAL_MACHINE_CLIENT_SECRET}" \
-    --domain="${INFISICAL_SITE_URL}" \
+    --domain="${INFISICAL_CLI_URL}" \
     --plain --silent)"
 
 if [[ -z "${INFISICAL_TOKEN}" ]]; then
@@ -63,6 +66,6 @@ export INFISICAL_TOKEN
 exec "${INFISICAL_BIN}" run \
     --projectId="${INFISICAL_PROJECT_ID}" \
     --env="${INFISICAL_ENV}" \
-    --domain="${INFISICAL_SITE_URL}" \
+    --domain="${INFISICAL_CLI_URL}" \
     --recursive \
     -- docker compose "$@"
