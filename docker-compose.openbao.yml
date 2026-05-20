@@ -1,7 +1,7 @@
 # /home/nat/docker/docker-compose.openbao.yml
 # OpenBao self-hosted secrets manager (open-source Vault fork).
 # Bootstrap: see docs/superpowers/plans/2026-05-20-openbao-migration.md Task 2.
-# Normal start: ./dc.sh up -d  (auto-starts this stack if unreachable)
+# Normal start: docker compose -f docker-compose.openbao.yml up -d  (auto-starts this stack if unreachable)
 # Manual start: docker compose -f docker-compose.openbao.yml up -d
 
 name: openbao
@@ -11,6 +11,7 @@ x-logging: &logging
   options:
     max-size: "10m"
     max-file: "3"
+    tag: "{{.Name}}"
 
 services:
   openbao:
