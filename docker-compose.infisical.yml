@@ -1,0 +1,61 @@
+# /home/nat/docker/docker-compose.infisical.yml
+# Infisical self-hosted secrets manager.
+# Start with: docker compose -f docker-compose.infisical.yml --env-file .env.infisical up -d
+# Requires: .env.infisical (not committed)
+
+x-logging: &logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  infisical-db:
+    image: postgres:16
+    container_name: infisical-db
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      - POSTGRES_DB=infisical
+      - POSTGRES_USER=infisical
+      - POSTGRES_PASSWORD=${INFISICAL_DB_PASSWORD}
+    volumes:
+      - infisical-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U infisical"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - proxy
+
+  infisical:
+    image: infisical/infisical:latest-postgres
+    container_name: infisical
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      infisical-db:
+        condition: service_healthy
+    environment:
+      - ENCRYPTION_KEY=${INFISICAL_ENCRYPTION_KEY}
+      - AUTH_SECRET=${INFISICAL_AUTH_SECRET}
+      - DB_CONNECTION_URI=postgresql://infisical:${INFISICAL_DB_PASSWORD}@infisical-db/infisical
+      - SITE_URL=${INFISICAL_SITE_URL}
+      - PORT=8080
+      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/2
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/status || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - proxy
+
+volumes:
+  infisical-postgres:
+
+networks:
+  proxy:
+    external: true
