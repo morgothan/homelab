@@ -57,6 +57,11 @@ services:
         condition: service_healthy
     ports:
       - "127.0.0.1:8090:8080"
+    volumes:
+      # Patch Fastify's JSON parser to return null instead of 400 for empty bodies.
+      # Several Infisical endpoints (e.g. POST /api/v1/auth/token) are bodyless POSTs
+      # that only read from the httpOnly cookie; Fastify 4.x errors on empty JSON bodies.
+      - ./infisical-patches/contentTypeParser.js:/backend/node_modules/fastify/lib/contentTypeParser.js:ro
     environment:
       - ENCRYPTION_KEY=${INFISICAL_ENCRYPTION_KEY}
       - AUTH_SECRET=${INFISICAL_AUTH_SECRET}
