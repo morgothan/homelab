@@ -27,7 +27,21 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - proxy
+      - infisical-internal
+
+  infisical-redis:
+    image: redis:7-alpine
+    container_name: infisical-redis
+    restart: unless-stopped
+    logging: *logging
+    command: redis-server --save "" --appendonly no
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - infisical-internal
 
   infisical:
     image: infisical/infisical:latest-postgres
@@ -37,13 +51,15 @@ services:
     depends_on:
       infisical-db:
         condition: service_healthy
+      infisical-redis:
+        condition: service_healthy
     environment:
       - ENCRYPTION_KEY=${INFISICAL_ENCRYPTION_KEY}
       - AUTH_SECRET=${INFISICAL_AUTH_SECRET}
       - DB_CONNECTION_URI=postgresql://infisical:${INFISICAL_DB_PASSWORD}@infisical-db/infisical
       - SITE_URL=${INFISICAL_SITE_URL}
       - PORT=8080
-      - REDIS_URL=redis://:${REDIS_PASSWORD}@redis:6379/2
+      - REDIS_URL=redis://infisical-redis:6379
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://localhost:8080/api/status || exit 1"]
       interval: 30s
@@ -52,6 +68,7 @@ services:
       start_period: 60s
     networks:
       - proxy
+      - infisical-internal
 
 volumes:
   infisical-postgres:
@@ -59,3 +76,5 @@ volumes:
 networks:
   proxy:
     external: true
+  infisical-internal:
+    internal: true
