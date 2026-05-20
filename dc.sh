@@ -39,8 +39,8 @@ if [[ -n "${INFISICAL_BIN:-}" ]]; then
     fi
 elif command -v infisical &>/dev/null; then
     INFISICAL_BIN="$(command -v infisical)"
-elif [[ -x "${HOME}/.local/bin/infisical" ]]; then
-    INFISICAL_BIN="${HOME}/.local/bin/infisical"
+elif [[ -x ~/.local/bin/infisical ]]; then
+    INFISICAL_BIN=~/.local/bin/infisical
 else
     echo "Error: infisical CLI not found. Install it or set INFISICAL_BIN." >&2
     exit 1
