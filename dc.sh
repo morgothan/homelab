@@ -34,6 +34,27 @@ source "${ENV_FILE}"
 # Prefer local URL for CLI auth so this works even when the main stack (Traefik/tunnel) is down
 INFISICAL_CLI_URL="${INFISICAL_LOCAL_URL:-${INFISICAL_SITE_URL}}"
 
+# If the local Infisical endpoint isn't up, start the infisical stack and wait for it
+if ! curl -sf --max-time 2 "${INFISICAL_CLI_URL}/api/status" >/dev/null 2>&1; then
+    INFISICAL_COMPOSE="${SCRIPT_DIR}/docker-compose.infisical.yml"
+    echo "Infisical not reachable — starting infisical stack..."
+    docker compose -f "${INFISICAL_COMPOSE}" --env-file "${ENV_FILE}" up -d
+    echo -n "Waiting for Infisical to be ready..."
+    for i in $(seq 1 30); do
+        if curl -sf --max-time 2 "${INFISICAL_CLI_URL}/api/status" >/dev/null 2>&1; then
+            echo " ready."
+            break
+        fi
+        echo -n "."
+        sleep 2
+        if [[ "${i}" -eq 30 ]]; then
+            echo ""
+            echo "Error: Infisical did not become ready in time." >&2
+            exit 1
+        fi
+    done
+fi
+
 if [[ -n "${INFISICAL_BIN:-}" ]]; then
     # Caller provided an explicit path
     if [[ ! -x "${INFISICAL_BIN}" ]]; then
