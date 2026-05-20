@@ -68,7 +68,7 @@ GROUPED=$(echo "${ALL_SECRETS_JSON}" | jq '
   }) |
   group_by(.service) |
   map({ (.[0].service): (map({key: .key, value: .value}) | from_entries) }) |
-  add
+  add // {}
 ')
 
 echo "Secret distribution:"
