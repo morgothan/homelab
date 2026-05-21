@@ -9,7 +9,7 @@
 #          ./dc.sh up -d --full     # bring up openbao stack (if down) + main stack
 #
 # Reads AppRole credentials from .env.openbao (same directory as this script),
-# authenticates with OpenBao, fetches all secrets from kv/docker/*, and runs
+# authenticates with OpenBao, fetches all secrets from kv/${BAO_KV_PREFIX}/*, and runs
 # docker compose with all secrets injected into the environment.
 #
 # If OpenBao is unreachable, dc.sh auto-starts the openbao stack and waits.
@@ -32,6 +32,7 @@ source "${ENV_FILE}"
 : "${BAO_ADDR:?Missing BAO_ADDR in ${ENV_FILE}}"
 : "${BAO_ROLE_ID:?Missing BAO_ROLE_ID in ${ENV_FILE}}"
 : "${BAO_SECRET_ID:?Missing BAO_SECRET_ID in ${ENV_FILE}}"
+BAO_KV_PREFIX="${BAO_KV_PREFIX:-docker}"
 
 BAO_COMPOSE="${SCRIPT_DIR}/docker-compose.openbao.yml"
 
@@ -101,11 +102,11 @@ fi
 # ── List service paths ────────────────────────────────────────────────────────
 PATHS=$(curl -sf --max-time 5 \
     -H "X-Vault-Token: ${BAO_TOKEN}" \
-    "${BAO_ADDR}/v1/kv/metadata/docker?list=true" \
+    "${BAO_ADDR}/v1/kv/metadata/${BAO_KV_PREFIX}?list=true" \
     | jq -r '.data.keys[] | rtrimstr("/")')
 
 if [[ -z "${PATHS}" ]]; then
-    echo "Error: No secret paths found at kv/docker/ in OpenBao." >&2
+    echo "Error: No secret paths found at kv/${BAO_KV_PREFIX}/ in OpenBao." >&2
     exit 1
 fi
 
@@ -113,9 +114,9 @@ fi
 while IFS= read -r service; do
     secret_data=$(curl -sf --max-time 5 \
         -H "X-Vault-Token: ${BAO_TOKEN}" \
-        "${BAO_ADDR}/v1/kv/data/docker/${service}" \
+        "${BAO_ADDR}/v1/kv/data/${BAO_KV_PREFIX}/${service}" \
         | jq -r '.data.data | to_entries[] | "\(.key)=\(.value)"') \
-        || { echo "Error: failed to fetch kv/docker/${service} from OpenBao" >&2; exit 1; }
+        || { echo "Error: failed to fetch kv/${BAO_KV_PREFIX}/${service} from OpenBao" >&2; exit 1; }
 
     while IFS= read -r kv; do
         if [[ -n "${kv}" ]]; then
