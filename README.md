@@ -8,15 +8,15 @@ A self-hosted homelab running on a Proxmox LXC. All services are exposed through
 
 | Host | Role | Notes |
 |------|------|-------|
-| Proxmox (`pve`) | Hypervisor | Intel Core Ultra 7 155H, 94 GB RAM, Intel Arc iGPU |
-| Docker LXC (`traefik`) | Runs this stack | Main Proxmox LXC |
-| Raspberry Pi (`dns`) | Primary DNS | AdGuard Home + Unbound + Chrony NTP |
-| Raspberry Pi (`dns.kids`) | Kids DNS | AdGuard Home with child-safety filters |
-| Raspberry Pi (`beszel`) | Monitoring hub | Beszel — independent of Proxmox |
-| Intel NUC (`plex`) | Media server | Plex as systemd service, Intel Arc iGPU for HW transcoding |
-| TrueNAS (`smsf`) | Primary NAS | Xeon Silver, 251 GB RAM, 218 TB pool |
-| Synology (`sketchy-nas`) | Legacy NAS | Still online, not primary |
-| HA Yellow (`homeassistant`) | Home automation | IoT VLAN; voice pipeline, B&O speakers, 3D printer |
+| Proxmox | Hypervisor | Intel Core Ultra 7 155H, 94 GB RAM, Intel Arc iGPU |
+| Docker LXC | Runs this stack | Main Proxmox LXC |
+| Raspberry Pi (primary DNS) | Primary DNS | AdGuard Home + Unbound + Chrony NTP |
+| Raspberry Pi (kids DNS) | Kids DNS | AdGuard Home with child-safety filters |
+| Raspberry Pi (monitoring) | Monitoring hub | Beszel — independent of Proxmox |
+| Intel NUC | Media server | Plex as systemd service, Intel Arc iGPU for HW transcoding |
+| TrueNAS | Primary NAS | Xeon Silver, 251 GB RAM, 218 TB pool |
+| Synology | Legacy NAS | Still online, not primary |
+| HA Yellow | Home automation | IoT VLAN; voice pipeline, B&O speakers, 3D printer |
 | Ollama LXC | Local LLM inference | CPU-only; serves HA voice + homelab news |
 
 ---
@@ -297,7 +297,7 @@ docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
 ## Rebuild From Scratch
 
 1. Create Docker networks: `docker network create proxy && docker network create dmz`
-2. Copy `/home/nat/docker`, `/var/lib/docker/volumes`, `/root/.config/*`
+2. Copy `~/docker`, `/var/lib/docker/volumes`, `~/.config/*`
 3. Restore `.env` and `.env.openbao` (`chmod 600` on both)
 4. Start OpenBao stack: `docker compose -f docker-compose.openbao.yml up -d`
 5. Bootstrap OpenBao (init, unseal, configure) — see `docs/homelab-documentation.md`
