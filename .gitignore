@@ -65,6 +65,12 @@ traefik/traefik.yml
 # Site configs (contain LAN hostnames and external domain names)
 traefik/configs/site-*.yml
 
+# Scanner block config (contains external domain name in HostRegexp rule)
+traefik/configs/scanner-block.yml
+
+# NUT UPS daemon config (contains device IP address)
+nut/ups.conf
+
 # Basic auth injection middleware (contains base64-encoded credentials)
 traefik/configs/middlewares-basicauth.yml
 
