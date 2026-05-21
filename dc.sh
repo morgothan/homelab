@@ -44,24 +44,29 @@ for arg in "$@"; do
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
-# ── Auto-start OpenBao stack if unreachable ──────────────────────────────────
+# ── Auto-start OpenBao stack if unreachable (local host only) ────────────────
 if ! curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
-    echo "OpenBao not reachable — starting openbao stack..."
-    docker compose -f "${BAO_COMPOSE}" up -d
-    echo -n "Waiting for OpenBao to be ready..."
-    for i in $(seq 1 30); do
-        if curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
-            echo " ready."
-            break
-        fi
-        echo -n "."
-        sleep 2
-        if [[ "${i}" -eq 30 ]]; then
-            echo ""
-            echo "Error: OpenBao did not become ready in time." >&2
-            exit 1
-        fi
-    done
+    if [[ -f "${BAO_COMPOSE}" ]]; then
+        echo "OpenBao not reachable — starting openbao stack..."
+        docker compose -f "${BAO_COMPOSE}" up -d
+        echo -n "Waiting for OpenBao to be ready..."
+        for i in $(seq 1 30); do
+            if curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
+                echo " ready."
+                break
+            fi
+            echo -n "."
+            sleep 2
+            if [[ "${i}" -eq 30 ]]; then
+                echo ""
+                echo "Error: OpenBao did not become ready in time." >&2
+                exit 1
+            fi
+        done
+    else
+        echo "Error: OpenBao at ${BAO_ADDR} is unreachable." >&2
+        exit 1
+    fi
 fi
 
 # ── Wait for unsealed state ───────────────────────────────────────────────────
