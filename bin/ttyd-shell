@@ -1,2 +1,4 @@
 #!/bin/sh
-exec nsenter -t 1 -m -u -i -n -p -- su - nat -c /home/nat/bin/start-tmux.sh
+# TTYD_USER: the host user to su into (set via docker-compose environment)
+USER="${TTYD_USER:-$(id -un)}"
+exec nsenter -t 1 -m -u -i -n -p -- su - "$USER" -c "$(getent passwd $USER | cut -d: -f6)/bin/start-tmux.sh"
