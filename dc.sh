@@ -137,6 +137,9 @@ done <<< "${PATHS}"
 if [[ "${FULL}" == "true" && "${1:-}" == "down" ]]; then
     docker compose "$@"
     docker compose -f "${BAO_COMPOSE}" down
+elif [[ "${1:-}" == "pull" ]]; then
+    docker compose "$@"
+    [[ -f "${BAO_COMPOSE}" ]] && docker compose -f "${BAO_COMPOSE}" pull
 else
     exec docker compose "$@"
 fi
