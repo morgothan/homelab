@@ -5,12 +5,15 @@
 # Example: ./dc.sh up -d
 #          ./dc.sh restart authelia
 #          ./dc.sh config
+#          ./dc.sh down --full      # bring down main stack + openbao stack
+#          ./dc.sh up -d --full     # bring up openbao stack (if down) + main stack
 #
 # Reads AppRole credentials from .env.openbao (same directory as this script),
 # authenticates with OpenBao, fetches all secrets from kv/docker/*, and runs
 # docker compose with all secrets injected into the environment.
 #
 # If OpenBao is unreachable, dc.sh auto-starts the openbao stack and waits.
+# --full: for 'down', also brings down the openbao stack after the main stack.
 
 set -euo pipefail
 
@@ -31,6 +34,14 @@ source "${ENV_FILE}"
 : "${BAO_SECRET_ID:?Missing BAO_SECRET_ID in ${ENV_FILE}}"
 
 BAO_COMPOSE="${SCRIPT_DIR}/docker-compose.openbao.yml"
+
+# ── Strip --full flag (handle both stacks) ───────────────────────────────────
+FULL=false
+ARGS=()
+for arg in "$@"; do
+    [[ "${arg}" == "--full" ]] && FULL=true || ARGS+=("${arg}")
+done
+set -- "${ARGS[@]+"${ARGS[@]}"}"
 
 # ── Auto-start OpenBao stack if unreachable ──────────────────────────────────
 if ! curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
@@ -117,4 +128,9 @@ while IFS= read -r service; do
     done <<< "${secret_data}"
 done <<< "${PATHS}"
 
-exec docker compose "$@"
+if [[ "${FULL}" == "true" && "${1:-}" == "down" ]]; then
+    docker compose "$@"
+    docker compose -f "${BAO_COMPOSE}" down
+else
+    exec docker compose "$@"
+fi
