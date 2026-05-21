@@ -394,7 +394,7 @@ services:
     networks:
       - ${DOCKERNET}
     environment:
-      - DOZZLE_REMOTE_AGENT=${DOZZLE_REMOTE_AGENT}
+      - DOZZLE_REMOTE_AGENT=${DOZZLE_REMOTE_AGENT:-}
       - DOZZLE_AUTH_PROVIDER=forward-proxy
         #DOZZLE_AUTH_PROVIDER: simple
     volumes:
@@ -572,7 +572,7 @@ services:
     restart: unless-stopped
     logging: *logging
     environment:
-      - TDARR_URL=${TDARR_URL}
+      - TDARR_URL=${TDARR_URL:-}
       - HTTP_MAX_CONCURRENCY=10
     networks:
       - ${DOCKERNET}
@@ -1136,7 +1136,7 @@ services:
     networks: 
       - ${DOCKERNET} 
     environment:
-    - NZBGET_HOST=${NZBGET_HOST}
+    - NZBGET_HOST=${NZBGET_HOST:-}
     - NZBGET_USERNAME=nzbget
     - NZBGET_PASSWORD=${NZBGET_PASSWORD}
 
