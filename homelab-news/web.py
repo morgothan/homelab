@@ -15,8 +15,9 @@ from lib import (
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
+    _suggest_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
-    render_articles_html, render_blotter_html, log_card, containers_card, updates_card,
+    render_articles_html, render_blotter_html, render_asn_suggestions_html, log_card, containers_card, updates_card,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -292,11 +293,13 @@ async def blotter():
     else:
         bans, probes, _ = _blotter_cache
     intel = await enrich_ips([b["ip"] for b in bans])
+    asn_suggestions = _suggest_asn_blocks(bans)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     body = (
         masthead_rolling(now_str)
         + nav_bar("blotter")
         + render_blotter_html(bans, intel=intel)
+        + render_asn_suggestions_html(asn_suggestions)
     )
     return Response(content=page_wrap(body, refresh=60),
                     media_type="text/html; charset=utf-8")
