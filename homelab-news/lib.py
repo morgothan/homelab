@@ -820,11 +820,16 @@ def _build_probes(
     return sorted(probes, key=lambda x: x["hit_count"], reverse=True)[:10]
 
 
-def _security_prompt_block(bans: list[dict], probes: list[dict]) -> str:
+def _security_prompt_block(
+    bans: list[dict],
+    probes: list[dict],
+    asn_suggestions: Optional[list[dict]] = None,
+) -> str:
     """Build a pre-classified security section for the LLM prompt.
 
     Separates credential attacks from path scanners so the LLM cannot conflate
-    scanner 403 blocks with login failures.
+    scanner 403 blocks with login failures. Appends ASN block recommendations
+    when multiple bans cluster to the same autonomous system.
     """
     if not bans and not probes:
         return "SECURITY: No active IP bans, no active probing detected."
@@ -879,6 +884,21 @@ def _security_prompt_block(bans: list[dict], probes: list[dict]) -> str:
             parts.append(
                 f"    {p['ip']}: {p['hit_count']} hits"
                 f" ({p.get('category', 'scan')})"
+            )
+
+    if asn_suggestions:
+        parts.append(
+            f"\nASN BLOCK CANDIDATES — {len(asn_suggestions)} autonomous system"
+            f"{'s' if len(asn_suggestions)>1 else ''} with multiple banned IPs"
+            f" (manual block required — do NOT block automatically):"
+        )
+        for s in asn_suggestions:
+            cs_note = f", {s['crowdsec_count']} on CrowdSec blocklist" if s["crowdsec_count"] else ""
+            ut_note = f" ({s['usage_type']})" if s["usage_type"] else ""
+            parts.append(
+                f"  {s['asn']} ({s['org']}){ut_note}: {s['ip_count']} IPs banned,"
+                f" avg abuse score {s['avg_abuse']:.0f}%{cs_note}"
+                f" — consider: cf-fail2ban --block-asn {s['asn']}"
             )
 
     return "\n".join(parts)
@@ -1021,6 +1041,84 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
     banned_ips = {b["ip"] for b in bans}
     probes = _build_probes(access_hits, banned_ips, now)
     return bans, probes
+
+
+# ── ASN clustering ────────────────────────────────────────────────────────────
+
+# Minimum thresholds for surfacing an ASN block recommendation.
+_ASN_MIN_IPS        = 2      # distinct banned IPs from the same ASN
+_ASN_MIN_ABUSE      = 75     # average AbuseIPDB score across those IPs
+_ASN_DC_USAGE_FRAG  = "Data" # matches "Data Center/Web Hosting/Transit" etc.
+
+
+def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
+    """Cluster active bans by ASN and return candidates worth a manual block.
+
+    Reads the ip_intel cache (no network I/O). Returns a list ordered by
+    IP count descending, each entry:
+      {"asn": "AS12345", "org": "Acme Hosting", "ip_count": 4,
+       "avg_abuse": 100.0, "usage_type": "Data Center/...",
+       "crowdsec_count": 3, "ips": ["1.2.3.4", ...]}
+
+    Only ASNs meeting BOTH of:
+      - >= _ASN_MIN_IPS distinct banned IPs
+      - avg abuse_score >= _ASN_MIN_ABUSE  OR  >=1 IP has data-center usage_type
+    are returned. Unknown/empty ASN fields are skipped.
+    """
+    try:
+        cache: dict[str, dict] = load_json(IP_INTEL_FILE) or {}
+    except Exception:
+        return []
+
+    # Group banned IPs by ASN
+    by_asn: dict[str, dict] = {}
+    for b in bans:
+        ip  = b["ip"]
+        intel = cache.get(ip, {})
+        asn = intel.get("asn", "").strip()
+        if not asn or asn == "AS0":
+            continue
+        if asn not in by_asn:
+            by_asn[asn] = {
+                "asn":         asn,
+                "org":         intel.get("org") or intel.get("isp") or "",
+                "usage_types": [],
+                "abuse_scores": [],
+                "crowdsec_count": 0,
+                "ips": [],
+            }
+        entry = by_asn[asn]
+        entry["ips"].append(ip)
+        ut = intel.get("usage_type", "")
+        if ut:
+            entry["usage_types"].append(ut)
+        score = intel.get("abuse_score")
+        if score is not None:
+            entry["abuse_scores"].append(score)
+        if intel.get("crowdsec_classifications"):
+            entry["crowdsec_count"] += 1
+
+    suggestions = []
+    for asn, entry in by_asn.items():
+        ip_count = len(entry["ips"])
+        if ip_count < _ASN_MIN_IPS:
+            continue
+        scores = entry["abuse_scores"]
+        avg_abuse = sum(scores) / len(scores) if scores else 0.0
+        dc_hit = any(_ASN_DC_USAGE_FRAG in ut for ut in entry["usage_types"])
+        if avg_abuse < _ASN_MIN_ABUSE and not dc_hit:
+            continue
+        suggestions.append({
+            "asn":           asn,
+            "org":           entry["org"],
+            "ip_count":      ip_count,
+            "avg_abuse":     round(avg_abuse, 1),
+            "usage_type":    entry["usage_types"][0] if entry["usage_types"] else "",
+            "crowdsec_count": entry["crowdsec_count"],
+            "ips":           entry["ips"],
+        })
+
+    return sorted(suggestions, key=lambda x: (-x["ip_count"], -x["avg_abuse"]))
 
 
 # ── Prometheus metrics ────────────────────────────────────────────────────────
@@ -1498,6 +1596,7 @@ async def generate_newspaper(
     kopia: Optional[dict] = None,
     beszel: Optional[dict] = None,
     tautulli: Optional[dict] = None,
+    asn_suggestions: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -1539,7 +1638,7 @@ async def generate_newspaper(
             msg = _sanitize_for_llm(i['message'], max_len=120)
             lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {msg}")
 
-    lines.append("\n" + _security_prompt_block(bans or [], probes or []))
+    lines.append("\n" + _security_prompt_block(bans or [], probes or [], asn_suggestions))
 
     if prometheus:
         prom_lines: list[str] = []
@@ -1602,7 +1701,10 @@ async def generate_newspaper(
         "- HTTP 403 in raw logs = a bot was blocked by the scanner-block router, NOT a failed login.\n"
         "- The SECURITY block is pre-classified and authoritative. Base all security articles on it.\n"
         "  Do not write security articles from raw FailToBan or WAF log lines — those are already\n"
-        "  summarised in the SECURITY block and will cause misclassification if used directly.\n\n"
+        "  summarised in the SECURITY block and will cause misclassification if used directly.\n"
+        "- ASN BLOCK CANDIDATES = autonomous systems with multiple banned IPs, identified for manual review.\n"
+        "  If present, write one Public Safety article: name the ASN(s), IP count, and that manual\n"
+        "  review is recommended. Do NOT suggest or imply automatic blocking.\n\n"
         "Rules:\n"
         "- Group related items into one article. 'Five *arr apps have routine updates' = 1 article, not 5.\n"
         "- Within a section, order by importance: errors first, routine updates last.\n"
@@ -1967,17 +2069,22 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         check_tautulli(),
     )
 
+    asn_suggestions = _suggest_asn_blocks(bans)
+    if asn_suggestions:
+        log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
+
     # Phase 1: persist raw data immediately; keep the previous newspaper so the
     # page stays readable while the LLM re-renders.
     existing = load_json(target_file) or {}
     save_json(target_file, {
-        "built_at":       datetime.now(timezone.utc).isoformat(),
-        "newspaper":      existing.get("newspaper"),
-        "docker_issues":  docker_issues,
+        "built_at":        datetime.now(timezone.utc).isoformat(),
+        "newspaper":       existing.get("newspaper"),
+        "docker_issues":   docker_issues,
         "docker_analysis": existing.get("docker_analysis"),
-        "loki_issues":    loki_issues,
-        "loki_analysis":  existing.get("loki_analysis"),
-        "bans":           bans,
+        "loki_issues":     loki_issues,
+        "loki_analysis":   existing.get("loki_analysis"),
+        "bans":            bans,
+        "asn_suggestions": asn_suggestions,
     })
 
     unhealthy, _, _ = await get_container_status_async()
@@ -1993,20 +2100,21 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         ),
         generate_newspaper(
             docker_issues, loki_issues, update_hosts, unhealthy_names,
-            bans, probes, prometheus, kopia, beszel, tautulli,
+            bans, probes, prometheus, kopia, beszel, tautulli, asn_suggestions,
         ),
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
 
     save_json(target_file, {
-        "built_at":       datetime.now(timezone.utc).isoformat(),
-        "newspaper":      newspaper or [],
-        "docker_issues":  docker_issues,
+        "built_at":        datetime.now(timezone.utc).isoformat(),
+        "newspaper":       newspaper or [],
+        "docker_issues":   docker_issues,
         "docker_analysis": docker_analysis,
-        "loki_issues":    loki_issues,
-        "loki_analysis":  loki_analysis,
-        "bans":           bans,
+        "loki_issues":     loki_issues,
+        "loki_analysis":   loki_analysis,
+        "bans":            bans,
+        "asn_suggestions": asn_suggestions,
     })
 
 
@@ -2825,6 +2933,37 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Opt
         f'<span class="np-blotter-meta" style="margin-left:14px">{count_str} &nbsp;&middot;&nbsp; 24h bantime</span>'
         f'</div>'
         + entries_html
+        + '</div>'
+    )
+
+
+def render_asn_suggestions_html(suggestions: list[dict]) -> str:
+    """Render ASN block candidate panel for the blotter page."""
+    if not suggestions:
+        return ""
+    rows = []
+    for s in suggestions:
+        org_str  = _h(s["org"]) if s["org"] else "unknown org"
+        ut_str   = f' &middot; <span class="np-blotter-cat">{_h(s["usage_type"])}</span>' if s["usage_type"] else ""
+        cs_str   = f' &middot; {s["crowdsec_count"]} on CrowdSec blocklist' if s["crowdsec_count"] else ""
+        rows.append(
+            '<div class="np-blotter-item">'
+            f'<span class="np-blotter-ip c-warn">{_h(s["asn"])}</span>'
+            f'<span class="np-blotter-cat c-gold">{org_str}</span>'
+            f'<span class="np-blotter-meta">'
+            f'{s["ip_count"]} banned IPs'
+            f' &middot; avg abuse {s["avg_abuse"]:.0f}%'
+            f'{cs_str}'
+            f'{ut_str}'
+            '</span>'
+            '</div>'
+        )
+    return (
+        '<div class="np-blotter-page" style="margin-top:18px">'
+        '<div class="np-blotter-page-head" style="color:#f5a623">&#x26a0;&nbsp; ASN Block Candidates'
+        '<span class="np-blotter-meta" style="margin-left:14px">manual review — run cf-fail2ban --block-asn &lt;ASN&gt;</span>'
+        '</div>'
+        + "".join(rows)
         + '</div>'
     )
 
