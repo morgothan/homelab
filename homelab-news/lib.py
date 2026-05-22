@@ -1043,6 +1043,36 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
     return bans, probes
 
 
+def check_asn_blocks() -> list[dict]:
+    """Return the list of manually-blocked ASNs from the cf-fail2ban state file.
+
+    Each entry: {"asn": "AS22295", "org": "...", "blocked_at": "...", "cf_rule_id": "..."}
+    Returns an empty list if the state file doesn't exist or has no banned_asns.
+    """
+    try:
+        with open(CF_FAIL2BAN_STATE) as f:
+            state = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+    banned_asns = state.get("banned_asns", {})
+    result = []
+    for asn, info in banned_asns.items():
+        blocked_ts = info.get("blocked_at", 0)
+        try:
+            blocked_str = datetime.fromtimestamp(blocked_ts, tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+        except Exception:
+            blocked_str = "unknown"
+        result.append({
+            "asn":         asn,
+            "org":         info.get("org", ""),
+            "blocked_at":  blocked_str,
+            "cf_rule_id":  info.get("cf_rule_id", ""),
+            "notes":       info.get("notes", ""),
+        })
+    return sorted(result, key=lambda x: x["asn"])
+
+
 # ── ASN clustering ────────────────────────────────────────────────────────────
 
 # Minimum thresholds for surfacing an ASN block recommendation.
@@ -2963,6 +2993,39 @@ def render_asn_suggestions_html(suggestions: list[dict]) -> str:
         '<div class="np-blotter-page-head" style="color:#f5a623">&#x26a0;&nbsp; ASN Block Candidates'
         '<span class="np-blotter-meta" style="margin-left:14px">manual review — run cf-fail2ban --block-asn &lt;ASN&gt;</span>'
         '</div>'
+        + "".join(rows)
+        + '</div>'
+    )
+
+
+def render_asn_blocklist_html(asn_blocks: list[dict]) -> str:
+    """Render the permanently-blocked ASN list panel for the blotter page."""
+    if not asn_blocks:
+        return ""
+    rows = []
+    for b in asn_blocks:
+        org_str   = _h(b["org"]) if b["org"] else "unknown org"
+        notes_str = ""
+        if b.get("notes"):
+            notes_str = f'<div class="np-blotter-paths">{_h(b["notes"])}</div>'
+        rows.append(
+            '<div class="np-blotter-item">'
+            f'<span class="np-blotter-ip c-err">{_h(b["asn"])}</span>'
+            f'<span class="np-blotter-cat c-gold">{org_str}</span>'
+            f'<span class="np-blotter-meta">'
+            f'blocked {_h(b["blocked_at"])}'
+            f' &middot; rule {_h(b["cf_rule_id"])}'
+            '</span>'
+            + notes_str
+            + '</div>'
+        )
+    return (
+        '<div class="np-blotter-page" style="margin-top:18px">'
+        '<div class="np-blotter-page-head">ASN Blocklist'
+        '<span class="np-blotter-meta" style="margin-left:14px">'
+        f'{len(asn_blocks)} ASN{"s" if len(asn_blocks) != 1 else ""} permanently blocked'
+        ' &nbsp;&middot;&nbsp; manage with cf-fail2ban --block-asn / --unblock-asn'
+        '</span></div>'
         + "".join(rows)
         + '</div>'
     )
