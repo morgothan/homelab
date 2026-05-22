@@ -1123,6 +1123,13 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
     except Exception:
         return []
 
+    # Don't suggest ASNs that are already blocked
+    try:
+        state = load_json(CF_FAIL2BAN_STATE) or {}
+        already_blocked: frozenset[str] = frozenset(state.get("banned_asns", {}).keys())
+    except Exception:
+        already_blocked = frozenset()
+
     # Group banned IPs by ASN
     by_asn: dict[str, dict] = {}
     for b in bans:
@@ -1155,6 +1162,8 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
     for asn, entry in by_asn.items():
         if asn in _ASN_NEVER_SUGGEST:
             continue  # hyperscalers — collateral damage far outweighs benefit
+        if asn in already_blocked:
+            continue  # already have an ASN-level rule in Cloudflare
         ip_count = len(entry["ips"])
         if ip_count < _ASN_MIN_IPS:
             continue
