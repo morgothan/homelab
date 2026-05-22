@@ -191,8 +191,9 @@ homepage/tmp/
 # Prometheus (contains LAN hostnames for scrape targets)
 prometheus/etc/prometheus.yml
 
-# Promtail (contains LAN Loki endpoint)
+# Promtail (contains LAN Loki endpoint and runtime state)
 promtail/promtail-config.yml
+promtail/positions.yaml
 
 # Smokeping-prober (contains LAN hostnames to ping)
 smoke/config.yml
