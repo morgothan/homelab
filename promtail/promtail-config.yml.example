@@ -3,7 +3,8 @@ server:
   grpc_listen_port: 0
 
 positions:
-  filename: /tmp/positions.yaml
+  # Use a persistent path (bind-mounted from host) so restarts don't re-replay large files
+  filename: /etc/promtail/positions.yaml
 
 clients:
   - url: http://loki.yourlocalname:3100/loki/api/v1/push
@@ -19,6 +20,18 @@ scrape_configs:
     relabel_configs:
       - source_labels: ['__syslog_message_hostname']
         target_label: 'host'
+
+  # Tail Traefik access log file (not available via Docker socket since it goes to a file, not stdout)
+  # Requires volume mount: ${DOCKERDIR}/traefik/logs:/var/log/traefik:ro
+  # Pre-seed positions.yaml with current file size to avoid replaying the full history on first start
+  - job_name: traefik_access
+    static_configs:
+      - targets:
+          - localhost
+        labels:
+          job: traefik
+          host: traefik.yourlocalname
+          __path__: /var/log/traefik/access.log
 
   - job_name: docker
     docker_sd_configs:
