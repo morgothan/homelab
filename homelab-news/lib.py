@@ -79,6 +79,7 @@ GOTIFY_TOKEN   = os.getenv("GOTIFY_TOKEN", "")
 
 ARCHIVE_DIR   = os.path.join(DATA_DIR, "archive")
 ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
+NOTIFIED_UPDATES_FILE = os.path.join(DATA_DIR, "notified_updates.json")
 
 
 def _load_context() -> str:
