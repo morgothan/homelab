@@ -717,6 +717,7 @@ services:
     command: ttyd -W /shell
     environment:
       - TINI_SUBREAPER=1
+      - TTYD_USER
     privileged: true
     pid: host
     volumes:
