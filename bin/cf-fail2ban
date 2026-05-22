@@ -105,8 +105,13 @@ def offense_tier_label(count, duration):
 
 DRY_RUN    = "--dry-run" in sys.argv
 LIST       = "--list" in sys.argv
+LIST_ASN   = "--list-asn" in sys.argv
 _ub_idx    = sys.argv.index("--unblock") if "--unblock" in sys.argv else -1
 UNBLOCK_IP = sys.argv[_ub_idx + 1] if _ub_idx >= 0 and _ub_idx + 1 < len(sys.argv) else None
+_ba_idx    = sys.argv.index("--block-asn") if "--block-asn" in sys.argv else -1
+BLOCK_ASN  = sys.argv[_ba_idx + 1] if _ba_idx >= 0 and _ba_idx + 1 < len(sys.argv) else None
+_ua_idx    = sys.argv.index("--unblock-asn") if "--unblock-asn" in sys.argv else -1
+UNBLOCK_ASN = sys.argv[_ua_idx + 1] if _ua_idx >= 0 and _ua_idx + 1 < len(sys.argv) else None
 
 
 # ── Utilities ─────────────────────────────────────────────────────────────────
@@ -235,6 +240,64 @@ def cf_unblock_rule(rule_id, ip):
         return
 
     print(f"WARN: failed to remove rule {rule_id} for {ip}: {errors}")
+
+
+def cf_find_asn_rule(asn):
+    """Look up an existing account-level block rule for this ASN. Returns rule ID or None."""
+    url    = (f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules"
+              f"?mode=block&configuration_target=asn&configuration_value={asn}&per_page=5")
+    result = _cf_request("GET", url)
+    if result.get("success") and result.get("result"):
+        return result["result"][0]["id"]
+    return None
+
+
+def cf_block_asn(asn, notes=None):
+    """Add an account-level IP Access Rule blocking the entire ASN.
+
+    Returns the CF rule ID, or None on failure.
+    """
+    if DRY_RUN:
+        print(f"  [dry-run] would block {asn} in Cloudflare")
+        return "dry-run-id"
+
+    url    = f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules"
+    result = _cf_request("POST", url, {
+        "mode": "block",
+        "configuration": {"target": "asn", "value": asn},
+        "notes": notes or f"manual asn block {ts_str(time.time())}",
+    })
+
+    if result.get("success"):
+        return result["result"]["id"]
+
+    errors = result.get("errors", [])
+    if any(e.get("code") in (10009, 10004, 1004) for e in errors):
+        rule_id = cf_find_asn_rule(asn)
+        if rule_id:
+            return rule_id
+
+    print(f"WARN: failed to block {asn}: {errors}")
+    return None
+
+
+def cf_unblock_asn_rule(rule_id, asn):
+    """Delete a Cloudflare ASN block rule. Tolerates 'not found' gracefully."""
+    if DRY_RUN:
+        print(f"  [dry-run] would unblock {asn} (rule {rule_id})")
+        return
+
+    url    = f"{CF_API}/accounts/{CF_ACCOUNT}/firewall/access_rules/rules/{rule_id}"
+    result = _cf_request("DELETE", url)
+
+    if result.get("success"):
+        return
+
+    errors = result.get("errors", [])
+    if any(e.get("code") in (10000, 10007) for e in errors):
+        return
+
+    print(f"WARN: failed to remove ASN rule {rule_id} for {asn}: {errors}")
 
 
 # ── State ─────────────────────────────────────────────────────────────────────
@@ -447,6 +510,59 @@ def main():
         state["offense_history"] = history
         if not DRY_RUN:
             save_state(state)
+        return
+
+    if LIST_ASN:
+        state       = load_state()
+        banned_asns = state.get("banned_asns", {})
+        if not banned_asns:
+            print("No active ASN blocks.")
+        else:
+            print(f"{'ASN':<12} {'Org':<30} {'Blocked at':<22} CF Rule ID")
+            print("-" * 90)
+            for asn, info in sorted(banned_asns.items()):
+                print(f"{asn:<12} {info.get('org',''):<30} {ts_str(info['blocked_at']):<22} {info['cf_rule_id']}")
+        return
+
+    if BLOCK_ASN:
+        for var, val in [("CF_FAIL2BAN_TOKEN", CF_API_KEY), ("CF_ACCOUNT_ID", CF_ACCOUNT)]:
+            if not val:
+                die(f"{var} is not set — add it to OpenBao at kv/docker/cloudflare")
+        # Pull optional org name from remaining args (everything after the ASN)
+        _ba_end = _ba_idx + 2
+        org = " ".join(sys.argv[_ba_end:]).strip() if _ba_end < len(sys.argv) else ""
+        notes = f"manual asn block {ts_str(time.time())}" + (f" ({org})" if org else "")
+        rule_id = cf_block_asn(BLOCK_ASN, notes=notes)
+        if rule_id:
+            state = load_state()
+            state.setdefault("banned_asns", {})[BLOCK_ASN] = {
+                "blocked_at": int(time.time()),
+                "cf_rule_id": rule_id,
+                "org":        org,
+                "notes":      notes,
+            }
+            if not DRY_RUN:
+                save_state(state)
+            print(f"Blocked ASN {BLOCK_ASN} ({org}) — rule {rule_id}")
+        return
+
+    if UNBLOCK_ASN:
+        for var, val in [("CF_FAIL2BAN_TOKEN", CF_API_KEY), ("CF_ACCOUNT_ID", CF_ACCOUNT)]:
+            if not val:
+                die(f"{var} is not set — add it to OpenBao at kv/docker/cloudflare")
+        state       = load_state()
+        banned_asns = state.get("banned_asns", {})
+        info        = banned_asns.pop(UNBLOCK_ASN, None)
+        if not info:
+            print(f"{UNBLOCK_ASN} is not in the active ASN block list.")
+            return
+        rule_id = info.get("cf_rule_id")
+        if rule_id:
+            cf_unblock_asn_rule(rule_id, UNBLOCK_ASN)
+        state["banned_asns"] = banned_asns
+        if not DRY_RUN:
+            save_state(state)
+        print(f"Unblocked ASN {UNBLOCK_ASN} ({info.get('org', '')})")
         return
 
     for var, val in [("CF_FAIL2BAN_TOKEN", CF_API_KEY), ("CF_ACCOUNT_ID", CF_ACCOUNT)]:
