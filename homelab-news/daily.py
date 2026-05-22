@@ -78,9 +78,9 @@ def snapshot(date_str: str) -> None:
     record = {
         "date": date_str,
         "built_at": today.get("built_at", datetime.now(timezone.utc).isoformat()),
-        "docker_issues":   (today.get("docker_issues") or [])[:50],
+        "docker_issues":   today.get("docker_issues") or [],
         "docker_analysis": today.get("docker_analysis"),
-        "loki_issues":     (today.get("loki_issues") or [])[:50],
+        "loki_issues":     today.get("loki_issues") or [],
         "loki_analysis":   today.get("loki_analysis"),
         "bans":            today.get("bans") or [],
         "newspaper":       newspaper,
