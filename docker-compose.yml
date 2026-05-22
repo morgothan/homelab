@@ -348,9 +348,13 @@ services:
         #      - "9080:9080"
     restart: unless-stopped
     logging: *logging
+    environment:
+      # TMPDIR must be inside the bind-mounted directory so Go's os.TempDir()
+      # returns a path on the same ext4 device as positions.yaml — Promtail writes
+      # atomically via rename(), which fails across devices (overlayfs /tmp → ext4).
+      - TMPDIR=/etc/promtail
     volumes:
-      - ${DOCKERDIR}/promtail/promtail-config.yml:/etc/promtail/promtail-config.yml:ro
-      - ${DOCKERDIR}/promtail/positions.yaml:/etc/promtail/positions.yaml
+      - ${DOCKERDIR}/promtail:/etc/promtail
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - ${DOCKERDIR}/traefik/logs:/var/log/traefik:ro
