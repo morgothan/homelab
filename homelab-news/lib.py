@@ -1080,6 +1080,29 @@ _ASN_MIN_IPS        = 2      # distinct banned IPs from the same ASN
 _ASN_MIN_ABUSE      = 75     # average AbuseIPDB score across those IPs
 _ASN_DC_USAGE_FRAG  = "Data" # matches "Data Center/Web Hosting/Transit" etc.
 
+# Major cloud providers / CDNs where ASN-level blocking causes unacceptable
+# collateral damage. Attackers do spin up VMs on these, but millions of
+# legitimate services share the same ASNs — never suggest blocking them.
+_ASN_NEVER_SUGGEST: frozenset[str] = frozenset({
+    "AS8075",   # Microsoft / Azure
+    "AS8069",   # Microsoft
+    "AS8068",   # Microsoft
+    "AS16509",  # Amazon / AWS
+    "AS14618",  # Amazon / AWS
+    "AS15169",  # Google / GCP
+    "AS396982", # Google Cloud
+    "AS13335",  # Cloudflare
+    "AS20940",  # Akamai
+    "AS54113",  # Fastly
+    "AS14061",  # DigitalOcean
+    "AS63949",  # Linode / Akamai
+    "AS16276",  # OVH
+    "AS24940",  # Hetzner
+    "AS20473",  # Vultr
+    "AS46606",  # Unified Layer / Bluehost
+    "AS36351",  # SoftLayer / IBM Cloud
+})
+
 
 def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
     """Cluster active bans by ASN and return candidates worth a manual block.
@@ -1130,6 +1153,8 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
 
     suggestions = []
     for asn, entry in by_asn.items():
+        if asn in _ASN_NEVER_SUGGEST:
+            continue  # hyperscalers — collateral damage far outweighs benefit
         ip_count = len(entry["ips"])
         if ip_count < _ASN_MIN_IPS:
             continue
