@@ -1177,7 +1177,9 @@ services:
       #external access
       - traefik.http.routers.kopia-ui-http.entrypoints=https
       - traefik.http.routers.kopia-ui-http.rule=Host(`kopia.${DOMAIN}`)
-      - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,kopia-auth@file
+      # chain-authelia-nowaf minus test-errors: Kopia API returns 4xx for valid non-error states;
+      # test-errors would replace those with HTML breaking the frontend.
+      - traefik.http.routers.kopia-ui-http.middlewares=strip-auth-header@file,realip@file,robotstxt@file,middlewares-rate-limit@file,middlewares-secure-headers@file,fail2ban@file,middlewares-authelia@file,kopia-auth@file
       - traefik.http.routers.kopia-ui-http.service=kopia-ui
       - traefik.http.routers.kopia-ui-http.tls.certresolver=letsencrypt
       - traefik.http.routers.kopia-ui-http.tls.domains[0].main=${DOMAIN}

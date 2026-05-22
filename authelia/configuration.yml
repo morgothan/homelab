@@ -53,6 +53,17 @@ identity_validation:
 access_control:
   default_policy: deny
   rules:
+    # Kopia bundles assets with crossorigin="anonymous" which suppresses credentials.
+    # Authelia never sees a session cookie for those fetches and redirects cross-origin,
+    # causing a CORS error before the JS even loads. Bypass auth for the static frontend
+    # files only; all API endpoints still require two_factor via the catch-all below.
+    - domain: 'kopia.{{ env "DOMAIN" }}'
+      resources:
+        - '^/assets/.*$'
+        - '^/manifest.json$'
+        - '^/favicon.ico$'
+        - '^/logo[0-9]+.png$'
+      policy: bypass
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
