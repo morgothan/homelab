@@ -231,3 +231,6 @@ waf/LOCAL-EXCLUSIONS.conf
 
 # Implementation specs (contain hostnames, IPs, and email addresses)
 specs/
+
+# RainSoft intercept — captured device request logs (contain dealer PII)
+rainsoft/data/
