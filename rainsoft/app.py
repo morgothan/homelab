@@ -38,6 +38,7 @@ salt_28day = Gauge("rainsoft_salt_28day_lbs", "Salt used in last 28 days (lbs)")
 regens_28day = Gauge("rainsoft_regens_28day_total", "Regenerations in last 28 days")
 last_regen_ts = Gauge("rainsoft_last_regen_timestamp_seconds", "Unix timestamp of last regeneration")
 rssi = Gauge("rainsoft_wifi_rssi_dbm", "WiFi RSSI (dBm)")
+end_of_day = Gauge("rainsoft_end_of_day", "End-of-day rollover flag (1=midnight rollover in progress)")
 
 # customer_settings_upload
 salt_level = Gauge("rainsoft_salt_level_lbs", "Estimated salt level in tank (lbs)")
@@ -99,6 +100,7 @@ async def handle_stats_upload(request: Request):
     salt_28day.set(float(payload.get("salt_28_day", 0)))
     regens_28day.set(float(payload.get("regens_28_day", 0)))
     rssi.set(float(payload.get("rssi", 0)))
+    end_of_day.set(float(payload.get("end_of_day", 0)))
 
     regen_date_str = payload.get("last_regen_date", "")
     if regen_date_str:
@@ -141,6 +143,8 @@ async def handle_installer_settings(request: Request):
             "hardness": payload.get("hardness", ""),
             "iron_level": payload.get("iron_level", "").strip(),
             "unit_size": payload.get("unit_size", ""),
+            "starting_cap": payload.get("starting_cap", ""),
+            "max_salt_lbs": payload.get("max_salt", ""),
         })
 
     return PlainTextResponse("OK")

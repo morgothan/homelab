@@ -122,7 +122,7 @@ def table_info(id_, x, y, w, h):
         },
         "transformations": [
             {"id": "labelsToFields", "options": {"mode": "columns"}},
-            {"id": "filterFieldsByName", "options": {"include": {"names": ["model","firmware","serial","install_date","hardness","iron_level","unit_size"]}}},
+            {"id": "filterFieldsByName", "options": {"include": {"names": ["model","firmware","serial","install_date","hardness","iron_level","unit_size","starting_cap","max_salt_lbs"]}}},
         ],
         "targets": [ds("rainsoft_system_info", instant=True)],
     }
@@ -131,7 +131,7 @@ panels = [
     # ── Row 1: Status ──────────────────────────────────────────────────────
     row_panel(1, "Status", 0),
 
-    stat(2, "System Status", "rainsoft_system_status", 0, 1, 4, 3,
+    stat(2, "System Status", "rainsoft_system_status", 0, 1, 3, 3,
          color_mode="background",
          mappings=[{"type": "value", "options": {
              "0": {"text": "OK",    "color": "green", "index": 0},
@@ -140,7 +140,7 @@ panels = [
          thresholds={"mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "red", "value": 1}]}),
 
     # Age in seconds since last contact — thresholds on seconds, not timestamp
-    stat(3, "Last Contact", "time() - rainsoft_last_contact_timestamp_seconds", 4, 1, 5, 3,
+    stat(3, "Last Contact", "time() - rainsoft_last_contact_timestamp_seconds", 3, 1, 4, 3,
          unit="s",
          thresholds={"mode": "absolute", "steps": [
              {"color": "green",  "value": None},
@@ -149,11 +149,11 @@ panels = [
          ]}),
 
     # Multiply seconds → ms so Grafana dateTimeAsLocal interprets correctly
-    stat(4, "Last Regeneration", "rainsoft_last_regen_timestamp_seconds * 1000", 9, 1, 7, 3,
+    stat(4, "Last Regeneration", "rainsoft_last_regen_timestamp_seconds * 1000", 7, 1, 9, 3,
          unit="dateTimeAsLocal",
          thresholds={"mode": "absolute", "steps": [{"color": "text", "value": None}]}),
 
-    stat(5, "WiFi RSSI", "rainsoft_wifi_rssi_dbm", 16, 1, 4, 3,
+    stat(5, "WiFi RSSI", "rainsoft_wifi_rssi_dbm", 16, 1, 3, 3,
          unit="dBm", decimals=0,
          thresholds={"mode": "absolute", "steps": [
              {"color": "red",    "value": None},
@@ -162,12 +162,19 @@ panels = [
              {"color": "green",  "value": -60},
          ]}),
 
-    stat(6, "Vacation Mode", "rainsoft_vacation_mode", 20, 1, 4, 3,
+    stat(6, "Vacation Mode", "rainsoft_vacation_mode", 19, 1, 3, 3,
          mappings=[{"type": "value", "options": {
              "0": {"text": "Off", "color": "green", "index": 0},
              "1": {"text": "ON",  "color": "blue",  "index": 1},
          }}],
          thresholds={"mode": "absolute", "steps": [{"color": "green", "value": None}]}),
+
+    stat(27, "End of Day", "rainsoft_end_of_day", 22, 1, 2, 3,
+         mappings=[{"type": "value", "options": {
+             "0": {"text": "—",        "color": "text", "index": 0},
+             "1": {"text": "ROLLOVER", "color": "blue", "index": 1},
+         }}],
+         thresholds={"mode": "absolute", "steps": [{"color": "text", "value": None}]}),
 
     # ── Row 2: Water Usage ─────────────────────────────────────────────────
     row_panel(7, "Water Usage", 4),
@@ -189,16 +196,15 @@ panels = [
               {"color": "green",  "value": 75},
           ]}),
 
-    stat(14, "Salt Level",          "rainsoft_salt_level_lbs",    8, 10, 4, 4, unit="lbs"),
-    stat(15, "28-Day Salt Used",    "rainsoft_salt_28day_lbs",    12, 10, 4, 4, unit="lbs"),
-    stat(16, "28-Day Regens",       "rainsoft_regens_28day_total",16, 10, 4, 4),
-    stat(17, "Capacity at Cycle Start", "rainsoft_capacity_at_start_percent", 20, 10, 4, 4, unit="percent"),
+    stat(14, "Salt Used (cumulative)", "rainsoft_salt_level_lbs",    8, 10, 4, 4, unit="lbs"),
+    stat(15, "28-Day Salt Used",       "rainsoft_salt_28day_lbs",    12, 10, 4, 4, unit="lbs"),
+    stat(16, "28-Day Regens",          "rainsoft_regens_28day_total",16, 10, 4, 4),
+    stat(17, "Capacity at Cycle Start","rainsoft_capacity_at_start_percent", 20, 10, 4, 4, unit="percent"),
 
-    stat(18, "Salt Level",          "rainsoft_salt_level_lbs",    8, 14, 4, 4, unit="lbs"),
-    # duplicate removed — use the second row for a sparkline version
-    timeseries(19, "Salt Level Trend", [
+    # Salt trend fills the right side of the health row (gauge occupies x=0-8, h=8)
+    timeseries(19, "Cumulative Salt Used", [
         {**ds("rainsoft_salt_level_lbs", legend="Salt (lbs)"), "refId": "A"},
-    ], 8, 14, 12, 4, unit="lbs"),
+    ], 8, 14, 16, 4, unit="lbs"),
 
     # ── Row 4: History ─────────────────────────────────────────────────────
     row_panel(20, "History", 18),
@@ -224,9 +230,6 @@ panels = [
     row_panel(25, "System Info", 33),
     table_info(26, 0, 34, 24, 5),
 ]
-
-# Remove the duplicate salt panel (id=18 is a duplicate of 14)
-panels = [p for p in panels if p["id"] != 18]
 
 dashboard = {
     "dashboard": {
