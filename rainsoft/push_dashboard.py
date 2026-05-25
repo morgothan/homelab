@@ -139,15 +139,17 @@ panels = [
          }}],
          thresholds={"mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "red", "value": 1}]}),
 
-    stat(3, "Last Contact", "rainsoft_last_contact_timestamp_seconds", 4, 1, 5, 3,
-         unit="dateTimeFromNow",
+    # Age in seconds since last contact — thresholds on seconds, not timestamp
+    stat(3, "Last Contact", "time() - rainsoft_last_contact_timestamp_seconds", 4, 1, 5, 3,
+         unit="s",
          thresholds={"mode": "absolute", "steps": [
-             {"color": "green", "value": None},
-             {"color": "yellow", "value": -600},   # >10 min ago
-             {"color": "red",    "value": -1800},  # >30 min ago
+             {"color": "green",  "value": None},
+             {"color": "yellow", "value": 600},   # >10 min stale
+             {"color": "red",    "value": 1800},  # >30 min stale
          ]}),
 
-    stat(4, "Last Regeneration", "rainsoft_last_regen_timestamp_seconds", 9, 1, 7, 3,
+    # Multiply seconds → ms so Grafana dateTimeAsLocal interprets correctly
+    stat(4, "Last Regeneration", "rainsoft_last_regen_timestamp_seconds * 1000", 9, 1, 7, 3,
          unit="dateTimeAsLocal",
          thresholds={"mode": "absolute", "steps": [{"color": "text", "value": None}]}),
 
