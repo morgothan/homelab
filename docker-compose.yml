@@ -1358,6 +1358,23 @@ services:
       - traefik.http.routers.open-webui-https.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.open-webui.loadbalancer.server.port=8080
 
+########## RainSoft EC5 V75 Intercept
+# Captures outbound HTTP calls from water purifier to remind.rainsoft.com
+# Requires AdGuard DNS rewrite: remind.rainsoft.com → Docker host IP
+# Requires UniFi firewall rule: RainSoft device (IoT VLAN) → Docker host TCP/80
+  rainsoft-intercept:
+    build: ./rainsoft
+    container_name: rainsoft-intercept
+    image: rainsoft-intercept:latest
+    restart: unless-stopped
+    logging: *logging
+    volumes:
+      - ${DOCKERDIR}/rainsoft/data:/data
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=false
+
 
 networks:
   proxy:  #create with docker network create proxy
