@@ -196,14 +196,14 @@ panels = [
               {"color": "green",  "value": 75},
           ]}),
 
-    stat(14, "Salt Used (cumulative)", "rainsoft_salt_level_lbs",    8, 10, 4, 4, unit="lbs"),
+    stat(14, "Salt Remaining",         "rainsoft_salt_level_lbs",    8, 10, 4, 4, unit="lbs"),
     stat(15, "28-Day Salt Used",       "rainsoft_salt_28day_lbs",    12, 10, 4, 4, unit="lbs"),
     stat(16, "28-Day Regens",          "rainsoft_regens_28day_total",16, 10, 4, 4),
     stat(17, "Capacity at Cycle Start","rainsoft_capacity_at_start_percent", 20, 10, 4, 4, unit="percent"),
 
     # Salt trend fills the right side of the health row (gauge occupies x=0-8, h=8)
-    timeseries(19, "Cumulative Salt Used", [
-        {**ds("rainsoft_salt_level_lbs", legend="Salt (lbs)"), "refId": "A"},
+    timeseries(19, "Salt Remaining Trend", [
+        {**ds("rainsoft_salt_level_lbs", legend="Salt remaining (lbs)"), "refId": "A"},
     ], 8, 14, 16, 4, unit="lbs"),
 
     # ── Row 4: History ─────────────────────────────────────────────────────

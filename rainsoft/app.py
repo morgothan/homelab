@@ -41,7 +41,7 @@ rssi = Gauge("rainsoft_wifi_rssi_dbm", "WiFi RSSI (dBm)")
 end_of_day = Gauge("rainsoft_end_of_day", "End-of-day rollover flag (1=midnight rollover in progress)")
 
 # customer_settings_upload
-salt_level = Gauge("rainsoft_salt_level_lbs", "Estimated salt level in tank (lbs)")
+salt_level = Gauge("rainsoft_salt_level_lbs", "Estimated salt remaining in tank (lbs)")
 vacation_mode = Gauge("rainsoft_vacation_mode", "Vacation mode enabled (1=yes)")
 
 # system info (installer_settings_upload) — set once, exposed as labels
