@@ -82,7 +82,10 @@ def gauge(id_, title, expr, x, y, w, h, unit="", min_=0, max_=100, thresholds=No
         "targets": [ds(expr, instant=True)],
     }
 
-def timeseries(id_, title, targets, x, y, w, h, unit="", stacked=False):
+def timeseries(id_, title, targets, x, y, w, h, unit="", stacked=False, min_val="UNSET"):
+    defaults = {"unit": unit, "custom": {"lineWidth": 2}}
+    if min_val != "UNSET":
+        defaults["min"] = min_val  # None → JSON null → Grafana auto-scales Y axis
     return {
         "id": id_, "type": "timeseries", "title": title,
         "gridPos": {"x": x, "y": y, "w": w, "h": h},
@@ -94,7 +97,7 @@ def timeseries(id_, title, targets, x, y, w, h, unit="", stacked=False):
             "stacking": {"mode": "normal" if stacked else "none"},
         },
         "fieldConfig": {
-            "defaults": {"unit": unit, "custom": {"lineWidth": 2}},
+            "defaults": defaults,
             "overrides": [],
         },
         "targets": targets,
@@ -260,7 +263,7 @@ panels = [
 
     timeseries(24, "Lifetime Flow", [
         {**ds("rainsoft_lifetime_flow_gallons", legend="Gallons"), "refId": "A"},
-    ], 12, 33, 12, 6, unit="gal"),
+    ], 12, 33, 12, 6, unit="gal", min_val=None),
 
     # ── Row 6: System Info ─────────────────────────────────────────────────
     row_panel(25, "System Info", 39),
