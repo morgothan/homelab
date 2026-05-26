@@ -103,6 +103,7 @@ def offense_tier_label(count, duration):
     return f"{count}{suffix} offense ({dur})"
 
 
+HELP       = "--help" in sys.argv or "-h" in sys.argv
 DRY_RUN    = "--dry-run" in sys.argv
 LIST       = "--list" in sys.argv
 LIST_ASN   = "--list-asn" in sys.argv
@@ -461,6 +462,39 @@ def parse_ban_events(lines):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 def main():
+    if HELP:
+        print("""cf-fail2ban — sync Traefik fail2ban bans to Cloudflare account-level IP Access Rules
+
+USAGE
+  cf-fail2ban [--dry-run]              Watch docker logs, block new IPs, expire old bans
+  cf-fail2ban --list                   List all active IP bans and offense history
+  cf-fail2ban --unblock <IP>           Remove a specific IP ban (Cloudflare + state file)
+  cf-fail2ban --list-asn               List all active ASN (network-level) blocks
+  cf-fail2ban --block-asn <ASN> [org]  Block an entire ASN in Cloudflare
+                                         e.g. cf-fail2ban --block-asn AS12345 "Acme Hosting"
+  cf-fail2ban --unblock-asn <ASN>      Remove an ASN block
+  cf-fail2ban --dry-run [command]      Simulate any action without making changes
+  cf-fail2ban --help | -h              Show this help
+
+BAN TIERS (escalating on repeat offenses)
+  1st offense   24 hours
+  2nd offense    7 days
+  3rd offense   30 days
+  4th offense  365 days
+  5th+ offense  permanent (manual removal required)
+
+REQUIRED ENV VARS  (from OpenBao kv/docker/cloudflare)
+  CF_FAIL2BAN_TOKEN   Cloudflare API token (Account:Firewall Services:Edit)
+  CF_ACCOUNT_ID       Cloudflare account ID
+
+OPTIONAL ENV VARS
+  CF_FAIL2BAN_BANTIME  Ban duration in seconds (default: 86400); must match Traefik bantime
+
+STATE FILE
+  ~/docker/traefik/monitor/fail2ban-state.json
+""")
+        return
+
     if LIST:
         state   = load_state()
         banned  = state.get("banned", {})
