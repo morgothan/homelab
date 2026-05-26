@@ -893,12 +893,13 @@ def _security_prompt_block(
             f" (manual block required — do NOT block automatically):"
         )
         for s in asn_suggestions:
-            cs_note = f", {s['crowdsec_count']} on CrowdSec blocklist" if s["crowdsec_count"] else ""
-            ut_note = f" ({s['usage_type']})" if s["usage_type"] else ""
+            cs_note    = f", {s['crowdsec_count']} on CrowdSec blocklist" if s["crowdsec_count"] else ""
+            ut_note    = f" ({s['usage_type']})" if s["usage_type"] else ""
+            large_note = " [LARGE SHARED ASN — block with caution]" if s.get("large_asn") else ""
             parts.append(
                 f"  {s['asn']} ({s['org']}){ut_note}: {s['ip_count']} IPs banned,"
                 f" avg abuse score {s['avg_abuse']:.0f}%{cs_note}"
-                f" — consider: cf-fail2ban --block-asn {s['asn']}"
+                f" — consider: cf-fail2ban --block-asn {s['asn']}{large_note}"
             )
 
     return "\n".join(parts)
@@ -1160,8 +1161,6 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
 
     suggestions = []
     for asn, entry in by_asn.items():
-        if asn in _ASN_NEVER_SUGGEST:
-            continue  # hyperscalers — collateral damage far outweighs benefit
         if asn in already_blocked:
             continue  # already have an ASN-level rule in Cloudflare
         ip_count = len(entry["ips"])
@@ -1180,6 +1179,7 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
             "usage_type":    entry["usage_types"][0] if entry["usage_types"] else "",
             "crowdsec_count": entry["crowdsec_count"],
             "ips":           entry["ips"],
+            "large_asn":     asn in _ASN_NEVER_SUGGEST,
         })
 
     return sorted(suggestions, key=lambda x: (-x["ip_count"], -x["avg_abuse"]))
@@ -3010,6 +3010,10 @@ def render_asn_suggestions_html(suggestions: list[dict]) -> str:
         org_str  = _h(s["org"]) if s["org"] else "unknown org"
         ut_str   = f' &middot; <span class="np-blotter-cat">{_h(s["usage_type"])}</span>' if s["usage_type"] else ""
         cs_str   = f' &middot; {s["crowdsec_count"]} on CrowdSec blocklist' if s["crowdsec_count"] else ""
+        large_str = (
+            ' &middot; <span class="c-err" title="Major cloud/CDN provider — blocking this ASN risks collateral damage to legitimate traffic">'
+            '&#x26a0; Large shared ASN — block with caution</span>'
+        ) if s.get("large_asn") else ""
         rows.append(
             '<div class="np-blotter-item">'
             f'<span class="np-blotter-ip c-warn">{_h(s["asn"])}</span>'
@@ -3019,6 +3023,7 @@ def render_asn_suggestions_html(suggestions: list[dict]) -> str:
             f' &middot; avg abuse {s["avg_abuse"]:.0f}%'
             f'{cs_str}'
             f'{ut_str}'
+            f'{large_str}'
             '</span>'
             '</div>'
         )
