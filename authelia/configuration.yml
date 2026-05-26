@@ -64,6 +64,20 @@ access_control:
         - '^/favicon.ico$'
         - '^/logo[0-9]+.png$'
       policy: bypass
+
+    # Jellyfin web UI requires Authelia 2FA (protects the browser interface).
+    # Must come before the bypass rule below so the web paths match first.
+    - domain: 'jellyfin.{{ env "DOMAIN" }}'
+      resources:
+        - '^/$'
+        - '^/web([/?].*)?$'
+      policy: two_factor
+
+    # Jellyfin API paths bypass Authelia entirely — native clients (mobile, TV, desktop)
+    # cannot do browser-based OAuth flows. Jellyfin's own token auth handles these.
+    - domain: 'jellyfin.{{ env "DOMAIN" }}'
+      policy: bypass
+
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
@@ -401,6 +415,30 @@ identity_providers:
         access_token_signed_response_alg: 'none'
         userinfo_signed_response_alg: 'none'
         token_endpoint_auth_method: 'client_secret_basic'
+
+############ Jellyfin #####################
+      - client_id: '{{ env "OIDC_JELLYFIN_CLIENT_ID" }}'
+        client_name: 'Jellyfin'
+        client_secret: '{{ env "OIDC_JELLYFIN_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://jellyfin.{{ env "DOMAIN" }}/sso/OID/redirect/authelia'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+          - 'groups'
+        response_types:
+          - 'code'
+        grant_types:
+          - 'authorization_code'
+        access_token_signed_response_alg: 'none'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_post'
+        claims_policy: 'default'
 
 ############ OpenBao #####################
       - client_id: '{{ env "OIDC_OPENBAO_CLIENT_ID" }}'
