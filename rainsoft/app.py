@@ -44,6 +44,13 @@ end_of_day = Gauge("rainsoft_end_of_day", "End-of-day rollover flag (1=midnight 
 salt_level = Gauge("rainsoft_salt_level_lbs", "Estimated salt remaining in tank (lbs)")
 vacation_mode = Gauge("rainsoft_vacation_mode", "Vacation mode enabled (1=yes)")
 
+# additional_system_history_upload
+additional_system_interval = Gauge(
+    "rainsoft_additional_system_remain_interval",
+    "Remaining service interval for each additional filter/component",
+    ["number"],
+)
+
 # system info (installer_settings_upload) — set once, exposed as labels
 system_info = Info("rainsoft_system", "RainSoft system information")
 
@@ -146,6 +153,22 @@ async def handle_installer_settings(request: Request):
             "starting_cap": payload.get("starting_cap", ""),
             "max_salt_lbs": payload.get("max_salt", ""),
         })
+
+    return PlainTextResponse("OK")
+
+
+@app.post("/api/device/v1/water_softener/additional_system_history_upload")
+async def handle_additional_system_history(request: Request):
+    data = parse_body(await request.body())
+    payload = data.get("content", {}).get("payload", {})
+    log_entry(request.url.path, data)
+    track(request.url.path)
+
+    for system in payload.get("additional_systems", []):
+        num = system.get("number", "")
+        interval = system.get("remain_interval")
+        if num and interval is not None:
+            additional_system_interval.labels(number=num).set(float(interval))
 
     return PlainTextResponse("OK")
 
