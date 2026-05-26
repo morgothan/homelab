@@ -206,29 +206,65 @@ panels = [
         {**ds("rainsoft_salt_level_lbs", legend="Salt remaining (lbs)"), "refId": "A"},
     ], 8, 14, 16, 4, unit="lbs"),
 
-    # ── Row 4: History ─────────────────────────────────────────────────────
-    row_panel(20, "History", 18),
+    # ── Row 4: Filter Service Intervals ────────────────────────────────────
+    row_panel(28, "Filter Service Intervals", 18),
+
+    stat(29, "System 1 — Remain Interval",
+         'rainsoft_additional_system_remain_interval{number="1"}',
+         0, 19, 8, 5,
+         graph_mode="area",
+         thresholds={"mode": "absolute", "steps": [
+             {"color": "red",    "value": None},
+             {"color": "orange", "value": 8},
+             {"color": "yellow", "value": 15},
+             {"color": "green",  "value": 30},
+         ]}),
+
+    stat(30, "System 2 — Remain Interval",
+         'rainsoft_additional_system_remain_interval{number="2"}',
+         8, 19, 8, 5,
+         graph_mode="area",
+         thresholds={"mode": "absolute", "steps": [
+             {"color": "red",    "value": None},
+             {"color": "orange", "value": 8},
+             {"color": "yellow", "value": 15},
+             {"color": "green",  "value": 30},
+         ]}),
+
+    stat(31, "System 3 — Remain Interval",
+         'rainsoft_additional_system_remain_interval{number="3"}',
+         16, 19, 8, 5,
+         graph_mode="area",
+         thresholds={"mode": "absolute", "steps": [
+             {"color": "red",    "value": None},
+             {"color": "orange", "value": 8},
+             {"color": "yellow", "value": 15},
+             {"color": "green",  "value": 30},
+         ]}),
+
+    # ── Row 5: History ─────────────────────────────────────────────────────
+    row_panel(20, "History", 24),
 
     timeseries(21, "Water Usage", [
         {**ds("rainsoft_daily_water_gallons",      legend="Today"),        "refId": "A"},
         {**ds("rainsoft_flow_since_regen_gallons", legend="Since Regen"),  "refId": "B"},
-    ], 0, 19, 12, 8, unit="gal"),
+    ], 0, 25, 12, 8, unit="gal"),
 
     timeseries(22, "Capacity Remaining", [
         {**ds("rainsoft_capacity_remaining_percent", legend="Capacity %"), "refId": "A"},
-    ], 12, 19, 12, 8, unit="percent"),
+    ], 12, 25, 12, 8, unit="percent"),
 
     timeseries(23, "WiFi Signal", [
         {**ds("rainsoft_wifi_rssi_dbm", legend="RSSI"), "refId": "A"},
-    ], 0, 27, 12, 6, unit="dBm"),
+    ], 0, 33, 12, 6, unit="dBm"),
 
     timeseries(24, "Lifetime Flow", [
         {**ds("rainsoft_lifetime_flow_gallons", legend="Gallons"), "refId": "A"},
-    ], 12, 27, 12, 6, unit="gal"),
+    ], 12, 33, 12, 6, unit="gal"),
 
-    # ── Row 5: System Info ─────────────────────────────────────────────────
-    row_panel(25, "System Info", 33),
-    table_info(26, 0, 34, 24, 5),
+    # ── Row 6: System Info ─────────────────────────────────────────────────
+    row_panel(25, "System Info", 39),
+    table_info(26, 0, 40, 24, 5),
 ]
 
 dashboard = {
