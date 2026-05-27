@@ -158,7 +158,7 @@ panels = [
     _row(6, "Cache & Traffic", 5),
 
     _stat(7, "Cache Hit %",
-          'sum(cf_cache_requests{cache_status="hit", zone=~"$zone"})'
+          '(sum(cf_cache_requests{cache_status="hit", zone=~"$zone"}) or vector(0))'
           ' / sum(cf_cache_requests{zone=~"$zone"}) * 100',
           0, 6, 8, 4, unit="percent", decimals=1,
           thresholds={"mode": "absolute", "steps": [
