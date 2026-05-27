@@ -8,7 +8,6 @@ import base64
 import json
 import os
 import urllib.request
-import urllib.error
 
 GRAFANA_URL = os.getenv("GRAFANA_URL", "http://grafana:3000")
 USER = os.getenv("GF_SECURITY_ADMIN_USER", "admin")
@@ -140,7 +139,7 @@ panels = [
     _stat(2,  "Requests / min",    "cf_requests_per_minute",
           0,  1, 5, 4, decimals=1, graph_mode="area"),
     _stat(3,  "Bandwidth / min",   "sum(cf_bandwidth_bytes_by_country)",
-          5,  1, 5, 4, unit="Bps", decimals=1, graph_mode="area"),
+          5,  1, 5, 4, unit="decbytes", decimals=1, graph_mode="area"),
     _stat(4,  "Unique Visitors / min", "cf_unique_visitors",
           10, 1, 5, 4, decimals=1),
     _stat(5,  "Firewall Events / min",
@@ -168,7 +167,7 @@ panels = [
          0, 6, 12, 8, legend="{{country}}"),
     _bar(9,  "Bandwidth by Country",
          "topk(5, cf_bandwidth_bytes_by_country)",
-         12, 6, 12, 8, unit="Bps", legend="{{country}}"),
+         12, 6, 12, 8, unit="decbytes", legend="{{country}}"),
 
     # ── Row 3: Security ────────────────────────────────────────────────────────
     _row(10, "Security", 14),
@@ -199,7 +198,7 @@ panels = [
 
     _timeseries(18, "Total Bandwidth Over Time",
                 [_prom("sum(cf_bandwidth_bytes_by_country)", legend="total")],
-                0, 41, 24, 8, unit="Bps"),
+                0, 41, 24, 8, unit="decbytes"),
 ]
 
 # ── Push dashboard ─────────────────────────────────────────────────────────────
