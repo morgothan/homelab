@@ -131,7 +131,7 @@ postgres/
 postgres.backups/
 
 # Diun state
-data/
+data/diun.db
 
 # Kopia (config may contain rclone/repo credentials, cache is large)
 kopia/config/
@@ -237,3 +237,7 @@ specs/
 
 # RainSoft intercept — captured device request logs (contain dealer PII)
 rainsoft/data/
+
+# cf-poller runtime state (cursor timestamps)
+cf-poller/data/*
+!cf-poller/data/.gitkeep
