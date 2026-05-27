@@ -69,13 +69,17 @@ def save_state(state: dict, path: Path = _DEFAULT_STATE_FILE) -> None:
 def parse_firewall_events(data: dict) -> list[dict]:
     """Extract event list from a firewallEventsAdaptive GraphQL response."""
     try:
-        return data["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
+        result = data["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
+        return list(result) if isinstance(result, list) else []
     except (KeyError, IndexError, TypeError):
         return []
 
 
 def build_loki_payload(events: list[dict]) -> dict:
-    """Convert firewall events to Loki /loki/api/v1/push format."""
+    """Convert firewall events to Loki /loki/api/v1/push format.
+
+    Caller must ensure events is non-empty; Loki rejects empty values arrays.
+    """
     values = []
     for ev in events:
         try:
