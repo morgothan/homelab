@@ -12,6 +12,9 @@ from collections import defaultdict
 from datetime import datetime, timedelta, timezone
 from html import escape as _h
 from typing import Optional
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 import docker
 import httpx
@@ -2677,7 +2680,7 @@ def masthead_rolling(now_str: str) -> str:
 
 
 def masthead_today() -> str:
-    today_str = datetime.now(timezone.utc).strftime("%A, %B %-d, %Y")
+    today_str = datetime.now(_ET).strftime("%A, %B %-d, %Y")
     return (
         f'<header class="mast"><hr class="rule-dbl">'
         f'<div class="mast-name">{SITE_NAME}</div>'

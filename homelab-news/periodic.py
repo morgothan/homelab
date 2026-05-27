@@ -9,8 +9,11 @@ Schedules:
 import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import os
+
+_ET = ZoneInfo("America/New_York")
 
 from lib import (
     PERIODIC_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
@@ -25,13 +28,13 @@ log = logging.getLogger("periodic")
 # ── Schedule helpers ───────────────────────────────────────────────────────────
 
 def _next_sunday() -> datetime:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_ET)
     days = (6 - now.weekday()) % 7 or 7  # weekday(): Mon=0 Sun=6; always ≥1
     return (now + timedelta(days=days)).replace(hour=0, minute=1, second=0, microsecond=0)
 
 
 def _next_first() -> datetime:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_ET)
     if now.month == 12:
         return now.replace(year=now.year + 1, month=1, day=1,
                            hour=0, minute=1, second=0, microsecond=0)
@@ -40,7 +43,7 @@ def _next_first() -> datetime:
 
 
 def _next_jan1() -> datetime:
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_ET)
     return now.replace(year=now.year + 1, month=1, day=1,
                        hour=0, minute=1, second=0, microsecond=0)
 
@@ -121,7 +124,7 @@ async def build_monthly() -> None:
         for w in weekly[:5]
     ]
 
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_ET)
     prev = now.replace(day=1) - timedelta(days=1)  # last day of previous month
     month_key   = prev.strftime("%Y-%m")
     month_label = prev.strftime("%B %Y")
@@ -157,7 +160,7 @@ async def build_yearly() -> None:
 
     entries = [{"period": m["period"], "articles": m["articles"]} for m in monthly[:12]]
 
-    year_key = str(datetime.now(timezone.utc).year - 1)
+    year_key = str(datetime.now(_ET).year - 1)
 
     yearly = periodic.get("yearly", [])
     if any(y["year"] == year_key for y in yearly):
@@ -184,46 +187,46 @@ async def build_yearly() -> None:
 
 async def weekly_loop() -> None:
     next_run = _next_sunday()
-    log.info("Next weekly digest: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+    log.info("Next weekly digest: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
     while True:
-        await asyncio.sleep((next_run - datetime.now(timezone.utc)).total_seconds())
+        await asyncio.sleep((next_run - datetime.now(_ET)).total_seconds())
         try:
             await build_weekly()
         except Exception as e:
             log.error("Weekly digest failed: %s", e)
         next_run = _next_sunday()
-        log.info("Next weekly digest: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+        log.info("Next weekly digest: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
 
 
 async def monthly_loop() -> None:
     next_run = _next_first()
-    log.info("Next monthly review: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+    log.info("Next monthly review: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
     while True:
-        await asyncio.sleep((next_run - datetime.now(timezone.utc)).total_seconds())
+        await asyncio.sleep((next_run - datetime.now(_ET)).total_seconds())
         try:
             await build_monthly()
         except Exception as e:
             log.error("Monthly review failed: %s", e)
         next_run = _next_first()
-        log.info("Next monthly review: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+        log.info("Next monthly review: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
 
 
 async def yearly_loop() -> None:
     next_run = _next_jan1()
-    log.info("Next yearly report: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+    log.info("Next yearly report: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
     while True:
-        await asyncio.sleep((next_run - datetime.now(timezone.utc)).total_seconds())
+        await asyncio.sleep((next_run - datetime.now(_ET)).total_seconds())
         try:
             await build_yearly()
         except Exception as e:
             log.error("Yearly report failed: %s", e)
         next_run = _next_jan1()
-        log.info("Next yearly report: %s UTC", next_run.strftime("%Y-%m-%d %H:%M"))
+        log.info("Next yearly report: %s ET", next_run.strftime("%Y-%m-%d %H:%M"))
 
 
 async def _recover_missed_runs() -> None:
     """Build any digests missed while the container was down."""
-    now = datetime.now(timezone.utc)
+    now = datetime.now(_ET)
     periodic = load_json(PERIODIC_FILE) or {}
 
     # Weekly: fires every Sunday; rebuild if last build was ≥7 days ago
