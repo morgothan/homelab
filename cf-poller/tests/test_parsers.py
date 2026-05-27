@@ -107,3 +107,19 @@ def test_build_loki_payload_bad_datetime_uses_fallback():
     payload = build_loki_payload(events)
     ts_str = payload["streams"][0]["values"][0][0]
     assert len(ts_str) == 19  # still a valid nanosecond timestamp
+
+
+def test_parse_firewall_events_null_field():
+    """Returns empty list when firewallEventsAdaptive is null (GraphQL null)."""
+    response = {"data": {"viewer": {"zones": [{"firewallEventsAdaptive": None}]}}}
+    assert parse_firewall_events(response) == []
+
+
+def test_parse_firewall_events_returns_copy():
+    """Returns a copy, not a reference to the original data."""
+    response = {"data": {"viewer": {"zones": [{"firewallEventsAdaptive": [{"action": "block"}]}]}}}
+    events = parse_firewall_events(response)
+    events.append({"extra": "item"})
+    # Original must be unchanged
+    original = response["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
+    assert len(original) == 1
