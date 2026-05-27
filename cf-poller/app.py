@@ -98,12 +98,23 @@ def load_state(path: Path = _DEFAULT_STATE_FILE) -> dict:
         return {}
 
 
+_state_lock = asyncio.Lock()
+
+
 def save_state(state: dict, path: Path = _DEFAULT_STATE_FILE) -> None:
     """Persist polling cursors to disk atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".tmp")
     tmp.write_text(json.dumps(state, indent=2))
     tmp.replace(path)
+
+
+async def save_state_key(key: str, value: str, path: Path = _DEFAULT_STATE_FILE) -> None:
+    """Update a single cursor key, merging with whatever other zones already saved."""
+    async with _state_lock:
+        current = load_state(path)
+        current[key] = value
+        save_state(current, path)
 
 # ── Firewall event parsing ─────────────────────────────────────────────────────
 
@@ -447,11 +458,17 @@ async def poll_request_analytics(state: dict, zone_id: str, zone_name: str) -> d
 # ── Background loops ───────────────────────────────────────────────────────────
 
 async def _firewall_loop(zone_id: str, zone_name: str) -> None:
-    state = load_state()
+    state_key = f"last_firewall_ts_{zone_id}"
+    cursor = load_state().get(state_key)
     while True:
         try:
-            state = await poll_firewall_events(state, zone_id, zone_name)
-            save_state(state)
+            # Pass a minimal dict so poll_firewall_events can read its key
+            state_in = {state_key: cursor} if cursor else {}
+            state_out = await poll_firewall_events(state_in, zone_id, zone_name)
+            new_cursor = state_out.get(state_key)
+            if new_cursor and new_cursor != cursor:
+                await save_state_key(state_key, new_cursor)
+                cursor = new_cursor
         except Exception as e:
             log.error("[%s] Firewall poll error: %s", zone_name, e)
             errors_counter.labels(task="firewall", zone=zone_name).inc()
@@ -459,11 +476,9 @@ async def _firewall_loop(zone_id: str, zone_name: str) -> None:
 
 
 async def _analytics_loop(zone_id: str, zone_name: str) -> None:
-    state = load_state()
     while True:
         try:
-            state = await poll_request_analytics(state, zone_id, zone_name)
-            save_state(state)
+            await poll_request_analytics({}, zone_id, zone_name)
         except Exception as e:
             log.error("[%s] Analytics poll error: %s", zone_name, e)
             errors_counter.labels(task="requests", zone=zone_name).inc()
