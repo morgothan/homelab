@@ -97,6 +97,83 @@ def build_loki_payload(events: list[dict]) -> dict:
         ]
     }
 
+# ── Analytics parsers ──────────────────────────────────────────────────────────
+
+# How many minutes the analytics query window covers. Used to convert
+# window counts to per-minute rates stored in gauges.
+_WINDOW_MINUTES = 6.0
+
+
+def bucket_status_code(status: int) -> str:
+    """Map an HTTP status integer to a 2xx/3xx/4xx/5xx/other bucket string."""
+    if 200 <= status < 300:
+        return "2xx"
+    if 300 <= status < 400:
+        return "3xx"
+    if 400 <= status < 500:
+        return "4xx"
+    if 500 <= status < 600:
+        return "5xx"
+    return "other"
+
+
+def _groups(data: dict) -> list:
+    try:
+        return data["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]
+    except (KeyError, IndexError, TypeError):
+        return []
+
+
+def parse_country_analytics(
+    data: dict,
+) -> tuple[dict[str, float], dict[str, float], float]:
+    """
+    Returns (requests_per_min, bytes_per_min, unique_visitors_per_min).
+    Countries ranked beyond TOP_N_COUNTRIES are merged into 'other'.
+    All values are divided by _WINDOW_MINUTES to produce per-minute rates.
+    """
+    rows = _groups(data)
+    req_by_country: dict[str, float] = {}
+    bytes_by_country: dict[str, float] = {}
+    unique_visitors: float = 0.0
+
+    for i, row in enumerate(rows):
+        country = (row.get("dimensions") or {}).get("clientCountryName") or "unknown"
+        count = row.get("count", 0) / _WINDOW_MINUTES
+        edge_bytes = ((row.get("sum") or {}).get("edgeResponseBytes", 0)) / _WINDOW_MINUTES
+
+        if i < TOP_N_COUNTRIES:
+            req_by_country[country] = count
+            bytes_by_country[country] = edge_bytes
+        else:
+            req_by_country["other"] = req_by_country.get("other", 0.0) + count
+            bytes_by_country["other"] = bytes_by_country.get("other", 0.0) + edge_bytes
+
+        if i == 0:
+            unique_visitors = ((row.get("uniq") or {}).get("uniques", 0)) / _WINDOW_MINUTES
+
+    return req_by_country, bytes_by_country, unique_visitors
+
+
+def parse_cache_analytics(data: dict) -> dict[str, float]:
+    """Returns requests_per_min keyed by cache_status string."""
+    return {
+        ((row.get("dimensions") or {}).get("cacheStatus") or "unknown"): (
+            row.get("count", 0) / _WINDOW_MINUTES
+        )
+        for row in _groups(data)
+    }
+
+
+def parse_status_analytics(data: dict) -> dict[str, float]:
+    """Returns requests_per_min keyed by 2xx/3xx/4xx/5xx/other bucket."""
+    buckets: dict[str, float] = {}
+    for row in _groups(data):
+        raw = (row.get("dimensions") or {}).get("edgeResponseStatus", 0)
+        bucket = bucket_status_code(int(raw) if raw else 0)
+        buckets[bucket] = buckets.get(bucket, 0.0) + row.get("count", 0) / _WINDOW_MINUTES
+    return buckets
+
 # FastAPI app — tasks added in startup event
 app = FastAPI()
 

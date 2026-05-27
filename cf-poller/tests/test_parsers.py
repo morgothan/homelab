@@ -11,6 +11,10 @@ os.environ.setdefault("CF_ZONE_ID", "test-zone")
 from app import (
     parse_firewall_events,
     build_loki_payload,
+    bucket_status_code,
+    parse_country_analytics,
+    parse_cache_analytics,
+    parse_status_analytics,
 )
 
 # ── Firewall event parsing ─────────────────────────────────────────────────────
@@ -123,3 +127,116 @@ def test_parse_firewall_events_returns_copy():
     # Original must be unchanged
     original = response["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
     assert len(original) == 1
+
+
+# ── Status code bucketing ──────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("code,expected", [
+    (200, "2xx"), (201, "2xx"), (299, "2xx"),
+    (301, "3xx"), (304, "3xx"),
+    (400, "4xx"), (403, "4xx"), (404, "4xx"),
+    (500, "5xx"), (503, "5xx"),
+    (0,   "other"), (999, "other"),
+])
+def test_bucket_status_code(code, expected):
+    assert bucket_status_code(code) == expected
+
+
+# ── Country analytics parsing ──────────────────────────────────────────────────
+
+def _country_response(rows):
+    return {"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": rows}]}}}
+
+
+def test_parse_country_analytics_basic():
+    rows = [
+        {"count": 500, "sum": {"edgeResponseBytes": 100000}, "uniq": {"uniques": 50},
+         "dimensions": {"clientCountryName": "United States"}},
+        {"count": 200, "sum": {"edgeResponseBytes": 40000}, "uniq": {"uniques": 20},
+         "dimensions": {"clientCountryName": "Germany"}},
+    ]
+    req, bw, uniq = parse_country_analytics(_country_response(rows))
+    assert req["United States"] == pytest.approx(500 / 6, rel=1e-3)
+    assert bw["Germany"] == pytest.approx(40000 / 6, rel=1e-3)
+    assert uniq == pytest.approx(50 / 6, rel=1e-3)
+
+
+def test_parse_country_analytics_overflow_into_other():
+    """Countries beyond TOP_N_COUNTRIES (10) are aggregated as 'other'."""
+    rows = [
+        {"count": 100, "sum": {"edgeResponseBytes": 1000}, "uniq": {"uniques": 10},
+         "dimensions": {"clientCountryName": f"Country{i}"}}
+        for i in range(15)  # 15 rows, only first 10 kept individually
+    ]
+    req, bw, _ = parse_country_analytics(_country_response(rows))
+    assert "other" in req
+    # 5 overflow rows × 100 requests each → 500 in 'other', then divided by 6
+    assert req["other"] == pytest.approx(500 / 6, rel=1e-3)
+
+
+def test_parse_country_analytics_empty():
+    req, bw, uniq = parse_country_analytics(_country_response([]))
+    assert req == {}
+    assert bw == {}
+    assert uniq == 0
+
+
+def test_parse_country_analytics_bad_shape():
+    req, bw, uniq = parse_country_analytics({})
+    assert req == {}
+
+
+# ── Cache analytics parsing ────────────────────────────────────────────────────
+
+def _cache_response(rows):
+    return {"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": rows}]}}}
+
+
+def test_parse_cache_analytics():
+    rows = [
+        {"count": 800, "dimensions": {"cacheStatus": "hit"}},
+        {"count": 150, "dimensions": {"cacheStatus": "miss"}},
+        {"count": 50,  "dimensions": {"cacheStatus": "bypass"}},
+    ]
+    result = parse_cache_analytics(_cache_response(rows))
+    assert result["hit"] == pytest.approx(800 / 6, rel=1e-3)
+    assert result["miss"] == pytest.approx(150 / 6, rel=1e-3)
+    assert result["bypass"] == pytest.approx(50 / 6, rel=1e-3)
+
+
+def test_parse_cache_analytics_empty():
+    assert parse_cache_analytics(_cache_response([])) == {}
+
+
+# ── HTTP status analytics parsing ──────────────────────────────────────────────
+
+def _status_response(rows):
+    return {"data": {"viewer": {"zones": [{"httpRequestsAdaptiveGroups": rows}]}}}
+
+
+def test_parse_status_analytics_buckets():
+    rows = [
+        {"count": 900, "dimensions": {"edgeResponseStatus": 200}},
+        {"count": 50,  "dimensions": {"edgeResponseStatus": 301}},
+        {"count": 30,  "dimensions": {"edgeResponseStatus": 404}},
+        {"count": 20,  "dimensions": {"edgeResponseStatus": 503}},
+    ]
+    result = parse_status_analytics(_status_response(rows))
+    assert result["2xx"] == pytest.approx(900 / 6, rel=1e-3)
+    assert result["3xx"] == pytest.approx(50 / 6, rel=1e-3)
+    assert result["4xx"] == pytest.approx(30 / 6, rel=1e-3)
+    assert result["5xx"] == pytest.approx(20 / 6, rel=1e-3)
+
+
+def test_parse_status_analytics_accumulates_same_bucket():
+    """Multiple rows with same bucket (e.g. 200 and 201) are summed."""
+    rows = [
+        {"count": 500, "dimensions": {"edgeResponseStatus": 200}},
+        {"count": 100, "dimensions": {"edgeResponseStatus": 201}},
+    ]
+    result = parse_status_analytics(_status_response(rows))
+    assert result["2xx"] == pytest.approx(600 / 6, rel=1e-3)
+
+
+def test_parse_status_analytics_empty():
+    assert parse_status_analytics(_status_response([])) == {}
