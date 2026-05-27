@@ -126,7 +126,7 @@ def _logs(id_, x, y, w, h):
             "dedupStrategy": "none", "showLabels": False,
             "showTime": True, "sortOrder": "Descending", "wrapLogMessage": False,
         },
-        "targets": [_loki('{job="cloudflare", type="firewall"} | json')],
+        "targets": [_loki('{job="cloudflare", type="firewall", zone=~"$zone"} | json')],
     }
 
 
@@ -136,70 +136,105 @@ panels = [
     # ── Row 1: Overview ────────────────────────────────────────────────────────
     _row(1, "Overview", 0),
 
-    _stat(2,  "Requests / min",    "cf_requests_per_minute",
-          0,  1, 5, 4, decimals=1, graph_mode="area"),
-    _stat(3,  "Bandwidth / min",   "sum(cf_bandwidth_bytes_by_country)",
-          5,  1, 5, 4, unit="decbytes", decimals=1, graph_mode="area"),
-    _stat(4,  "Unique Visitors / min", "cf_unique_visitors",
-          10, 1, 5, 4, decimals=1),
+    _stat(2,  "Requests / min",
+          'sum(cf_requests_per_minute{zone=~"$zone"})',
+          0,  1, 6, 4, decimals=1, graph_mode="area"),
+    _stat(3,  "Bandwidth / min",
+          'sum(cf_bandwidth_bytes_by_country{zone=~"$zone"})',
+          6,  1, 6, 4, unit="decbytes", decimals=1, graph_mode="area"),
+    _stat(4,  "Zones Monitored",
+          'count(count by (zone)(cf_requests_per_minute{zone=~"$zone"}))',
+          12, 1, 6, 4, decimals=0),
     _stat(5,  "Firewall Events / min",
-          'increase(cf_firewall_events_total[5m]) / 5',
-          15, 1, 5, 4,
+          'sum(increase(cf_firewall_events_total{zone=~"$zone"}[5m])) / 5',
+          18, 1, 6, 4,
           thresholds={"mode": "absolute", "steps": [
               {"color": "green", "value": None},
               {"color": "yellow", "value": 1},
               {"color": "red",   "value": 10},
           ]}),
-    _stat(6, "Cache Hit %",
-          'sum(cf_cache_requests{cache_status="hit"}) / sum(cf_cache_requests) * 100',
-          20, 1, 4, 4, unit="percent", decimals=1,
+
+    # ── Row 2: Cache & Traffic ─────────────────────────────────────────────────
+    _row(6, "Cache & Traffic", 5),
+
+    _stat(7, "Cache Hit %",
+          'sum(cf_cache_requests{cache_status="hit", zone=~"$zone"})'
+          ' / sum(cf_cache_requests{zone=~"$zone"}) * 100',
+          0, 6, 8, 4, unit="percent", decimals=1,
           thresholds={"mode": "absolute", "steps": [
               {"color": "red",    "value": None},
               {"color": "yellow", "value": 50},
               {"color": "green",  "value": 80},
           ]}),
 
-    # ── Row 2: Traffic Geography ───────────────────────────────────────────────
-    _row(7, "Traffic Geography", 5),
+    # ── Row 3: Traffic Geography ───────────────────────────────────────────────
+    _row(8, "Traffic Geography", 10),
 
-    _bar(8,  "Requests by Country",
-         "topk(10, cf_requests_by_country)",
-         0, 6, 12, 8, legend="{{country}}"),
-    _bar(9,  "Bandwidth by Country",
-         "topk(5, cf_bandwidth_bytes_by_country)",
-         12, 6, 12, 8, unit="decbytes", legend="{{country}}"),
+    _bar(9,  "Requests by Country",
+         'topk(10, sum by(country)(cf_requests_by_country{zone=~"$zone"}))',
+         0, 11, 12, 8, legend="{{country}}"),
+    _bar(10, "Bandwidth by Country",
+         'topk(5, sum by(country)(cf_bandwidth_bytes_by_country{zone=~"$zone"}))',
+         12, 11, 12, 8, unit="decbytes", legend="{{country}}"),
 
-    # ── Row 3: Security ────────────────────────────────────────────────────────
-    _row(10, "Security", 14),
+    # ── Row 4: Security ────────────────────────────────────────────────────────
+    _row(11, "Security", 19),
 
-    _timeseries(11, "Firewall Events by Action",
-                [_prom('sum by (action)(increase(cf_firewall_events_total[5m]))',
+    _timeseries(12, "Firewall Events by Action",
+                [_prom('sum by (action)(increase(cf_firewall_events_total{zone=~"$zone"}[5m]))',
                        legend="{{action}}")],
-                0, 15, 12, 8),
-    _timeseries(12, "Firewall Events by Source",
-                [_prom('sum by (source)(increase(cf_firewall_events_total[5m]))',
+                0, 20, 12, 8),
+    _timeseries(13, "Firewall Events by Source",
+                [_prom('sum by (source)(increase(cf_firewall_events_total{zone=~"$zone"}[5m]))',
                        legend="{{source}}")],
-                12, 15, 12, 8),
+                12, 20, 12, 8),
 
-    _logs(13, 0, 23, 24, 8),
+    _logs(14, 0, 28, 24, 8),
 
-    # ── Row 4: Cache & HTTP Status ─────────────────────────────────────────────
-    _row(14, "Cache & HTTP Status", 31),
+    # ── Row 5: Cache & HTTP Status ─────────────────────────────────────────────
+    _row(15, "Cache & HTTP Status", 36),
 
-    _timeseries(15, "Cache Status Over Time",
-                [_prom("cf_cache_requests", legend="{{cache_status}}")],
-                0, 32, 12, 8),
-    _timeseries(16, "HTTP Status Codes Over Time",
-                [_prom("cf_http_status", legend="{{status}}")],
-                12, 32, 12, 8),
+    _timeseries(16, "Cache Status Over Time",
+                [_prom('cf_cache_requests{zone=~"$zone"}', legend="{{cache_status}}")],
+                0, 37, 12, 8),
+    _timeseries(17, "HTTP Status Codes Over Time",
+                [_prom('cf_http_status{zone=~"$zone"}', legend="{{status}}")],
+                12, 37, 12, 8),
 
-    # ── Row 5: Bandwidth ───────────────────────────────────────────────────────
-    _row(17, "Bandwidth", 40),
+    # ── Row 6: Bandwidth ───────────────────────────────────────────────────────
+    _row(18, "Bandwidth", 45),
 
-    _timeseries(18, "Total Bandwidth Over Time",
-                [_prom("sum(cf_bandwidth_bytes_by_country)", legend="total")],
-                0, 41, 24, 8, unit="decbytes"),
+    _timeseries(19, "Total Bandwidth Over Time",
+                [_prom('sum(cf_bandwidth_bytes_by_country{zone=~"$zone"})', legend="total")],
+                0, 46, 24, 8, unit="decbytes"),
 ]
+
+# ── Template variable — zone picker ───────────────────────────────────────────
+
+templating = {
+    "list": [
+        {
+            "datasource": {"type": "prometheus", "uid": prom_uid},
+            "definition": "label_values(cf_requests_per_minute, zone)",
+            "hide": 0,
+            "includeAll": True,
+            "multi": False,
+            "name": "zone",
+            "label": "Zone",
+            "options": [],
+            "query": {
+                "query": "label_values(cf_requests_per_minute, zone)",
+                "refId": "StandardVariableQuery",
+            },
+            "refresh": 2,
+            "regex": "",
+            "sort": 1,
+            "type": "query",
+            "allValue": ".*",
+            "current": {},
+        }
+    ]
+}
 
 # ── Push dashboard ─────────────────────────────────────────────────────────────
 
@@ -214,6 +249,7 @@ dashboard = {
         "version": 1,
         "refresh": "5m",
         "time": {"from": "now-24h", "to": "now"},
+        "templating": templating,
         "panels": panels,
     },
     "folderId": 0,

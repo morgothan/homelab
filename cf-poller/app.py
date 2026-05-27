@@ -1,7 +1,8 @@
 """Cloudflare GraphQL Analytics poller.
 
 Polls firewallEventsAdaptive (→ Loki) and httpRequestsAdaptiveGroups
-(→ Prometheus gauges) every POLL_INTERVAL seconds.
+(→ Prometheus gauges) every POLL_INTERVAL seconds, across all zones
+discovered automatically from the Cloudflare API.
 """
 
 import asyncio
@@ -33,7 +34,6 @@ def _require(var: str) -> str:
     return val
 
 CF_ANALYTICS_TOKEN = _require("CF_ANALYTICS_TOKEN")
-CF_ZONE_ID         = _require("CF_ZONE_ID")
 LOKI_URL           = os.getenv("LOKI_URL", "http://logger.hirschnet:3100")
 GRAFANA_URL        = os.getenv("GRAFANA_URL", "http://grafana:3000")
 GRAFANA_USER       = os.getenv("GF_SECURITY_ADMIN_USER", "admin")
@@ -41,7 +41,48 @@ GRAFANA_PASS       = os.getenv("GF_SECURITY_ADMIN_PASSWORD", "")
 DATA_DIR           = Path(os.getenv("DATA_DIR", "/data"))
 POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL", "300"))
 CF_GRAPHQL_URL     = "https://api.cloudflare.com/client/v4/graphql"
+CF_REST_URL        = "https://api.cloudflare.com/client/v4"
 TOP_N_COUNTRIES    = 10
+
+# ── Zone discovery ─────────────────────────────────────────────────────────────
+
+async def discover_zones() -> dict[str, str]:
+    """Return {zone_id: zone_name} for every active zone the token can reach.
+
+    Paginates through /v4/zones until all results are collected.
+    Exits the process if the token lacks permission or no zones are returned.
+    """
+    zones: dict[str, str] = {}
+    page = 1
+    async with httpx.AsyncClient() as client:
+        while True:
+            resp = await client.get(
+                f"{CF_REST_URL}/zones",
+                headers={"Authorization": f"Bearer {CF_ANALYTICS_TOKEN}"},
+                params={"page": page, "per_page": 50, "status": "active"},
+                timeout=10,
+            )
+            if resp.status_code == 403:
+                log.error(
+                    "Token lacks permission to list zones. "
+                    "Add Zone:Read to the API token in the Cloudflare dashboard."
+                )
+                sys.exit(1)
+            resp.raise_for_status()
+            body = resp.json()
+            for z in body.get("result", []):
+                zones[z["id"]] = z["name"]
+            info = body.get("result_info", {})
+            if info.get("page", 1) * info.get("per_page", 50) >= info.get("total_count", 0):
+                break
+            page += 1
+
+    if not zones:
+        log.error("No active zones found for this token. Check token scope.")
+        sys.exit(1)
+
+    log.info("Discovered %d zone(s): %s", len(zones), ", ".join(sorted(zones.values())))
+    return zones
 
 # ── State ──────────────────────────────────────────────────────────────────────
 
@@ -75,7 +116,7 @@ def parse_firewall_events(data: dict) -> list[dict]:
         return []
 
 
-def build_loki_payload(events: list[dict]) -> dict:
+def build_loki_payload(events: list[dict], zone_name: str) -> dict:
     """Convert firewall events to Loki /loki/api/v1/push format.
 
     Caller must ensure events is non-empty; Loki rejects empty values arrays.
@@ -91,7 +132,7 @@ def build_loki_payload(events: list[dict]) -> dict:
     return {
         "streams": [
             {
-                "stream": {"job": "cloudflare", "type": "firewall"},
+                "stream": {"job": "cloudflare", "type": "firewall", "zone": zone_name},
                 "values": values,
             }
         ]
@@ -108,45 +149,42 @@ _WINDOW_MINUTES = 6.0
 fw_events_total = Counter(
     "cf_firewall_events_total",
     "Cloudflare firewall events since container start",
-    ["action", "source", "country"],
+    ["action", "source", "country", "zone"],
 )
 requests_gauge = Gauge(
     "cf_requests_per_minute",
     "Cloudflare total requests per minute (last poll window)",
+    ["zone"],
 )
 requests_by_country = Gauge(
     "cf_requests_by_country",
     "Cloudflare requests per minute by country (last poll window)",
-    ["country"],
+    ["country", "zone"],
 )
 bandwidth_by_country = Gauge(
     "cf_bandwidth_bytes_by_country",
     "Cloudflare bandwidth bytes per minute by country (last poll window)",
-    ["country"],
+    ["country", "zone"],
 )
 cache_gauge = Gauge(
     "cf_cache_requests",
     "Cloudflare requests per minute by cache status (last poll window)",
-    ["cache_status"],
+    ["cache_status", "zone"],
 )
 http_status_gauge = Gauge(
     "cf_http_status",
     "Cloudflare requests per minute by HTTP status bucket (last poll window)",
-    ["status"],
-)
-unique_visitors_gauge = Gauge(
-    "cf_unique_visitors",
-    "Unique visitor IPs per minute (last poll window)",
+    ["status", "zone"],
 )
 last_success_gauge = Gauge(
     "cf_poller_last_success_timestamp_seconds",
     "Unix timestamp of last successful poll",
-    ["task"],
+    ["task", "zone"],
 )
 errors_counter = Counter(
     "cf_poller_errors_total",
     "Total polling errors by task",
-    ["task"],
+    ["task", "zone"],
 )
 
 
@@ -275,26 +313,27 @@ async def _push_loki(client: httpx.AsyncClient, payload: dict) -> None:
 
 # ── Firewall event poller ──────────────────────────────────────────────────────
 
-async def poll_firewall_events(state: dict) -> dict:
-    """Fetch new firewall events, push to Loki, increment Prometheus counters."""
+async def poll_firewall_events(state: dict, zone_id: str, zone_name: str) -> dict:
+    """Fetch new firewall events for one zone, push to Loki, increment counters."""
+    state_key = f"last_firewall_ts_{zone_id}"
     default_after = (
         datetime.now(timezone.utc) - timedelta(hours=23, minutes=59)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
-    after = state.get("last_firewall_ts", default_after)
+    after = state.get(state_key, default_after)
 
     async with httpx.AsyncClient() as client:
         data = await _graphql(
-            client, _FIREWALL_QUERY, {"zoneTag": CF_ZONE_ID, "after": after}
+            client, _FIREWALL_QUERY, {"zoneTag": zone_id, "after": after}
         )
         events = parse_firewall_events(data)
 
         if events:
-            payload = build_loki_payload(events)
+            payload = build_loki_payload(events, zone_name)
             try:
                 await _push_loki(client, payload)
             except Exception as e:
                 # Do NOT advance cursor — retry on next cycle
-                log.error("Loki push failed (%d events not sent): %s", len(events), e)
+                log.error("[%s] Loki push failed (%d events not sent): %s", zone_name, len(events), e)
                 return state
 
             for ev in events:
@@ -302,15 +341,15 @@ async def poll_firewall_events(state: dict) -> dict:
                     action=ev.get("action", "unknown"),
                     source=ev.get("source", "unknown"),
                     country=ev.get("clientCountryName", "unknown"),
+                    zone=zone_name,
                 ).inc()
 
-            # Advance cursor only after successful Loki push
-            state = {**state, "last_firewall_ts": events[-1]["datetime"]}
-            log.info("Pushed %d firewall events to Loki", len(events))
+            state = {**state, state_key: events[-1]["datetime"]}
+            log.info("[%s] Pushed %d firewall events to Loki", zone_name, len(events))
         else:
-            log.debug("No new firewall events since %s", after)
+            log.debug("[%s] No new firewall events since %s", zone_name, after)
 
-    last_success_gauge.labels(task="firewall").set(
+    last_success_gauge.labels(task="firewall", zone=zone_name).set(
         datetime.now(timezone.utc).timestamp()
     )
     return state
@@ -370,14 +409,15 @@ query RequestsByStatus($zoneTag: String!, $start: Time!, $end: Time!) {
 }
 """
 
-async def poll_request_analytics(state: dict) -> dict:
-    """Fetch request analytics, update all Prometheus gauges."""
+
+async def poll_request_analytics(state: dict, zone_id: str, zone_name: str) -> dict:
+    """Fetch request analytics for one zone, update Prometheus gauges."""
     now = datetime.now(timezone.utc)
     end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
     start = (now - timedelta(minutes=int(_WINDOW_MINUTES))).strftime(
         "%Y-%m-%dT%H:%M:%SZ"
     )
-    variables = {"zoneTag": CF_ZONE_ID, "start": start, "end": end}
+    variables = {"zoneTag": zone_id, "start": start, "end": end}
 
     async with httpx.AsyncClient() as client:
         country_data, cache_data, status_data = await asyncio.gather(
@@ -386,50 +426,47 @@ async def poll_request_analytics(state: dict) -> dict:
             _graphql(client, _STATUS_QUERY, variables),
         )
 
-    # By country
     req_by_c, bw_by_c, _ = parse_country_analytics(country_data)
-    requests_gauge.set(sum(req_by_c.values()))
+    requests_gauge.labels(zone=zone_name).set(sum(req_by_c.values()))
     for country, rate in req_by_c.items():
-        requests_by_country.labels(country=country).set(rate)
+        requests_by_country.labels(country=country, zone=zone_name).set(rate)
     for country, rate in bw_by_c.items():
-        bandwidth_by_country.labels(country=country).set(rate)
+        bandwidth_by_country.labels(country=country, zone=zone_name).set(rate)
 
-    # Cache status
     for cs, rate in parse_cache_analytics(cache_data).items():
-        cache_gauge.labels(cache_status=cs).set(rate)
+        cache_gauge.labels(cache_status=cs, zone=zone_name).set(rate)
 
-    # HTTP status buckets
     for bucket, rate in parse_status_analytics(status_data).items():
-        http_status_gauge.labels(status=bucket).set(rate)
+        http_status_gauge.labels(status=bucket, zone=zone_name).set(rate)
 
-    last_success_gauge.labels(task="requests").set(now.timestamp())
-    log.info("Updated request analytics gauges (window: %s → %s)", start, end)
+    last_success_gauge.labels(task="requests", zone=zone_name).set(now.timestamp())
+    log.info("[%s] Updated request analytics gauges (window: %s → %s)", zone_name, start, end)
     return state
 
 
 # ── Background loops ───────────────────────────────────────────────────────────
 
-async def _firewall_loop() -> None:
+async def _firewall_loop(zone_id: str, zone_name: str) -> None:
     state = load_state()
     while True:
         try:
-            state = await poll_firewall_events(state)
+            state = await poll_firewall_events(state, zone_id, zone_name)
             save_state(state)
         except Exception as e:
-            log.error("Firewall poll error: %s", e)
-            errors_counter.labels(task="firewall").inc()
+            log.error("[%s] Firewall poll error: %s", zone_name, e)
+            errors_counter.labels(task="firewall", zone=zone_name).inc()
         await asyncio.sleep(POLL_INTERVAL)
 
 
-async def _analytics_loop() -> None:
+async def _analytics_loop(zone_id: str, zone_name: str) -> None:
     state = load_state()
     while True:
         try:
-            state = await poll_request_analytics(state)
+            state = await poll_request_analytics(state, zone_id, zone_name)
             save_state(state)
         except Exception as e:
-            log.error("Analytics poll error: %s", e)
-            errors_counter.labels(task="requests").inc()
+            log.error("[%s] Analytics poll error: %s", zone_name, e)
+            errors_counter.labels(task="requests", zone=zone_name).inc()
         await asyncio.sleep(POLL_INTERVAL)
 
 
@@ -440,14 +477,15 @@ app = FastAPI()
 
 @app.on_event("startup")
 async def startup() -> None:
-    # Push Grafana dashboard — log error and continue if Grafana isn't ready
     try:
         import push_dashboard  # noqa: F401 — runs on import
     except Exception as e:
         log.error("Grafana dashboard push failed (non-fatal): %s", e)
 
-    asyncio.create_task(_firewall_loop())
-    asyncio.create_task(_analytics_loop())
+    zones = await discover_zones()
+    for zone_id, zone_name in zones.items():
+        asyncio.create_task(_firewall_loop(zone_id, zone_name))
+        asyncio.create_task(_analytics_loop(zone_id, zone_name))
 
 
 @app.get("/metrics")
