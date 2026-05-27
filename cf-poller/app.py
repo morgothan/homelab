@@ -43,6 +43,24 @@ POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL", "300"))
 CF_GRAPHQL_URL     = "https://api.cloudflare.com/client/v4/graphql"
 TOP_N_COUNTRIES    = 10
 
+# ── State ──────────────────────────────────────────────────────────────────────
+
+_DEFAULT_STATE_FILE = DATA_DIR / "state.json"
+
+
+def load_state(path: Path = _DEFAULT_STATE_FILE) -> dict:
+    """Load polling cursors from disk. Returns empty dict if missing or corrupt."""
+    try:
+        return json.loads(path.read_text())
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+def save_state(state: dict, path: Path = _DEFAULT_STATE_FILE) -> None:
+    """Persist polling cursors to disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(state, indent=2))
+
 # FastAPI app — tasks added in startup event
 app = FastAPI()
 
