@@ -145,8 +145,8 @@ panels = [
     _stat(4,  "Zones Monitored",
           'count(count by (zone)(cf_requests_per_minute{zone=~"$zone"}))',
           12, 1, 6, 4, decimals=0),
-    _stat(5,  "Firewall Events / min",
-          'sum(rate(cf_firewall_events_total{zone=~"$zone"}[10m])) * 60',
+    _stat(5,  "Firewall Blocks (10m)",
+          'sum(increase(cf_firewall_events_total{zone=~"$zone"}[10m]))',
           18, 1, 6, 4,
           thresholds={"mode": "absolute", "steps": [
               {"color": "green", "value": None},
@@ -181,11 +181,11 @@ panels = [
     _row(11, "Security", 19),
 
     _timeseries(12, "Firewall Events by Action",
-                [_prom('sum by (action)(rate(cf_firewall_events_total{zone=~"$zone"}[10m]) * 60)',
+                [_prom('sum by (action)(increase(cf_firewall_events_total{zone=~"$zone"}[10m]))',
                        legend="{{action}}")],
                 0, 20, 12, 8),
     _timeseries(13, "Firewall Events by Source",
-                [_prom('sum by (source)(rate(cf_firewall_events_total{zone=~"$zone"}[10m]) * 60)',
+                [_prom('sum by (source)(increase(cf_firewall_events_total{zone=~"$zone"}[10m]))',
                        legend="{{source}}")],
                 12, 20, 12, 8),
 
