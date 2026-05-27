@@ -64,6 +64,35 @@ def save_state(state: dict, path: Path = _DEFAULT_STATE_FILE) -> None:
     tmp.write_text(json.dumps(state, indent=2))
     tmp.replace(path)
 
+# ── Firewall event parsing ─────────────────────────────────────────────────────
+
+def parse_firewall_events(data: dict) -> list[dict]:
+    """Extract event list from a firewallEventsAdaptive GraphQL response."""
+    try:
+        return data["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
+    except (KeyError, IndexError, TypeError):
+        return []
+
+
+def build_loki_payload(events: list[dict]) -> dict:
+    """Convert firewall events to Loki /loki/api/v1/push format."""
+    values = []
+    for ev in events:
+        try:
+            dt = datetime.fromisoformat(ev.get("datetime", "").replace("Z", "+00:00"))
+            ns = str(int(dt.timestamp() * 1_000_000_000))
+        except (ValueError, AttributeError):
+            ns = str(int(datetime.now(timezone.utc).timestamp() * 1_000_000_000))
+        values.append([ns, json.dumps(ev)])
+    return {
+        "streams": [
+            {
+                "stream": {"job": "cloudflare", "type": "firewall"},
+                "values": values,
+            }
+        ]
+    }
+
 # FastAPI app — tasks added in startup event
 app = FastAPI()
 
