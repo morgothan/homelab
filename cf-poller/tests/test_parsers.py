@@ -78,18 +78,18 @@ def test_parse_firewall_events_bad_shape():
 
 def test_build_loki_payload_structure():
     events = parse_firewall_events(FIREWALL_RESPONSE)
-    payload = build_loki_payload(events)
+    payload = build_loki_payload(events, zone_name="example.com")
 
     assert "streams" in payload
     assert len(payload["streams"]) == 1
     stream = payload["streams"][0]
-    assert stream["stream"] == {"job": "cloudflare", "type": "firewall"}
+    assert stream["stream"] == {"job": "cloudflare", "type": "firewall", "zone": "example.com"}
     assert len(stream["values"]) == 2
 
 
 def test_build_loki_payload_timestamp_is_nanoseconds():
     events = [{"datetime": "2026-05-27T10:00:00Z", "action": "block"}]
-    payload = build_loki_payload(events)
+    payload = build_loki_payload(events, zone_name="example.com")
     ts_str = payload["streams"][0]["values"][0][0]
     # Nanosecond timestamps are 19 digits for years 2001-2286
     assert len(ts_str) == 19
@@ -98,7 +98,7 @@ def test_build_loki_payload_timestamp_is_nanoseconds():
 
 def test_build_loki_payload_line_is_json():
     events = [{"datetime": "2026-05-27T10:00:00Z", "action": "block", "clientIP": "1.2.3.4"}]
-    payload = build_loki_payload(events)
+    payload = build_loki_payload(events, zone_name="example.com")
     line = payload["streams"][0]["values"][0][1]
     parsed = json.loads(line)
     assert parsed["action"] == "block"
@@ -108,7 +108,7 @@ def test_build_loki_payload_line_is_json():
 def test_build_loki_payload_bad_datetime_uses_fallback():
     """Events with unparseable timestamps get the current time (not an error)."""
     events = [{"datetime": "not-a-date", "action": "block"}]
-    payload = build_loki_payload(events)
+    payload = build_loki_payload(events, zone_name="example.com")
     ts_str = payload["streams"][0]["values"][0][0]
     assert len(ts_str) == 19  # still a valid nanosecond timestamp
 
