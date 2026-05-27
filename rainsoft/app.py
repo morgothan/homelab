@@ -3,6 +3,9 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import parse_qs
+from zoneinfo import ZoneInfo
+
+_ET = ZoneInfo("America/New_York")
 
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, JSONResponse
@@ -208,7 +211,7 @@ async def handle_stats_upload(request: Request):
     regen_date_str = payload.get("last_regen_date", "")
     if regen_date_str:
         try:
-            dt = datetime.strptime(regen_date_str, "%m/%d/%Y").replace(tzinfo=timezone.utc)
+            dt = datetime.strptime(regen_date_str, "%m/%d/%Y").replace(tzinfo=_ET)
             last_regen_ts.set(dt.timestamp())
         except ValueError:
             pass

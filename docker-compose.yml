@@ -254,6 +254,7 @@ services:
       - '--storage.tsdb.retention.time=30d'
     networks:
       - ${DOCKERNET}
+      - cftunnel-transport
     restart: unless-stopped
     logging: *logging
     volumes:
@@ -1300,6 +1301,7 @@ services:
       - GOTIFY_TOKEN=${GOTIFY_TOKEN}    # optional: Gotify app token
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
+      - TZ=America/New_York
     labels:
       - traefik.enable=true
       # external
@@ -1366,6 +1368,7 @@ services:
 # Requires UniFi firewall rule: RainSoft device (IoT VLAN) → Docker host TCP/80
   rainsoft-intercept:
     build: ./rainsoft
+    pull_policy: never
     container_name: rainsoft-intercept
     image: rainsoft-intercept:latest
     restart: unless-stopped
@@ -1374,6 +1377,8 @@ services:
       - ${DOCKERDIR}/rainsoft/data:/data
     networks:
       - ${DOCKERNET}
+    environment:
+      - TZ=America/New_York
     labels:
       - traefik.enable=false
 

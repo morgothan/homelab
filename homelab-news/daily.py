@@ -7,11 +7,14 @@ import asyncio
 import logging
 import os
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 from lib import (
     ARCHIVE_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
     TODAY_FILE, load_json, save_json,
 )
+
+_ET = ZoneInfo("America/New_York")
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("daily")
@@ -94,13 +97,13 @@ async def main() -> None:
     _migrate_archive_if_needed()
 
     while True:
-        now = datetime.now(timezone.utc)
+        now = datetime.now(_ET)
         next_run = (now + timedelta(days=1)).replace(hour=0, minute=1, second=0, microsecond=0)
         wait = (next_run - now).total_seconds()
-        log.info("Next daily archive in %.0fs (at %s UTC)", wait, next_run.strftime("%Y-%m-%d %H:%M"))
+        log.info("Next daily archive in %.0fs (at %s ET)", wait, next_run.strftime("%Y-%m-%d %H:%M"))
         await asyncio.sleep(wait)
 
-        yesterday = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%Y-%m-%d")
+        yesterday = (datetime.now(_ET) - timedelta(days=1)).strftime("%Y-%m-%d")
         try:
             snapshot(yesterday)
         except Exception as e:
