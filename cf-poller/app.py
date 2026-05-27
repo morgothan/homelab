@@ -51,15 +51,18 @@ _DEFAULT_STATE_FILE = DATA_DIR / "state.json"
 def load_state(path: Path = _DEFAULT_STATE_FILE) -> dict:
     """Load polling cursors from disk. Returns empty dict if missing or corrupt."""
     try:
-        return json.loads(path.read_text())
+        data = json.loads(path.read_text())
+        return data if isinstance(data, dict) else {}
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
 def save_state(state: dict, path: Path = _DEFAULT_STATE_FILE) -> None:
-    """Persist polling cursors to disk."""
+    """Persist polling cursors to disk atomically."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(state, indent=2))
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, indent=2))
+    tmp.replace(path)
 
 # FastAPI app — tasks added in startup event
 app = FastAPI()
