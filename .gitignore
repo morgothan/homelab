@@ -131,7 +131,7 @@ postgres/
 postgres.backups/
 
 # Diun state
-data/diun.db
+data/
 
 # Kopia (config may contain rclone/repo credentials, cache is large)
 kopia/config/
