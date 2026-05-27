@@ -40,3 +40,11 @@ def test_save_creates_parent_dirs(tmp_path):
     save_state({"key": "value"}, p)
     assert p.exists()
     assert json.loads(p.read_text()) == {"key": "value"}
+
+
+def test_load_state_non_dict_json(tmp_path):
+    """Returns empty dict when file contains valid JSON but not a dict."""
+    p = tmp_path / "state.json"
+    p.write_text("[1, 2, 3]")
+    result = load_state(p)
+    assert result == {}
