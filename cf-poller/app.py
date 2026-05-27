@@ -278,7 +278,7 @@ async def _push_loki(client: httpx.AsyncClient, payload: dict) -> None:
 async def poll_firewall_events(state: dict) -> dict:
     """Fetch new firewall events, push to Loki, increment Prometheus counters."""
     default_after = (
-        datetime.now(timezone.utc) - timedelta(hours=24)
+        datetime.now(timezone.utc) - timedelta(hours=23, minutes=59)
     ).strftime("%Y-%m-%dT%H:%M:%SZ")
     after = state.get("last_firewall_ts", default_after)
 
@@ -329,7 +329,6 @@ query RequestsByCountry($zoneTag: String!, $start: Time!, $end: Time!) {
       ) {
         count
         sum { edgeResponseBytes }
-        uniq { uniques }
         dimensions { clientCountryName }
       }
     }
@@ -371,23 +370,6 @@ query RequestsByStatus($zoneTag: String!, $start: Time!, $end: Time!) {
 }
 """
 
-_AGGREGATE_QUERY = """
-query AggregateStats($zoneTag: String!, $start: Time!, $end: Time!) {
-  viewer {
-    zones(filter: {zoneTag: $zoneTag}) {
-      httpRequestsAdaptiveGroups(
-        filter: {datetime_geq: $start, datetime_leq: $end}
-        limit: 1
-      ) {
-        count
-        uniq { uniques }
-      }
-    }
-  }
-}
-"""
-
-
 async def poll_request_analytics(state: dict) -> dict:
     """Fetch request analytics, update all Prometheus gauges."""
     now = datetime.now(timezone.utc)
@@ -398,23 +380,15 @@ async def poll_request_analytics(state: dict) -> dict:
     variables = {"zoneTag": CF_ZONE_ID, "start": start, "end": end}
 
     async with httpx.AsyncClient() as client:
-        country_data, cache_data, status_data, agg_data = await asyncio.gather(
+        country_data, cache_data, status_data = await asyncio.gather(
             _graphql(client, _COUNTRY_QUERY, variables),
             _graphql(client, _CACHE_QUERY, variables),
             _graphql(client, _STATUS_QUERY, variables),
-            _graphql(client, _AGGREGATE_QUERY, variables),
-        )
-
-    # Aggregate totals
-    agg_rows = agg_data["data"]["viewer"]["zones"][0]["httpRequestsAdaptiveGroups"]
-    if agg_rows:
-        requests_gauge.set(agg_rows[0].get("count", 0) / _WINDOW_MINUTES)
-        unique_visitors_gauge.set(
-            ((agg_rows[0].get("uniq") or {}).get("uniques", 0)) / _WINDOW_MINUTES
         )
 
     # By country
     req_by_c, bw_by_c, _ = parse_country_analytics(country_data)
+    requests_gauge.set(sum(req_by_c.values()))
     for country, rate in req_by_c.items():
         requests_by_country.labels(country=country).set(rate)
     for country, rate in bw_by_c.items():
