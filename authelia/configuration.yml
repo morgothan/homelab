@@ -419,8 +419,7 @@ identity_providers:
 ############ Jellyfin #####################
       - client_id: '{{ env "OIDC_JELLYFIN_CLIENT_ID" }}'
         client_name: 'Jellyfin'
-        client_secret: '{{ env "OIDC_JELLYFIN_CLIENT_SECRET" }}'
-        public: false
+        public: true
         authorization_policy: 'two_factor'
         require_pkce: true
         pkce_challenge_method: 'S256'
@@ -437,7 +436,7 @@ identity_providers:
           - 'authorization_code'
         access_token_signed_response_alg: 'none'
         userinfo_signed_response_alg: 'none'
-        token_endpoint_auth_method: 'client_secret_post'
+        token_endpoint_auth_method: 'none'
         claims_policy: 'default'
 
 ############ OpenBao #####################
