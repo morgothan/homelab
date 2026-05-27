@@ -1398,7 +1398,6 @@ services:
     environment:
       - TZ=America/New_York
       - CF_ANALYTICS_TOKEN=${CF_ANALYTICS_TOKEN}
-      - CF_ZONE_ID=${CF_ZONE_ID}
       - LOKI_URL=${LOKI_URL}
       - GRAFANA_URL=http://grafana:3000
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
