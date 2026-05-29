@@ -65,6 +65,20 @@ access_control:
         - '^/logo[0-9]+.png$'
       policy: bypass
 
+    # Plex web UI requires Authelia 2FA (protects the browser interface).
+    # Must come before the bypass rule below so the web paths match first.
+    - domain: 'plex.{{ env "DOMAIN" }}'
+      resources:
+        - '^/$'
+        - '^/web([/?].*)?$'
+      policy: two_factor
+
+    # Plex API paths bypass Authelia — the web app and native clients use X-Plex-Token.
+    # Without this, the SPA's background XHR calls (no Accept: text/html) get 401 instead
+    # of being passed through to Plex's own token auth.
+    - domain: 'plex.{{ env "DOMAIN" }}'
+      policy: bypass
+
     # Jellyfin web UI requires Authelia 2FA (protects the browser interface).
     # Must come before the bypass rule below so the web paths match first.
     - domain: 'jellyfin.{{ env "DOMAIN" }}'
