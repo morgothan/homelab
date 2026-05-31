@@ -327,10 +327,24 @@ async def _push_loki(client: httpx.AsyncClient, payload: dict) -> None:
 async def poll_firewall_events(state: dict, zone_id: str, zone_name: str) -> dict:
     """Fetch new firewall events for one zone, push to Loki, increment counters."""
     state_key = f"last_firewall_ts_{zone_id}"
-    default_after = (
-        datetime.now(timezone.utc) - timedelta(hours=23, minutes=59)
-    ).strftime("%Y-%m-%dT%H:%M:%SZ")
+    now = datetime.now(timezone.utc)
+    default_after = (now - timedelta(hours=23, minutes=50)).strftime("%Y-%m-%dT%H:%M:%SZ")
     after = state.get(state_key, default_after)
+
+    # CF rejects queries spanning > 1 day. If the cursor is stale, clamp it forward
+    # and accept losing the gap (CF wouldn't return those events anyway).
+    max_age = now - timedelta(hours=23, minutes=50)
+    try:
+        after_dt = datetime.fromisoformat(after.replace("Z", "+00:00"))
+    except ValueError:
+        after_dt = max_age
+    if after_dt < max_age:
+        log.warning(
+            "[%s] Cursor too old (%s) — clamping to avoid CF 1d limit; events in gap are lost",
+            zone_name, after,
+        )
+        after = max_age.strftime("%Y-%m-%dT%H:%M:%SZ")
+        state = {**state, state_key: after}
 
     async with httpx.AsyncClient() as client:
         data = await _graphql(
