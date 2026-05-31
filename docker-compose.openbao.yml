@@ -13,7 +13,7 @@ x-logging: &logging
 
 services:
   openbao:
-    image: quay.io/openbao/openbao:latest
+    image: quay.io/openbao/openbao:2.5.4
     container_name: openbao
     restart: unless-stopped
     logging: *logging
@@ -25,6 +25,13 @@ services:
       - ./openbao/config:/openbao/config:ro
       - openbao-data:/openbao/data
     command: ["bao", "server", "-config=/openbao/config/openbao.hcl"]
+    cap_drop:
+      - ALL
+    cap_add:
+      - SETUID
+      - SETGID
+    security_opt:
+      - no-new-privileges:true
     healthcheck:
       test: ["CMD-SHELL", "bao status 2>/dev/null; [ $? -ne 1 ]"]
       interval: 10s
@@ -33,9 +40,10 @@ services:
       start_period: 15s
     networks:
       - proxy
+      - bao-internal
 
   openbao-unsealer:
-    image: alpine:latest
+    image: alpine:3.23.4
     container_name: openbao-unsealer
     restart: unless-stopped
     logging: *logging
@@ -46,8 +54,13 @@ services:
       - ./.bao-unseal-key:/bao-unseal-key:ro
       - ./openbao/unsealer/unseal.sh:/unseal.sh:ro
     command: ["sh", "/unseal.sh"]
+    user: "1000:1000"
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     networks:
-      - proxy
+      - bao-internal
 
 volumes:
   openbao-data:
@@ -55,3 +68,5 @@ volumes:
 networks:
   proxy:
     external: true
+  bao-internal:
+    internal: true
