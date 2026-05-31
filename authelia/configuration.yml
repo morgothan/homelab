@@ -92,6 +92,14 @@ access_control:
     - domain: 'jellyfin.{{ env "DOMAIN" }}'
       policy: bypass
 
+    # Sonarr SignalR WebSocket — JS client passes API key as ?access_token= query param
+    # because cookies can't be sent on WebSocket connections. Bypass Authelia for the
+    # SignalR path so the negotiate + WebSocket upgrade reach Sonarr's own token auth.
+    - domain: 'sonarr.{{ env "DOMAIN" }}'
+      resources:
+        - '^/signalr/'
+      policy: bypass
+
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
