@@ -1,0 +1,339 @@
+#!/usr/bin/env python3
+"""
+update-images — update pinned Docker image tags to their latest versions,
+then pull, redeploy, and prune.
+
+Checks every semver-pinned image in docker-compose*.yml against the registry,
+shows what would change, then (with confirmation) applies the updates and
+runs the equivalent of: dc.sh up -d && docker system prune -fa
+
+Usage:
+  bin/update-images              # interactive: show changes, prompt to apply
+  bin/update-images --dry-run    # check only, no changes
+  bin/update-images --yes        # skip confirmation prompt
+"""
+
+import argparse
+import asyncio
+import re
+import subprocess
+import sys
+from pathlib import Path
+from typing import Optional
+
+import httpx
+
+REPO_ROOT = Path(__file__).resolve().parent.parent
+
+COMPOSE_FILES = [
+    REPO_ROOT / "docker-compose.yml",
+    REPO_ROOT / "docker-compose.openbao.yml",
+]
+
+_SEMVER_RE = re.compile(r"^v?\d+\.\d+")
+_SEM_SIZE = 6  # concurrent registry requests
+
+
+# ── semver helpers ─────────────────────────────────────────────────────────────
+
+def _sort_key(tag: str) -> tuple:
+    try:
+        return tuple(int(x) for x in tag.lstrip("v").split("."))
+    except ValueError:
+        return (0,)
+
+
+def _tag_pattern(tag: str) -> Optional[re.Pattern]:
+    """Return a regex matching tags of the same format as `tag`.
+
+    Preserves v-prefix and component count so we don't cross schemes:
+      v3.7.1  -> ^v\\d+\\.\\d+\\.\\d+$   (won't match 3.7.1 or v3.7.1-rc1)
+      13.0.1  -> ^\\d+\\.\\d+\\.\\d+$
+    """
+    clean = tag.lstrip("v")
+    parts = clean.split(".")
+    prefix = "v" if tag.startswith("v") else ""
+    n = r"\d+"
+    if len(parts) == 3:
+        pat = rf"^{prefix}{n}\.{n}\.{n}$"
+    elif len(parts) == 2:
+        pat = rf"^{prefix}{n}\.{n}$"
+    else:
+        return None
+    return re.compile(pat)
+
+
+# ── registry API ───────────────────────────────────────────────────────────────
+
+def _parse_registry(image_name: str) -> tuple[str, str]:
+    """Split image_name into (registry_host, repository).
+
+    Examples:
+      traefik                        -> registry-1.docker.io, library/traefik
+      grafana/grafana                -> registry-1.docker.io, grafana/grafana
+      ghcr.io/gethomepage/homepage   -> ghcr.io, gethomepage/homepage
+      quay.io/openbao/openbao        -> quay.io, openbao/openbao
+    """
+    parts = image_name.split("/", 1)
+    if "." in parts[0] or parts[0] == "localhost":
+        registry = parts[0]
+        repo = parts[1] if len(parts) > 1 else ""
+    else:
+        registry = "registry-1.docker.io"
+        repo = f"library/{image_name}" if "/" not in image_name else image_name
+    return registry, repo
+
+
+async def _list_tags(
+    image_name: str, sem: asyncio.Semaphore, client: httpx.AsyncClient
+) -> list[str]:
+    """Return all tags for an image via the OCI Distribution Spec registry API."""
+    registry, repo = _parse_registry(image_name)
+    base_url = f"https://{registry}/v2/{repo}/tags/list"
+    headers: dict = {}
+
+    async with sem:
+        # Try unauthenticated; most public registries require a Bearer token.
+        r = await client.get(base_url, params={"n": "1000"})
+
+        if r.status_code == 401:
+            www = r.headers.get("WWW-Authenticate", "")
+            realm_m   = re.search(r'realm="([^"]+)"', www)
+            service_m = re.search(r'service="([^"]+)"', www)
+            scope_m   = re.search(r'scope="([^"]+)"', www)
+
+            if realm_m:
+                params = {"scope": f"repository:{repo}:pull"}
+                if service_m:
+                    params["service"] = service_m.group(1)
+                if scope_m:
+                    params["scope"] = scope_m.group(1)
+
+                tr = await client.get(realm_m.group(1), params=params)
+                tr.raise_for_status()
+                td = tr.json()
+                token = td.get("token") or td.get("access_token", "")
+                headers["Authorization"] = f"Bearer {token}"
+
+                r = await client.get(base_url, params={"n": "1000"}, headers=headers)
+
+        if r.status_code not in (200, 206):
+            return []
+
+        tags: list[str] = []
+        tags.extend(r.json().get("tags") or [])
+
+        # Follow pagination (Link: <url>; rel="next")
+        link = r.headers.get("Link", "")
+        while 'rel="next"' in link:
+            m = re.search(r'<([^>]+)>', link)
+            if not m:
+                break
+            next_url = m.group(1)
+            if not next_url.startswith("http"):
+                next_url = f"https://{registry}{next_url}"
+            r = await client.get(next_url, headers=headers)
+            if r.status_code not in (200, 206):
+                break
+            tags.extend(r.json().get("tags") or [])
+            link = r.headers.get("Link", "")
+
+        return tags
+
+
+async def _latest_matching_tag(
+    image_name: str, current_tag: str,
+    sem: asyncio.Semaphore, client: httpx.AsyncClient
+) -> Optional[str]:
+    """Return the newest tag matching current_tag's format, or None if already latest."""
+    pat = _tag_pattern(current_tag)
+    if not pat:
+        return None
+    try:
+        tags = await _list_tags(image_name, sem, client)
+    except Exception as e:
+        print(f"  [warn] {image_name}: {e}", file=sys.stderr)
+        return None
+    matching = [t for t in tags if pat.match(t)]
+    if not matching:
+        return None
+
+    # Guard against date-stamped build tags (e.g. kopia's 20260522.0.215720)
+    # being treated as newer than conventional semver tags (0.23.0).
+    # If the current major is small, exclude tags with a huge major.
+    current_major = _sort_key(current_tag)[0]
+    if current_major < 10_000:
+        matching = [t for t in matching if _sort_key(t)[0] < 10_000]
+    if not matching:
+        return None
+
+    best = max(matching, key=_sort_key)
+    return best if _sort_key(best) > _sort_key(current_tag) else None
+
+
+# ── compose parsing ────────────────────────────────────────────────────────────
+
+def _parse_pinned(text: str) -> list:
+    """Return [(full_ref, image_name, tag), ...] for semver-pinned image lines."""
+    out = []
+    for line in text.splitlines():
+        if re.match(r"\s*#", line):
+            continue
+        m = re.match(r'\s+image:\s+"?([^"#\s]+)"?', line)
+        if not m:
+            continue
+        ref = m.group(1)
+        if ":" not in ref.split("/")[-1]:
+            continue
+        name, tag = ref.rsplit(":", 1)
+        if _SEMVER_RE.match(tag):
+            out.append((ref, name, tag))
+    return out
+
+
+# ── check + apply ──────────────────────────────────────────────────────────────
+
+async def _check_all() -> dict:
+    """Return {compose_path: [(full_ref, name, current_tag, new_tag_or_None), ...]}"""
+    sem = asyncio.Semaphore(_SEM_SIZE)
+    tasks = []
+
+    for cf in COMPOSE_FILES:
+        if not cf.exists():
+            continue
+        for full_ref, name, tag in _parse_pinned(cf.read_text()):
+            tasks.append((cf, full_ref, name, tag))
+
+    n_files = sum(1 for f in COMPOSE_FILES if f.exists())
+    print(f"Checking {len(tasks)} pinned images across {n_files} compose file(s)...")
+
+    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
+        async def _one(cf, full_ref, name, tag):
+            new_tag = await _latest_matching_tag(name, tag, sem, client)
+            return cf, full_ref, name, tag, new_tag
+
+        raw = await asyncio.gather(*[_one(*t) for t in tasks])
+
+    by_file: dict = {}
+    for cf, full_ref, name, tag, new_tag in raw:
+        by_file.setdefault(cf, []).append((full_ref, name, tag, new_tag))
+    return by_file
+
+
+def _apply_updates(by_file: dict) -> dict:
+    """Write updated tags into compose files. Returns {path: [(name, old, new), ...]}."""
+    changed: dict = {}
+    for cf, items in by_file.items():
+        updates = [(r, n, t, nt) for r, n, t, nt in items if nt]
+        if not updates:
+            continue
+        text = cf.read_text()
+        file_changes = []
+        for full_ref, name, tag, new_tag in updates:
+            new_ref = f"{name}:{new_tag}"
+            for old_s, new_s in [
+                (f"image: {full_ref}",    f"image: {new_ref}"),
+                (f'image: "{full_ref}"',  f'image: "{new_ref}"'),
+            ]:
+                if old_s in text:
+                    text = text.replace(old_s, new_s)
+                    file_changes.append((name, tag, new_tag))
+        if file_changes:
+            cf.write_text(text)
+            changed[cf] = file_changes
+    return changed
+
+
+def _run(cmd: list, check: bool = True) -> int:
+    print(f"\n+ {' '.join(str(c) for c in cmd)}")
+    result = subprocess.run(cmd, cwd=REPO_ROOT)
+    if check and result.returncode != 0:
+        print(f"Command failed (exit {result.returncode})", file=sys.stderr)
+        sys.exit(result.returncode)
+    return result.returncode
+
+
+# ── entry point ────────────────────────────────────────────────────────────────
+
+def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="Update pinned image tags and redeploy"
+    )
+    parser.add_argument("--dry-run", "-n", action="store_true",
+                        help="check only, make no changes")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="skip confirmation prompt")
+    args = parser.parse_args()
+
+    by_file = asyncio.run(_check_all())
+
+    # ── display ────────────────────────────────────────────────────────────────
+    total_updates = 0
+    total_current = 0
+
+    for cf in COMPOSE_FILES:
+        if cf not in by_file:
+            continue
+        items = by_file[cf]
+        updates   = [(r, n, t, nt) for r, n, t, nt in items if nt]
+        n_current = sum(1 for *_, nt in items if not nt)
+        total_updates += len(updates)
+        total_current += n_current
+
+        if updates:
+            print(f"\n{cf.name}:")
+            for _, name, tag, new_tag in updates:
+                old_major = _sort_key(tag)[0]
+                new_major = _sort_key(new_tag)[0]
+                flag = "  [major]" if new_major > old_major else ""
+                print(f"  {name}: {tag}  →  {new_tag}{flag}")
+
+    print(f"\n{total_updates} update(s) available, {total_current} already current.")
+
+    if total_updates == 0 or args.dry_run:
+        if args.dry_run and total_updates:
+            print("Dry run — no changes made.")
+        return
+
+    # ── confirm ────────────────────────────────────────────────────────────────
+    if not args.yes:
+        try:
+            resp = input("\nApply updates, pull, redeploy, and prune? [y/N] ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print("\nAborted.")
+            return
+        if resp != "y":
+            print("Aborted.")
+            return
+
+    # ── apply compose file changes ─────────────────────────────────────────────
+    changed = _apply_updates(by_file)
+    if not changed:
+        print("Nothing to apply.")
+        return
+
+    main_cf    = REPO_ROOT / "docker-compose.yml"
+    openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
+
+    # ── pull ───────────────────────────────────────────────────────────────────
+    if main_cf in changed:
+        _run(["docker", "compose", "-f", str(main_cf), "pull"])
+    if openbao_cf in changed:
+        _run(["docker", "compose", "-f", str(openbao_cf), "pull"])
+
+    # ── redeploy ───────────────────────────────────────────────────────────────
+    # dc.sh handles OpenBao auto-start + secret injection for the main stack.
+    _run([str(REPO_ROOT / "dc.sh"), "up", "-d"])
+
+    # Redeploy OpenBao stack separately only if its own images changed.
+    if openbao_cf in changed:
+        _run(["docker", "compose", "-f", str(openbao_cf), "up", "-d"])
+
+    # ── prune ──────────────────────────────────────────────────────────────────
+    _run(["docker", "system", "prune", "-fa"])
+
+    print("\nDone.")
+
+
+if __name__ == "__main__":
+    main()
