@@ -132,7 +132,7 @@ def _local_digest(ref: str) -> Optional[str]:
 # ── semver update check ────────────────────────────────────────────────────────
 
 async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) -> Optional[str]:
-    """Return newest matching tag if newer than current, else None."""
+    """Return newest matching tag if newer than current and manifest is pullable, else None."""
     pat = _tag_pattern(current)
     if not pat:
         return None
@@ -147,7 +147,13 @@ async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) ->
     if not matching:
         return None
     best = max(matching, key=_sort_key)
-    return best if _sort_key(best) > _sort_key(current) else None
+    if _sort_key(best) <= _sort_key(current):
+        return None
+    # Confirm the tag has a valid, pullable manifest before reporting it as an update.
+    # A tag can appear in list-tags but have no manifest if it was partially pushed or deleted.
+    if await _remote_digest(f"{name}:{best}", sem) is None:
+        return None
+    return best
 
 
 # ── compose parsing ────────────────────────────────────────────────────────────
@@ -335,7 +341,7 @@ async def _check_all() -> dict:
     }
 
 
-# ── apply semver tag updates to compose files ──────────────────────────────────
+# ── apply / revert semver tag updates ─────────────────────────────────────────
 
 def _apply_semver(semver_by_file: dict) -> None:
     for cf, items in semver_by_file.items():
@@ -348,6 +354,23 @@ def _apply_semver(semver_by_file: dict) -> None:
             ]:
                 if old_s in text:
                     text = text.replace(old_s, new_s)
+        cf.write_text(text)
+
+
+def _revert_semver(items: list) -> None:
+    """Undo compose file tag changes for images whose pull failed."""
+    by_file: dict = {}
+    for cf, full_ref, name, old_tag, new_tag in items:
+        by_file.setdefault(cf, []).append((name, old_tag, new_tag))
+    for cf, changes in by_file.items():
+        text = cf.read_text()
+        for name, old_tag, new_tag in changes:
+            new_ref, old_ref = f"{name}:{new_tag}", f"{name}:{old_tag}"
+            for bad, good in [
+                (f"image: {new_ref}", f"image: {old_ref}"),
+                (f'image: "{new_ref}"', f'image: "{old_ref}"'),
+            ]:
+                text = text.replace(bad, good)
         cf.write_text(text)
 
 
@@ -437,25 +460,34 @@ def main() -> None:
 
     # ── 2. pull updated images (rolling stale + new semver tags) ──────────────
     pulled: set = set()
+    pull_failed: list = []  # (cf, full_ref, name, old_tag, new_tag)
 
     for _, _, ref in rolling_stale:
         if ref not in pulled:
-            _run(["docker", "pull", ref])
-            pulled.add(ref)
+            if _run(["docker", "pull", ref], check=False) == 0:
+                pulled.add(ref)
+            # rolling failure is non-fatal — the old image keeps running
 
     for cf, items in semver_by_file.items():
         for full_ref, name, old_tag, new_tag in items:
             ref = f"{name}:{new_tag}"
             if ref not in pulled:
-                _run(["docker", "pull", ref])
-                pulled.add(ref)
+                if _run(["docker", "pull", ref], check=False) == 0:
+                    pulled.add(ref)
+                else:
+                    print(f"\n[!] pull failed for {ref} — reverting compose file", file=sys.stderr)
+                    pull_failed.append((cf, full_ref, name, old_tag, new_tag))
+
+    if pull_failed:
+        _revert_semver(pull_failed)
+        print(f"[!] {len(pull_failed)} image(s) reverted in compose file(s).", file=sys.stderr)
 
     # ── 3. rebuild local builds whose base images changed ─────────────────────
     for cf, svc, _ in build_stale:
         if cf == main_cf:
-            _run([str(REPO_ROOT / "dc.sh"), "build", "--pull", svc])
+            _run([str(REPO_ROOT / "dc.sh"), "build", "--pull", svc], check=False)
         else:
-            _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc])
+            _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc], check=False)
 
     # ── 4. redeploy ────────────────────────────────────────────────────────────
     # dc.sh handles OpenBao auto-start + secret injection for the main stack.
