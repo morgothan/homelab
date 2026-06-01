@@ -27,6 +27,21 @@ log = logging.getLogger("updates")
 _digest_cache: dict = {}
 _source_cache: dict = {}
 
+# Detects semver-pinned image tags so we can check :latest for update availability.
+# Matches: v3.7.1, 3.7.1, 4.39.20, 2026.5.2, 8.8.0-alpine, etc.
+# Does NOT match: latest, master, develop, alpine, main — those use the tag as-is.
+_SEMVER_TAG_RE = re.compile(r"^v?\d+\.\d+")
+
+
+def _latest_ref(image_ref: str) -> Optional[str]:
+    """For a semver-pinned image, return the :latest ref to check for updates.
+    Returns None for rolling tags (:latest, :master, etc.) so the caller uses image_ref as-is."""
+    if ":" not in image_ref.split("/")[-1]:
+        return None
+    name, tag = image_ref.rsplit(":", 1)
+    return f"{name}:latest" if _SEMVER_TAG_RE.match(tag) else None
+
+
 # Known GitHub repos for common apps (used to fetch changelogs for non-Docker updates)
 _GITHUB_URLS: dict[str, Optional[str]] = {
     "adguard-home":   "https://github.com/AdguardTeam/AdGuardHome",
@@ -98,13 +113,21 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
         ]}
 
     async def _check_one(c: dict) -> dict:
-        digest, source = await _cached_digest(c["image"], sem)
+        image_ref = c["image"]
+        # For semver-pinned tags (e.g. traefik:v3.7.1), check :latest so we detect
+        # newer releases even though the pinned tag digest never changes.
+        check_ref = _latest_ref(image_ref) or image_ref
+        digest, source = await _cached_digest(check_ref, sem)
+        if digest is None and check_ref != image_ref:
+            # :latest unavailable — fall back to the pinned tag (will always report current)
+            log.debug("No :latest for %s, falling back to pinned tag", image_ref)
+            digest, source = await _cached_digest(image_ref, sem)
         if digest is None:
-            return {"container": c["name"], "image": c["image"], "status": "check_failed"}
+            return {"container": c["name"], "image": image_ref, "status": "check_failed"}
         if c["local_digest"] is None:
-            return {"container": c["name"], "image": c["image"], "status": "unknown"}
+            return {"container": c["name"], "image": image_ref, "status": "unknown"}
         status = "update_available" if c["local_digest"] != digest else "current"
-        r = {"container": c["name"], "image": c["image"], "status": status}
+        r = {"container": c["name"], "image": image_ref, "status": status}
         if status == "update_available" and source:
             r["_source"] = source
         return r
