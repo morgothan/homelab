@@ -299,12 +299,14 @@ async def _check_all() -> dict:
 
     async def _chk_semver(cf, full_ref, name, tag):
         new = await _latest_semver_tag(name, tag, sem)
+        print(".", end="", flush=True)
         return cf, full_ref, name, tag, new
 
     async def _chk_rolling(cf, svc, ref):
         remote = await _remote_digest(ref, sem)
         local  = _local_digest(ref)
         stale  = remote is not None and local is not None and remote != local
+        print(".", end="", flush=True)
         return cf, svc, ref, stale
 
     async def _chk_base(base):
@@ -312,11 +314,20 @@ async def _check_all() -> dict:
         local  = _local_digest(base)
         # If local is absent, assume stale so the rebuild pulls the latest base
         changed = remote is not None and (local is None or remote != local)
+        print(".", end="", flush=True)
         return base, changed
 
+    print(f"  semver    [{len(all_semver):2}] ", end="", flush=True)
     s_res = await asyncio.gather(*[_chk_semver(*t) for t in all_semver])
+    print()
+
+    print(f"  rolling   [{len(all_rolling):2}] ", end="", flush=True)
     r_res = await asyncio.gather(*[_chk_rolling(*t) for t in all_rolling])
+    print()
+
+    print(f"  build base[{len(unique_bases):2}] ", end="", flush=True)
     b_res = await asyncio.gather(*[_chk_base(b) for b in unique_bases])
+    print()
 
     semver_by_file: dict = {}
     for cf, full_ref, name, old, new in s_res:
