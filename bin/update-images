@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
-update-images — update pinned Docker image tags to their latest versions,
-then pull, redeploy, and prune.
+update-images — detect and apply Docker image updates across three categories:
 
-Checks every semver-pinned image in docker-compose*.yml against the registry,
-shows what would change, then (with confirmation) applies the updates and
-runs the equivalent of: dc.sh up -d && docker system prune -fa
+  1. Semver-pinned images  — find newer version tags via skopeo list-tags
+  2. Rolling-tag images    — pull if remote digest differs from local cache
+  3. Local builds          — rebuild (--pull) if Dockerfile base image changed
 
 Usage:
   bin/update-images              # interactive: show changes, prompt to apply
@@ -15,13 +14,12 @@ Usage:
 
 import argparse
 import asyncio
+import json
 import re
 import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
-
-import httpx
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
@@ -31,10 +29,10 @@ COMPOSE_FILES = [
 ]
 
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+")
-_SEM_SIZE = 6  # concurrent registry requests
+_SEM_SIZE = 6  # concurrent skopeo requests
 
 
-# ── semver helpers ─────────────────────────────────────────────────────────────
+# ── sort / pattern helpers ─────────────────────────────────────────────────────
 
 def _sort_key(tag: str) -> tuple:
     try:
@@ -44,12 +42,7 @@ def _sort_key(tag: str) -> tuple:
 
 
 def _tag_pattern(tag: str) -> Optional[re.Pattern]:
-    """Return a regex matching tags of the same format as `tag`.
-
-    Preserves v-prefix and component count so we don't cross schemes:
-      v3.7.1  -> ^v\\d+\\.\\d+\\.\\d+$   (won't match 3.7.1 or v3.7.1-rc1)
-      13.0.1  -> ^\\d+\\.\\d+\\.\\d+$
-    """
+    """Regex matching tags with the same format (component count, v-prefix) as tag."""
     clean = tag.lstrip("v")
     parts = clean.split(".")
     prefix = "v" if tag.startswith("v") else ""
@@ -63,186 +56,283 @@ def _tag_pattern(tag: str) -> Optional[re.Pattern]:
     return re.compile(pat)
 
 
-# ── registry API ───────────────────────────────────────────────────────────────
+# ── skopeo wrappers ────────────────────────────────────────────────────────────
 
-def _parse_registry(image_name: str) -> tuple[str, str]:
-    """Split image_name into (registry_host, repository).
-
-    Examples:
-      traefik                        -> registry-1.docker.io, library/traefik
-      grafana/grafana                -> registry-1.docker.io, grafana/grafana
-      ghcr.io/gethomepage/homepage   -> ghcr.io, gethomepage/homepage
-      quay.io/openbao/openbao        -> quay.io, openbao/openbao
-    """
-    parts = image_name.split("/", 1)
-    if "." in parts[0] or parts[0] == "localhost":
-        registry = parts[0]
-        repo = parts[1] if len(parts) > 1 else ""
-    else:
-        registry = "registry-1.docker.io"
-        repo = f"library/{image_name}" if "/" not in image_name else image_name
-    return registry, repo
-
-
-async def _list_tags(
-    image_name: str, sem: asyncio.Semaphore, client: httpx.AsyncClient
-) -> list[str]:
-    """Return all tags for an image via the OCI Distribution Spec registry API."""
-    registry, repo = _parse_registry(image_name)
-    base_url = f"https://{registry}/v2/{repo}/tags/list"
-    headers: dict = {}
-
-    async with sem:
-        # Try unauthenticated; most public registries require a Bearer token.
-        r = await client.get(base_url, params={"n": "1000"})
-
-        if r.status_code == 401:
-            www = r.headers.get("WWW-Authenticate", "")
-            realm_m   = re.search(r'realm="([^"]+)"', www)
-            service_m = re.search(r'service="([^"]+)"', www)
-            scope_m   = re.search(r'scope="([^"]+)"', www)
-
-            if realm_m:
-                params = {"scope": f"repository:{repo}:pull"}
-                if service_m:
-                    params["service"] = service_m.group(1)
-                if scope_m:
-                    params["scope"] = scope_m.group(1)
-
-                tr = await client.get(realm_m.group(1), params=params)
-                tr.raise_for_status()
-                td = tr.json()
-                token = td.get("token") or td.get("access_token", "")
-                headers["Authorization"] = f"Bearer {token}"
-
-                r = await client.get(base_url, params={"n": "1000"}, headers=headers)
-
-        if r.status_code not in (200, 206):
-            return []
-
-        tags: list[str] = []
-        tags.extend(r.json().get("tags") or [])
-
-        # Follow pagination (Link: <url>; rel="next")
-        link = r.headers.get("Link", "")
-        while 'rel="next"' in link:
-            m = re.search(r'<([^>]+)>', link)
-            if not m:
-                break
-            next_url = m.group(1)
-            if not next_url.startswith("http"):
-                next_url = f"https://{registry}{next_url}"
-            r = await client.get(next_url, headers=headers)
-            if r.status_code not in (200, 206):
-                break
-            tags.extend(r.json().get("tags") or [])
-            link = r.headers.get("Link", "")
-
-        return tags
+async def _skopeo_list_tags(image: str, sem: asyncio.Semaphore) -> list[str]:
+    """Return all tags for an image name; tries unauthenticated first, then with auth."""
+    last_err = ""
+    for flags in (["--no-creds"], []):
+        async with sem:
+            proc = await asyncio.create_subprocess_exec(
+                "skopeo", "list-tags", *flags, f"docker://{image}",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+        if proc.returncode == 0:
+            try:
+                return json.loads(out).get("Tags") or []
+            except json.JSONDecodeError:
+                return []
+        last_err = err.decode().strip()
+    print(f"  [warn] skopeo list-tags {image}: {last_err}", file=sys.stderr)
+    return []
 
 
-async def _latest_matching_tag(
-    image_name: str, current_tag: str,
-    sem: asyncio.Semaphore, client: httpx.AsyncClient
-) -> Optional[str]:
-    """Return the newest tag matching current_tag's format, or None if already latest."""
-    pat = _tag_pattern(current_tag)
+async def _remote_digest(ref: str, sem: asyncio.Semaphore) -> Optional[str]:
+    """Fetch remote manifest digest; tries unauthenticated first, then with auth."""
+    last_err = ""
+    for flags in (["--no-creds"], []):
+        async with sem:
+            proc = await asyncio.create_subprocess_exec(
+                "skopeo", "inspect", *flags, f"docker://{ref}",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, err = await proc.communicate()
+        if proc.returncode == 0:
+            try:
+                return json.loads(out).get("Digest")
+            except json.JSONDecodeError:
+                return None
+        last_err = err.decode().strip()
+    print(f"  [warn] skopeo inspect {ref}: {last_err}", file=sys.stderr)
+    return None
+
+
+def _local_digest(ref: str) -> Optional[str]:
+    """Return sha256 digest from local Docker image cache, or None."""
+    r = subprocess.run(
+        ["docker", "image", "inspect", ref, "--format", "{{index .RepoDigests 0}}"],
+        capture_output=True, text=True,
+    )
+    if r.returncode != 0 or not r.stdout.strip():
+        return None
+    raw = r.stdout.strip()
+    return raw.split("@", 1)[1] if "@" in raw else (raw if raw.startswith("sha256:") else None)
+
+
+# ── semver update check ────────────────────────────────────────────────────────
+
+async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) -> Optional[str]:
+    """Return newest matching tag if newer than current, else None."""
+    pat = _tag_pattern(current)
     if not pat:
         return None
-    try:
-        tags = await _list_tags(image_name, sem, client)
-    except Exception as e:
-        print(f"  [warn] {image_name}: {e}", file=sys.stderr)
-        return None
+    tags = await _skopeo_list_tags(name, sem)
     matching = [t for t in tags if pat.match(t)]
     if not matching:
         return None
-
-    # Guard against date-stamped build tags (e.g. kopia's 20260522.0.215720)
-    # being treated as newer than conventional semver tags (0.23.0).
-    # If the current major is small, exclude tags with a huge major.
-    current_major = _sort_key(current_tag)[0]
-    if current_major < 10_000:
+    # Guard against date-stamped nightly build tags (e.g. kopia's 20260522.0.215720)
+    # being ranked above conventional semver tags (0.23.0).
+    if _sort_key(current)[0] < 10_000:
         matching = [t for t in matching if _sort_key(t)[0] < 10_000]
     if not matching:
         return None
-
     best = max(matching, key=_sort_key)
-    return best if _sort_key(best) > _sort_key(current_tag) else None
+    return best if _sort_key(best) > _sort_key(current) else None
 
 
 # ── compose parsing ────────────────────────────────────────────────────────────
 
-def _parse_pinned(text: str) -> list:
-    """Return [(full_ref, image_name, tag), ...] for semver-pinned image lines."""
-    out = []
-    for line in text.splitlines():
-        if re.match(r"\s*#", line):
+def _parse_compose(path: Path) -> dict:
+    """
+    Parse one compose file into three categories:
+      semver:  [(full_ref, image_name, tag), ...]
+      rolling: [(service_name, full_ref), ...]
+      builds:  [(service_name, build_context_str), ...]
+
+    Assumes build: appears before image: within each service block.
+    """
+    semver: list = []
+    rolling: list = []
+    builds: list = []
+    cur_svc: Optional[str] = None
+    cur_build: Optional[str] = None  # None=no build:, "__block__"=block form pending context:
+    in_services = False
+
+    def _flush():
+        if cur_svc and cur_build is not None and cur_build != "__block__":
+            builds.append((cur_svc, cur_build))
+
+    for line in path.read_text().splitlines():
+        # Track top-level sections (unindented keys)
+        if re.match(r'^[a-zA-Z]', line):
+            _flush()
+            in_services = bool(re.match(r'^services\s*:', line))
+            cur_svc = None
+            cur_build = None
             continue
-        m = re.match(r'\s+image:\s+"?([^"#\s]+)"?', line)
-        if not m:
+
+        if not in_services or re.match(r'\s*#', line):
             continue
-        ref = m.group(1)
+
+        # Service name: exactly 2-space indent
+        svc_m = re.match(r'^  ([a-zA-Z0-9_-]+)\s*:', line)
+        if svc_m:
+            _flush()
+            cur_svc = svc_m.group(1)
+            cur_build = None
+            continue
+
+        # build: <path>  (inline form)
+        bm = re.match(r'^    build:\s+(\S+)', line)
+        if bm:
+            cur_build = bm.group(1)
+            continue
+        # build:         (block form — context: key follows)
+        if re.match(r'^    build:\s*$', line):
+            cur_build = "__block__"
+            continue
+        ctx_m = re.match(r'^      context:\s+(\S+)', line)
+        if ctx_m and cur_build == "__block__":
+            cur_build = ctx_m.group(1)
+            continue
+
+        # image: <ref>
+        img_m = re.match(r'^    image:\s+"?([^"#\s]+)"?', line)
+        if not img_m:
+            continue
+        ref = img_m.group(1)
+
+        # build: services use image: as the local tag name — not a registry pull target
+        if cur_build is not None:
+            continue
+
+        # Skip unresolved variable substitutions (e.g. image: registry/name:${TAG})
+        if "$" in ref:
+            continue
+
+        # Untagged — treat as :latest rolling
         if ":" not in ref.split("/")[-1]:
+            rolling.append((cur_svc, ref + ":latest"))
             continue
+
         name, tag = ref.rsplit(":", 1)
         if _SEMVER_RE.match(tag):
-            out.append((ref, name, tag))
-    return out
+            semver.append((ref, name, tag))
+        else:
+            rolling.append((cur_svc, ref))
+
+    _flush()
+    return {"semver": semver, "rolling": rolling, "builds": builds}
 
 
-# ── check + apply ──────────────────────────────────────────────────────────────
+# ── Dockerfile FROM parsing ────────────────────────────────────────────────────
+
+def _dockerfile_bases(context_str: str) -> list[str]:
+    """Return all non-scratch FROM base images in <context>/Dockerfile."""
+    ctx = Path(context_str)
+    if not ctx.is_absolute():
+        ctx = REPO_ROOT / ctx
+    df = ctx / "Dockerfile"
+    if not df.exists():
+        return []
+    bases = []
+    for line in df.read_text().splitlines():
+        m = re.match(r'^\s*FROM\s+(\S+)', line, re.IGNORECASE)
+        if m and m.group(1).lower() not in ("scratch",):
+            bases.append(m.group(1))
+    return bases
+
+
+# ── check everything ───────────────────────────────────────────────────────────
 
 async def _check_all() -> dict:
-    """Return {compose_path: [(full_ref, name, current_tag, new_tag_or_None), ...]}"""
     sem = asyncio.Semaphore(_SEM_SIZE)
-    tasks = []
+
+    all_semver:  list = []  # (cf, full_ref, name, tag)
+    all_rolling: list = []  # (cf, svc, ref)
+    all_builds:  list = []  # (cf, svc, ctx)
 
     for cf in COMPOSE_FILES:
         if not cf.exists():
             continue
-        for full_ref, name, tag in _parse_pinned(cf.read_text()):
-            tasks.append((cf, full_ref, name, tag))
+        p = _parse_compose(cf)
+        for ref, name, tag in p["semver"]:
+            all_semver.append((cf, ref, name, tag))
+        for svc, ref in p["rolling"]:
+            all_rolling.append((cf, svc, ref))
+        for svc, ctx in p["builds"]:
+            all_builds.append((cf, svc, ctx))
+
+    # Collect unique base images from all Dockerfiles
+    svc_bases: dict = {}   # (cf, svc) -> [base_refs]
+    unique_bases: list = []
+    for cf, svc, ctx in all_builds:
+        bases = _dockerfile_bases(ctx)
+        svc_bases[(cf, svc)] = bases
+        for b in bases:
+            if b not in unique_bases:
+                unique_bases.append(b)
 
     n_files = sum(1 for f in COMPOSE_FILES if f.exists())
-    print(f"Checking {len(tasks)} pinned images across {n_files} compose file(s)...")
+    print(
+        f"Checking {len(all_semver)} semver, "
+        f"{len(all_rolling)} rolling-tag, "
+        f"{len(unique_bases)} build-base image(s) "
+        f"across {n_files} compose file(s)..."
+    )
 
-    async with httpx.AsyncClient(follow_redirects=True, timeout=30) as client:
-        async def _one(cf, full_ref, name, tag):
-            new_tag = await _latest_matching_tag(name, tag, sem, client)
-            return cf, full_ref, name, tag, new_tag
+    async def _chk_semver(cf, full_ref, name, tag):
+        new = await _latest_semver_tag(name, tag, sem)
+        return cf, full_ref, name, tag, new
 
-        raw = await asyncio.gather(*[_one(*t) for t in tasks])
+    async def _chk_rolling(cf, svc, ref):
+        remote = await _remote_digest(ref, sem)
+        local  = _local_digest(ref)
+        stale  = remote is not None and local is not None and remote != local
+        return cf, svc, ref, stale
 
-    by_file: dict = {}
-    for cf, full_ref, name, tag, new_tag in raw:
-        by_file.setdefault(cf, []).append((full_ref, name, tag, new_tag))
-    return by_file
+    async def _chk_base(base):
+        remote = await _remote_digest(base, sem)
+        local  = _local_digest(base)
+        # If local is absent, assume stale so the rebuild pulls the latest base
+        changed = remote is not None and (local is None or remote != local)
+        return base, changed
+
+    s_res = await asyncio.gather(*[_chk_semver(*t) for t in all_semver])
+    r_res = await asyncio.gather(*[_chk_rolling(*t) for t in all_rolling])
+    b_res = await asyncio.gather(*[_chk_base(b) for b in unique_bases])
+
+    semver_by_file: dict = {}
+    for cf, full_ref, name, old, new in s_res:
+        if new:
+            semver_by_file.setdefault(cf, []).append((full_ref, name, old, new))
+
+    rolling_stale = [(cf, svc, ref) for cf, svc, ref, stale in r_res if stale]
+
+    stale_bases = {b for b, changed in b_res if changed}
+    build_stale = [
+        (cf, svc, ctx)
+        for cf, svc, ctx in all_builds
+        if any(b in stale_bases for b in svc_bases.get((cf, svc), []))
+    ]
+
+    return {
+        "semver_by_file": semver_by_file,
+        "rolling_stale":  rolling_stale,
+        "build_stale":    build_stale,
+        "stale_bases":    stale_bases,
+        "svc_bases":      svc_bases,
+    }
 
 
-def _apply_updates(by_file: dict) -> dict:
-    """Write updated tags into compose files. Returns {path: [(name, old, new), ...]}."""
-    changed: dict = {}
-    for cf, items in by_file.items():
-        updates = [(r, n, t, nt) for r, n, t, nt in items if nt]
-        if not updates:
-            continue
+# ── apply semver tag updates to compose files ──────────────────────────────────
+
+def _apply_semver(semver_by_file: dict) -> None:
+    for cf, items in semver_by_file.items():
         text = cf.read_text()
-        file_changes = []
-        for full_ref, name, tag, new_tag in updates:
+        for full_ref, name, old_tag, new_tag in items:
             new_ref = f"{name}:{new_tag}"
             for old_s, new_s in [
-                (f"image: {full_ref}",    f"image: {new_ref}"),
-                (f'image: "{full_ref}"',  f'image: "{new_ref}"'),
+                (f"image: {full_ref}",   f"image: {new_ref}"),
+                (f'image: "{full_ref}"', f'image: "{new_ref}"'),
             ]:
                 if old_s in text:
                     text = text.replace(old_s, new_s)
-                    file_changes.append((name, tag, new_tag))
-        if file_changes:
-            cf.write_text(text)
-            changed[cf] = file_changes
-    return changed
+        cf.write_text(text)
 
+
+# ── shell helper ───────────────────────────────────────────────────────────────
 
 def _run(cmd: list, check: bool = True) -> int:
     print(f"\n+ {' '.join(str(c) for c in cmd)}")
@@ -257,7 +347,7 @@ def _run(cmd: list, check: bool = True) -> int:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Update pinned image tags and redeploy"
+        description="Update Docker images: semver bumps, rolling-tag pulls, local rebuilds"
     )
     parser.add_argument("--dry-run", "-n", action="store_true",
                         help="check only, make no changes")
@@ -265,40 +355,53 @@ def main() -> None:
                         help="skip confirmation prompt")
     args = parser.parse_args()
 
-    by_file = asyncio.run(_check_all())
+    results        = asyncio.run(_check_all())
+    semver_by_file = results["semver_by_file"]
+    rolling_stale  = results["rolling_stale"]
+    build_stale    = results["build_stale"]
+    stale_bases    = results["stale_bases"]
+    svc_bases      = results["svc_bases"]
 
     # ── display ────────────────────────────────────────────────────────────────
-    total_updates = 0
-    total_current = 0
-
     for cf in COMPOSE_FILES:
-        if cf not in by_file:
-            continue
-        items = by_file[cf]
-        updates   = [(r, n, t, nt) for r, n, t, nt in items if nt]
-        n_current = sum(1 for *_, nt in items if not nt)
-        total_updates += len(updates)
-        total_current += n_current
+        items = semver_by_file.get(cf, [])
+        if items:
+            print(f"\n{cf.name} — semver updates:")
+            for _, name, old, new in items:
+                flag = "  [major]" if _sort_key(new)[0] > _sort_key(old)[0] else ""
+                print(f"  {name}: {old}  →  {new}{flag}")
 
-        if updates:
-            print(f"\n{cf.name}:")
-            for _, name, tag, new_tag in updates:
-                old_major = _sort_key(tag)[0]
-                new_major = _sort_key(new_tag)[0]
-                flag = "  [major]" if new_major > old_major else ""
-                print(f"  {name}: {tag}  →  {new_tag}{flag}")
+    if rolling_stale:
+        print("\nRolling-tag images with digest changes:")
+        for _, svc, ref in rolling_stale:
+            print(f"  {svc}: {ref}")
 
-    print(f"\n{total_updates} update(s) available, {total_current} already current.")
+    if build_stale:
+        print("\nLocal builds with stale base images:")
+        for cf, svc, _ in build_stale:
+            changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
+            print(f"  {svc}: {', '.join(changed)}")
 
-    if total_updates == 0 or args.dry_run:
-        if args.dry_run and total_updates:
+    n_semver  = sum(len(v) for v in semver_by_file.values())
+    n_rolling = len(rolling_stale)
+    n_builds  = len(build_stale)
+    total     = n_semver + n_rolling + n_builds
+
+    print(
+        f"\n{n_semver} semver update(s), "
+        f"{n_rolling} rolling-tag pull(s), "
+        f"{n_builds} local rebuild(s)."
+    )
+
+    if total == 0 or args.dry_run:
+        if args.dry_run and total:
             print("Dry run — no changes made.")
         return
 
     # ── confirm ────────────────────────────────────────────────────────────────
     if not args.yes:
         try:
-            resp = input("\nApply updates, pull, redeploy, and prune? [y/N] ").strip().lower()
+            resp = input("\nApply all updates, rebuild, redeploy, and prune? [y/N] ").strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nAborted.")
             return
@@ -306,30 +409,46 @@ def main() -> None:
             print("Aborted.")
             return
 
-    # ── apply compose file changes ─────────────────────────────────────────────
-    changed = _apply_updates(by_file)
-    if not changed:
-        print("Nothing to apply.")
-        return
-
     main_cf    = REPO_ROOT / "docker-compose.yml"
     openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
 
-    # ── pull ───────────────────────────────────────────────────────────────────
-    if main_cf in changed:
-        _run(["docker", "compose", "-f", str(main_cf), "pull"])
-    if openbao_cf in changed:
-        _run(["docker", "compose", "-f", str(openbao_cf), "pull"])
+    # ── 1. write semver tag changes into compose files ─────────────────────────
+    if semver_by_file:
+        _apply_semver(semver_by_file)
 
-    # ── redeploy ───────────────────────────────────────────────────────────────
+    # ── 2. pull updated images (rolling stale + new semver tags) ──────────────
+    pulled: set = set()
+
+    for _, _, ref in rolling_stale:
+        if ref not in pulled:
+            _run(["docker", "pull", ref])
+            pulled.add(ref)
+
+    for cf, items in semver_by_file.items():
+        for full_ref, name, old_tag, new_tag in items:
+            ref = f"{name}:{new_tag}"
+            if ref not in pulled:
+                _run(["docker", "pull", ref])
+                pulled.add(ref)
+
+    # ── 3. rebuild local builds whose base images changed ─────────────────────
+    for cf, svc, _ in build_stale:
+        _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc])
+
+    # ── 4. redeploy ────────────────────────────────────────────────────────────
     # dc.sh handles OpenBao auto-start + secret injection for the main stack.
     _run([str(REPO_ROOT / "dc.sh"), "up", "-d"])
 
-    # Redeploy OpenBao stack separately only if its own images changed.
-    if openbao_cf in changed:
+    # Redeploy OpenBao stack separately if any of its images changed.
+    openbao_changed = (
+        openbao_cf in semver_by_file
+        or any(cf == openbao_cf for cf, _, _ in rolling_stale)
+        or any(cf == openbao_cf for cf, _, _ in build_stale)
+    )
+    if openbao_changed:
         _run(["docker", "compose", "-f", str(openbao_cf), "up", "-d"])
 
-    # ── prune ──────────────────────────────────────────────────────────────────
+    # ── 5. prune ───────────────────────────────────────────────────────────────
     _run(["docker", "system", "prune", "-fa"])
 
     print("\nDone.")
