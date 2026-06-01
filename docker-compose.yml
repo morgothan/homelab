@@ -214,7 +214,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.39.2
+    image: portainer/portainer-ce:2.42.0
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -336,7 +336,7 @@ services:
   promtail:
     command: -config.file=/etc/promtail/promtail-config.yml
     container_name: promtail
-    image: grafana/promtail:3.6.8
+    image: grafana/promtail:3.6.11
     healthcheck:
       test: ["CMD-SHELL", "pgrep promtail || exit 1"]
       interval: 30s
@@ -561,7 +561,7 @@ services:
 # Exports AdGuard Home metrics (primary + kids) to Prometheus
   adguard-exporter:
     container_name: adguard_exporter
-    image: ghcr.io/henrywhitaker3/adguard-exporter:v0.2.4
+    image: ghcr.io/henrywhitaker3/adguard-exporter:v1.2.1
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
@@ -714,7 +714,7 @@ services:
 ########## ttyd
 # ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
   ttyd-user:
-    image: tsl0922/ttyd:1.7.7
+    image: tsl0922/ttyd:1.7.8
     container_name: ttyd-user
     restart: unless-stopped
     logging: *logging
@@ -1138,7 +1138,7 @@ services:
 ########## NZBGet Exporter
 # Exports NZBGet download queue metrics to Prometheus
   nzbget_exporter:
-    image: frebib/nzbget-exporter:0.2.4
+    image: frebib/nzbget-exporter:3.19
     tty: true
     container_name: nzbget_exporter
     restart: unless-stopped
