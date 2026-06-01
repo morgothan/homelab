@@ -9,7 +9,7 @@ services:
 ########## Cloudflare Tunnel
 # Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
-    image: cloudflare/cloudflared:latest
+    image: cloudflare/cloudflared:2026.5.2
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:latest
+    image: traefik:v3.7.1
     container_name: traefik
     restart: always
     logging: *logging
@@ -178,7 +178,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:latest
+    image: ghcr.io/gethomepage/homepage:v1.13.1
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -214,7 +214,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:latest
+    image: portainer/portainer-ce:2.39.2
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -241,7 +241,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.12.0
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -284,7 +284,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.0.1
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -336,7 +336,7 @@ services:
   promtail:
     command: -config.file=/etc/promtail/promtail-config.yml
     container_name: promtail
-    image: grafana/promtail:latest
+    image: grafana/promtail:3.6.8
     healthcheck:
       test: ["CMD-SHELL", "pgrep promtail || exit 1"]
       interval: 30s
@@ -391,7 +391,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:latest
+    image: amir20/dozzle:v10.6.3
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -471,7 +471,7 @@ services:
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
   authelia:
     container_name: authelia
-    image: authelia/authelia:latest
+    image: authelia/authelia:4.39.20
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"]
       interval: 30s
@@ -561,7 +561,7 @@ services:
 # Exports AdGuard Home metrics (primary + kids) to Prometheus
   adguard-exporter:
     container_name: adguard_exporter
-    image: ghcr.io/henrywhitaker3/adguard-exporter:latest
+    image: ghcr.io/henrywhitaker3/adguard-exporter:v0.2.4
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
@@ -576,7 +576,7 @@ services:
 ########## Tdarr Exporter
 # Exports Tdarr media transcoding metrics to Prometheus
   tdarr-exporter:
-    image: homeylab/tdarr-exporter:latest
+    image: homeylab/tdarr-exporter:2.1.0
     container_name: tdarr-exporter
     restart: unless-stopped
     logging: *logging
@@ -590,7 +590,7 @@ services:
 ########## OpenEVSE Exporter
 # Exports EV charger metrics (state, power, energy, temperature) to Prometheus
   openevse-exporter:
-    image: prometheuscommunity/json-exporter:latest
+    image: prometheuscommunity/json-exporter:v0.7.0
     container_name: openevse-exporter
     restart: unless-stopped
     logging: *logging
@@ -613,13 +613,13 @@ services:
       - ${DOCKERNET}
     volumes:
       - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
-    image: prompve/prometheus-pve-exporter:latest
+    image: prompve/prometheus-pve-exporter:v3.9.0
 
 
 ########## Redis
 # Shared session store for Authelia (db 0) and Traefik (db 1), exposed to LAN on :6379
   redis:
-    image: redis:latest
+    image: redis:8.8.0
       #image: docker.io/valkey/valkey:latest
     container_name: redis
     healthcheck:
@@ -654,7 +654,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:latest
+    image: oliver006/redis_exporter:v1.84.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -714,7 +714,7 @@ services:
 ########## ttyd
 # ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
   ttyd-user:
-    image: tsl0922/ttyd:latest
+    image: tsl0922/ttyd:1.7.7
     container_name: ttyd-user
     restart: unless-stopped
     logging: *logging
@@ -796,7 +796,7 @@ services:
 ########## Gotify
 # Push notification server — receives Docker image update alerts from Diun
   gotify:
-    image: gotify/server:latest
+    image: gotify/server:2.9.1
     restart: unless-stopped
     logging: *logging
     container_name: gotify
@@ -848,7 +848,7 @@ services:
 ########## Diun
 # Watches for Docker image updates and sends alerts to Gotify
   diun:
-    image: crazymax/diun:latest
+    image: crazymax/diun:4.33.0
     container_name: diun
     command: serve
     volumes:
@@ -933,7 +933,7 @@ services:
 # Web UI for NUT UPS monitoring and status
   peanut:
     container_name: peanut
-    image: brandawg93/peanut:latest
+    image: brandawg93/peanut:6.0.0
     restart: unless-stopped
     logging: *logging
     depends_on:
@@ -965,7 +965,7 @@ services:
 # Media request management for Plex — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
-    image: ghcr.io/seerr-team/seerr:latest
+    image: ghcr.io/seerr-team/seerr:v3.2.0
     init: true
     container_name: overseerr
     environment:
@@ -1042,7 +1042,7 @@ services:
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
-    image: henrygd/beszel-agent:latest
+    image: henrygd/beszel-agent:0.18.7
     container_name: "beszel-agent"
     restart: unless-stopped
     logging: *logging
@@ -1127,7 +1127,7 @@ services:
 ########## Scraparr
 # Exports *arr app metrics (Radarr, Sonarr, etc.) to Prometheus
   scraparr:
-    image: ghcr.io/thecfu/scraparr
+    image: ghcr.io/thecfu/scraparr:3.0.3
     container_name: scraparr
     restart: unless-stopped
     logging: *logging
@@ -1138,7 +1138,7 @@ services:
 ########## NZBGet Exporter
 # Exports NZBGet download queue metrics to Prometheus
   nzbget_exporter:
-    image: frebib/nzbget-exporter
+    image: frebib/nzbget-exporter:0.2.4
     tty: true
     container_name: nzbget_exporter
     restart: unless-stopped
@@ -1153,7 +1153,7 @@ services:
 ########## Kopia
 # Backup UI — manages rclone-based remote backups, Basic auth injected by Traefik
   kopia-ui:
-    image: kopia/kopia:latest
+    image: kopia/kopia:0.23.0
     container_name: kopia-webui
     restart: unless-stopped
     logging: *logging
@@ -1201,7 +1201,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:latest #
+    image: ghcr.io/mealie-recipes/mealie:v3.19.2 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
