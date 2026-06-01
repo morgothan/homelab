@@ -58,22 +58,47 @@ def _tag_pattern(tag: str) -> Optional[re.Pattern]:
 
 # ── skopeo wrappers ────────────────────────────────────────────────────────────
 
-async def _skopeo_list_tags(image: str, sem: asyncio.Semaphore) -> list[str]:
-    """Return all tags for an image name; tries unauthenticated first, then with auth."""
+_TRANSIENT_MARKERS = ("500", "502", "503", "504", "timeout", "timed out",
+                      "deadline", "connection reset", "connection refused", "eof")
+
+
+def _is_transient(err: str) -> bool:
+    low = err.lower()
+    return any(m in low for m in _TRANSIENT_MARKERS)
+
+
+async def _skopeo_run(
+    args: list, sem: asyncio.Semaphore, retries: int = 2
+) -> tuple[Optional[bytes], str]:
+    """Run a skopeo command, retrying up to `retries` times on transient errors."""
     last_err = ""
-    for flags in (["--no-creds"], []):
+    for attempt in range(retries + 1):
         async with sem:
             proc = await asyncio.create_subprocess_exec(
-                "skopeo", "list-tags", *flags, f"docker://{image}",
+                *args,
                 stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
             )
             out, err = await proc.communicate()
         if proc.returncode == 0:
+            return out, ""
+        last_err = err.decode().strip()
+        if attempt < retries and _is_transient(last_err):
+            await asyncio.sleep(2 ** attempt)  # 1s, 2s
+        else:
+            break
+    return None, last_err
+
+
+async def _skopeo_list_tags(image: str, sem: asyncio.Semaphore) -> list[str]:
+    """Return all tags for an image; tries unauthenticated first, then with auth."""
+    last_err = ""
+    for flags in (["--no-creds"], []):
+        out, last_err = await _skopeo_run(["skopeo", "list-tags", *flags, f"docker://{image}"], sem)
+        if out is not None:
             try:
                 return json.loads(out).get("Tags") or []
             except json.JSONDecodeError:
                 return []
-        last_err = err.decode().strip()
     print(f"  [warn] skopeo list-tags {image}: {last_err}", file=sys.stderr)
     return []
 
@@ -82,18 +107,12 @@ async def _remote_digest(ref: str, sem: asyncio.Semaphore) -> Optional[str]:
     """Fetch remote manifest digest; tries unauthenticated first, then with auth."""
     last_err = ""
     for flags in (["--no-creds"], []):
-        async with sem:
-            proc = await asyncio.create_subprocess_exec(
-                "skopeo", "inspect", *flags, f"docker://{ref}",
-                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-            )
-            out, err = await proc.communicate()
-        if proc.returncode == 0:
+        out, last_err = await _skopeo_run(["skopeo", "inspect", *flags, f"docker://{ref}"], sem)
+        if out is not None:
             try:
                 return json.loads(out).get("Digest")
             except json.JSONDecodeError:
                 return None
-        last_err = err.decode().strip()
     print(f"  [warn] skopeo inspect {ref}: {last_err}", file=sys.stderr)
     return None
 
