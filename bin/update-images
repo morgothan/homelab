@@ -433,7 +433,10 @@ def main() -> None:
 
     # ── 3. rebuild local builds whose base images changed ─────────────────────
     for cf, svc, _ in build_stale:
-        _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc])
+        if cf == main_cf:
+            _run([str(REPO_ROOT / "dc.sh"), "build", "--pull", svc])
+        else:
+            _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc])
 
     # ── 4. redeploy ────────────────────────────────────────────────────────────
     # dc.sh handles OpenBao auto-start + secret injection for the main stack.
