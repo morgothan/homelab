@@ -32,7 +32,6 @@ SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 SITE_NAME        = os.getenv("SITE_NAME", "Homelab News")
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
-OLLAMA_NUM_GPU   = int(os.getenv("OLLAMA_NUM_GPU", "-1"))  # -1 = server decides
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
@@ -1611,12 +1610,6 @@ async def check_tautulli() -> dict:
 
 # ── LLM calls (Ollama) ────────────────────────────────────────────────────────
 
-def _ollama_opts(**kwargs) -> dict:
-    """Merge caller-supplied options with the global OLLAMA_NUM_GPU override."""
-    if OLLAMA_NUM_GPU >= 0:
-        kwargs["num_gpu"] = OLLAMA_NUM_GPU
-    return kwargs
-
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
     if not issues:
         return None
@@ -1642,7 +1635,7 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": _ollama_opts(num_ctx=4096, temperature=0.1, num_predict=500),
+                    "options": dict(num_ctx=4096, temperature=0.1, num_predict=500),
                 },
             )
             resp.raise_for_status()
@@ -1800,7 +1793,7 @@ async def generate_newspaper(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=2500),
+                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=2500),
                 },
             )
             resp.raise_for_status()
@@ -1928,7 +1921,7 @@ async def generate_periodic_summary(
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=3000),
+                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=3000),
                 },
             )
             resp.raise_for_status()
@@ -2006,7 +1999,7 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": _ollama_opts(num_ctx=4096, temperature=0.1, num_predict=1500),
+                    "options": dict(num_ctx=4096, temperature=0.1, num_predict=1500),
                 },
             )
             resp.raise_for_status()
@@ -2066,12 +2059,6 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         "iHD_drv_video.so (musl-compiled) references C23 glibc symbols not present in libgcompat.so.0. "
         "GPU: 8086:7D55 (Meteor Lake Arc). If any Plex update is listed, scan its changelog for "
         "Intel Arc, VA-API, musl, iHD, or C23 — and flag prominently if a fix is present.\n\n"
-        "KNOWN ISSUE — Ollama/llama.cpp ggml-vulkan backend produces garbled output for gemma4 models "
-        "on Intel Arc Xe-LPG (Meteor Lake) iGPU (upstream bugs: ollama#15248, ollama#15328). "
-        "Workaround active: OLLAMA_NUM_GPU=0 forces gemma4 to CPU. "
-        "If any Ollama update is listed, scan its changelog for: gemma4, Vulkan, Intel Arc, ggml-vulkan, "
-        "sliding window attention, or garbled output — and flag prominently if a fix is present so the "
-        "workaround can be removed.\n\n"
     )
     prompt = (
         "You are the software intelligence desk editor for a homelab newspaper.\n\n"
@@ -2098,7 +2085,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
                     "model": OLLAMA_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": _ollama_opts(num_ctx=8192, temperature=0.3, num_predict=2000),
+                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=2000),
                 },
             )
             resp.raise_for_status()
