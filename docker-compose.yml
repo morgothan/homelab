@@ -284,7 +284,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.0.1
+    image: grafana/grafana:13.0.2
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -428,44 +428,53 @@ services:
     restart: unless-stopped
     logging: *logging
 
-########## Tautulli
-# Plex media server analytics and playback history
-  tautulli:
-    image: ghcr.io/tautulli/tautulli
-    container_name: tautulli
+########## Jellystat
+# Jellyfin watch history and statistics (replaces Tautulli)
+  jellystat-db:
+    image: postgres:15
+    container_name: jellystat-db
     restart: unless-stopped
     logging: *logging
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8181/status || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 20s
-    volumes:
-      - ${DOCKERDIR}/tautulli:/config
     environment:
-      - PUID=1000
-      - PGID=1000
-      - TZ=America/New_York
-        #ports:
-        #- 8181:8181
+      - POSTGRES_USER=jellystat
+      - POSTGRES_PASSWORD=${JELLYSTAT_DB_PASSWORD}
+      - POSTGRES_DB=jellystat
+    volumes:
+      - ${DOCKERDIR}/jellystat/db:/var/lib/postgresql/data
+    networks:
+      - ${DOCKERNET}
+
+  jellystat:
+    image: cyfershepard/jellystat:latest
+    container_name: jellystat
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - jellystat-db
+    environment:
+      - POSTGRES_USER=jellystat
+      - POSTGRES_PASSWORD=${JELLYSTAT_DB_PASSWORD}
+      - POSTGRES_IP=jellystat-db
+      - POSTGRES_PORT=5432
+      - JWT_SECRET=${JELLYSTAT_JWT_SECRET}
+    volumes:
+      - ${DOCKERDIR}/jellystat/data:/app/backend/backup-data
     networks:
       - ${DOCKERNET}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.tautulli-http.entrypoints=https
-      - traefik.http.routers.tautulli-http.rule=Host(`tautulli.${DOMAIN}`)
-      - traefik.http.routers.tautulli-http.middlewares=chain-authelia-nowaf@file
-        #- traefik.http.routers.tautulli-http.middlewares=chain-oauth@file
-      - traefik.http.routers.tautulli-http.service=tautulli
-      - traefik.http.routers.tautulli-http.tls.certresolver=letsencrypt
-      - traefik.http.routers.tautulli-http.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.tautulli-http.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.tautulli.loadbalancer.server.port=8181
+      - traefik.http.routers.jellystat-http.entrypoints=https
+      - traefik.http.routers.jellystat-http.rule=Host(`jellystat.${DOMAIN}`)
+      - traefik.http.routers.jellystat-http.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.jellystat-http.service=jellystat
+      - traefik.http.routers.jellystat-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.jellystat-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.jellystat-http.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.jellystat.loadbalancer.server.port=3000
         #local access
-      - traefik.http.routers.tautulli-http-local.entrypoints=http
-      - traefik.http.routers.tautulli-http-local.rule=Host(`tautulli.${LOCAL}`)
-      - traefik.http.routers.tautulli-http-local.service=tautulli
+      - traefik.http.routers.jellystat-http-local.entrypoints=http
+      - traefik.http.routers.jellystat-http-local.rule=Host(`jellystat.${LOCAL}`)
+      - traefik.http.routers.jellystat-http-local.service=jellystat
 
 ########## Authelia
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
