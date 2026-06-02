@@ -117,16 +117,30 @@ async def _remote_digest(ref: str, sem: asyncio.Semaphore) -> Optional[str]:
     return None
 
 
-def _local_digest(ref: str) -> Optional[str]:
-    """Return sha256 digest from local Docker image cache, or None."""
+def _local_digests(ref: str) -> set[str]:
+    """Return all sha256 digests from local Docker image cache, or empty set.
+
+    An image can accumulate multiple RepoDigests entries when Docker Hub
+    re-signs or re-pushes a manifest without changing the image content.
+    Comparing only index 0 causes false-positive stale detection.
+    """
     r = subprocess.run(
-        ["docker", "image", "inspect", ref, "--format", "{{index .RepoDigests 0}}"],
+        ["docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}"],
         capture_output=True, text=True,
     )
     if r.returncode != 0 or not r.stdout.strip():
-        return None
-    raw = r.stdout.strip()
-    return raw.split("@", 1)[1] if "@" in raw else (raw if raw.startswith("sha256:") else None)
+        return set()
+    try:
+        repo_digests = json.loads(r.stdout.strip())
+    except json.JSONDecodeError:
+        return set()
+    result = set()
+    for raw in repo_digests:
+        if "@" in raw:
+            result.add(raw.split("@", 1)[1])
+        elif raw.startswith("sha256:"):
+            result.add(raw)
+    return result
 
 
 # ── semver update check ────────────────────────────────────────────────────────
@@ -304,16 +318,16 @@ async def _check_all() -> dict:
 
     async def _chk_rolling(cf, svc, ref):
         remote = await _remote_digest(ref, sem)
-        local  = _local_digest(ref)
-        stale  = remote is not None and local is not None and remote != local
+        local  = _local_digests(ref)
+        stale  = remote is not None and bool(local) and remote not in local
         print(".", end="", flush=True)
         return cf, svc, ref, stale
 
     async def _chk_base(base):
         remote = await _remote_digest(base, sem)
-        local  = _local_digest(base)
+        local  = _local_digests(base)
         # If local is absent, assume stale so the rebuild pulls the latest base
-        changed = remote is not None and (local is None or remote != local)
+        changed = remote is not None and (not local or remote not in local)
         print(".", end="", flush=True)
         return base, changed
 
@@ -514,7 +528,11 @@ def main() -> None:
         _run(["docker", "compose", "-f", str(openbao_cf), "up", "-d"])
 
     # ── 5. prune ───────────────────────────────────────────────────────────────
-    _run(["docker", "system", "prune", "-fa"])
+    # -f only (no -a): removes dangling images but preserves tagged ones.
+    # Using -fa would remove build-base images (e.g. python:3.13-slim) that
+    # aren't referenced by running containers, causing false-positive stale
+    # detection on the next run.
+    _run(["docker", "system", "prune", "-f"])
 
     print("\nDone.")
 
