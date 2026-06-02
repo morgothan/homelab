@@ -435,6 +435,12 @@ services:
     container_name: jellystat-db
     restart: unless-stopped
     logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U jellystat"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     environment:
       - POSTGRES_USER=jellystat
       - POSTGRES_PASSWORD=${JELLYSTAT_DB_PASSWORD}
@@ -450,7 +456,8 @@ services:
     restart: unless-stopped
     logging: *logging
     depends_on:
-      - jellystat-db
+      jellystat-db:
+        condition: service_healthy
     environment:
       - POSTGRES_USER=jellystat
       - POSTGRES_PASSWORD=${JELLYSTAT_DB_PASSWORD}
