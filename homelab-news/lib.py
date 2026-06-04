@@ -1542,7 +1542,7 @@ async def check_beszel() -> dict:
     return out
 
 
-# ── Tautulli Plex activity ────────────────────────────────────────────────────
+# ── Jellyfin / Jellystat activity ────────────────────────────────────────────
 
 async def check_jellystat() -> dict:
     """Query Jellyfin for active streams and Jellystat for 7-day play statistics.
@@ -1774,7 +1774,7 @@ async def generate_newspaper(
         "    Public Safety    — security attacks, IP bans, scanner activity\n"
         "    Weather          — UPS/power events, system performance\n"
         "    City Archives    — backup and storage health\n"
-        "    Arts & Entertainment — Sonarr, Radarr, Tautulli, Jellyfin, media pipeline\n"
+        "    Arts & Entertainment — Sonarr, Radarr, Jellystat, Jellyfin, media pipeline\n"
         "    Public Works     — DNS, networking, Traefik configuration\n"
         "  Default to City Hall if unsure.\n"
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
