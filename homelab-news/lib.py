@@ -65,7 +65,6 @@ ADGUARD_URLS: list[tuple[str, str]] = [
     (os.getenv("ADGUARD_PRIMARY_URL", ""), "Primary DNS"),
     (os.getenv("ADGUARD_KIDS_URL",    ""), "Kids DNS"),
 ]
-PLEX_LXC_ID         = os.getenv("PLEX_LXC_ID",         "")
 HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "")
 HOMEASSISTANT_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
 BESZEL_SSH_HOST     = os.getenv("BESZEL_SSH_HOST",     "")
@@ -2051,16 +2050,9 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
     ctx_block = (
         f"HOMELAB CONTEXT:\n{ctx}\n\n" if ctx else ""
     )
-    plex_flag = (
-        "KNOWN ISSUE — Plex + Intel Arc HW transcoding is currently broken: Plex's bundled "
-        "iHD_drv_video.so (musl-compiled) references C23 glibc symbols not present in libgcompat.so.0. "
-        "GPU: 8086:7D55 (Meteor Lake Arc). If any Plex update is listed, scan its changelog for "
-        "Intel Arc, VA-API, musl, iHD, or C23 — and flag prominently if a fix is present.\n\n"
-    )
     prompt = (
         "You are the software intelligence desk editor for a homelab newspaper.\n\n"
         + ctx_block
-        + plex_flag
         + "Write 2–6 newspaper articles summarising the available software updates below.\n\n"
         "Rules:\n"
         "- Lead with security patches and kernel updates (most urgent).\n"
@@ -2069,7 +2061,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         "- Name specific packages and version numbers in blurbs.\n"
         "- Blurbs: 2 sentences, AP wire style, specific and factual.\n"
         "- Assign sections: 'City Hall' (app/container updates), 'Public Safety' (security/CVE),\n"
-        "  'Weather' (system/kernel), 'Arts & Entertainment' (Plex/media), 'Public Works' (DNS/network).\n"
+        "  'Weather' (system/kernel), 'Arts & Entertainment' (Jellyfin/media), 'Public Works' (DNS/network).\n"
         "- Output ONLY a valid JSON array. No markdown, no explanation.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
         f"SOFTWARE UPDATE STATUS:\n{situation}"
