@@ -13,7 +13,8 @@ import httpx
 from lib import (
     UPDATE_INTERVAL, UPDATES_FILE, HOMELAB_INTEL_FILE, NOTIFIED_UPDATES_FILE,
     REMOTE_HOSTS, SSH_KEY,
-    PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS, PLEX_LXC_ID,
+    PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
+    JELLYFIN_URL, JELLYFIN_KEY,
     HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, OLLAMA_URL,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
@@ -234,52 +235,39 @@ async def check_adguard_update(url: str, label: str) -> dict:
     }
 
 
-async def check_plex_update() -> dict:
-    """Check current Plex Media Server version vs latest available from plex.tv."""
-    label = "Plex Media Server"
+async def check_jellyfin_update() -> dict:
+    """Check current Jellyfin version via its API against latest GitHub release."""
+    label = "Jellyfin"
     ts = datetime.now(timezone.utc).isoformat()
 
-    ok, out = await _ssh_run(
-        PVE_SSH_HOST,
-        f"/usr/sbin/pct exec {PLEX_LXC_ID} -- "
-        "dpkg-query -W -f='${Version}' plexmediaserver 2>/dev/null",
-        timeout=20,
-    )
-    if not ok or not out.strip():
+    if not JELLYFIN_URL or not JELLYFIN_KEY:
         return {"label": label, "status": "error", "ts": ts,
-                "error": "could not read installed version", "updates": []}
-
-    current_version = out.strip()
+                "error": "JELLYFIN_URL or JELLYFIN_KEY not configured", "updates": []}
 
     try:
-        async with httpx.AsyncClient(timeout=15, follow_redirects=True) as client:
-            r = await client.get("https://plex.tv/pms/downloads/5.json")
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                f"{JELLYFIN_URL}/System/Info",
+                headers={"X-Emby-Token": JELLYFIN_KEY},
+            )
             r.raise_for_status()
-            latest = r.json().get("computer", {}).get("Linux", {}).get("version", "")
+            current_version = r.json().get("Version", "")
     except Exception as e:
-        log.warning("Plex: failed to fetch latest version: %s", e)
-        return {"label": label, "status": "done", "ts": ts,
-                "current_version": current_version, "updates": []}
+        log.warning("Jellyfin version check failed: %s", e)
+        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
 
-    if not latest:
-        return {"label": label, "status": "done", "ts": ts,
-                "current_version": current_version, "updates": []}
-
-    # Version format: "1.40.4.8679-424562606" — compare the numeric part before the dash
-    def _ver_tuple(v: str) -> tuple:
-        try:
-            return tuple(int(x) for x in v.split("-")[0].split("."))
-        except ValueError:
-            return (0,)
+    release = await fetch_github_release_notes("https://github.com/jellyfin/jellyfin")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
 
     updates = []
-    if _ver_tuple(latest) > _ver_tuple(current_version):
+    if new_version and new_version != current_version.lstrip("v"):
         updates.append({
-            "app":             "plexmediaserver",
+            "app":             "jellyfin",
             "current_version": current_version,
-            "new_version":     latest,
+            "new_version":     new_version,
         })
-    log.info("Plex: current=%s latest=%s updates=%d", current_version, latest, len(updates))
+    log.info("Jellyfin: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
     return {"label": label, "status": "done", "ts": ts,
             "current_version": current_version, "updates": updates}
 
@@ -532,7 +520,7 @@ async def run_homelab_checks() -> dict:
     all_results = await asyncio.gather(
         check_proxmox_apt(),
         *adguard_coros,
-        check_plex_update(),
+        check_jellyfin_update(),
         check_truenas_apps(),
         check_homeassistant_update(),
         check_truenas_update(),
@@ -547,7 +535,7 @@ async def run_homelab_checks() -> dict:
     keys = (
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
-        + ["plex", "truenas", "home_assistant", "truenas_system", "beszel", "ollama",
+        + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel", "ollama",
            "traefik_plugins"]
     )
     sources: dict = {}
