@@ -42,8 +42,10 @@ KOPIA_PASS       = os.getenv("KOPIA_PASS", "")
 BESZEL_URL       = os.getenv("BESZEL_URL", "")
 BESZEL_EMAIL     = os.getenv("BESZEL_EMAIL", "")
 BESZEL_PASS      = os.getenv("BESZEL_PASS", "")
-TAUTULLI_URL     = os.getenv("TAUTULLI_URL", "http://tautulli:8181")
-TAUTULLI_KEY     = os.getenv("TAUTULLI_KEY", "")
+JELLYSTAT_URL    = os.getenv("JELLYSTAT_URL", "http://jellystat:3000")
+JELLYSTAT_KEY    = os.getenv("JELLYSTAT_KEY", "")
+JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "http://plex.iot.hirschnet:8096")
+JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
 
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -1543,67 +1545,62 @@ async def check_beszel() -> dict:
 
 # ── Tautulli Plex activity ────────────────────────────────────────────────────
 
-async def check_tautulli() -> dict:
-    """Query Tautulli for current Plex stream activity and recent play statistics.
+async def check_jellystat() -> dict:
+    """Query Jellyfin for active streams and Jellystat for 7-day play statistics.
 
-    Returns {"alerts": [...], "info": [...]} — no alerts (Tautulli is informational);
+    Returns {"alerts": [...], "info": [...]} — no alerts (informational only);
     info carries current stream count and 7-day play trend for the LLM.
     """
     out: dict = {"alerts": [], "info": []}
 
-    if not TAUTULLI_KEY:
+    if not JELLYFIN_KEY and not JELLYSTAT_KEY:
         return out
-
-    base_params = {"apikey": TAUTULLI_KEY}
 
     try:
         async with httpx.AsyncClient(timeout=15) as client:
-            activity_r, plays_r = await asyncio.gather(
-                client.get(f"{TAUTULLI_URL}/api/v2",
-                           params={**base_params, "cmd": "get_activity"}),
-                client.get(f"{TAUTULLI_URL}/api/v2",
-                           params={**base_params, "cmd": "get_plays_by_date", "time_range": 7}),
-            )
-            activity_r.raise_for_status()
-            plays_r.raise_for_status()
+            coros = []
+            if JELLYFIN_KEY:
+                coros.append(client.get(f"{JELLYFIN_URL}/Sessions",
+                                        headers={"X-Emby-Token": JELLYFIN_KEY}))
+            if JELLYSTAT_KEY:
+                coros.append(client.get(f"{JELLYSTAT_URL}/stats/getViewsByLibraryType",
+                                        params={"days": 7},
+                                        headers={"x-api-token": JELLYSTAT_KEY}))
+            results = await asyncio.gather(*coros)
 
-        act = activity_r.json().get("response", {}).get("data", {})
-        streams      = int(act.get("stream_count", 0))
-        transcodes   = int(act.get("stream_count_transcode", 0))
-        direct_plays = int(act.get("stream_count_direct_play", 0))
+        idx = 0
+        if JELLYFIN_KEY:
+            sessions_r = results[idx]; idx += 1
+            sessions_r.raise_for_status()
+            active = [s for s in sessions_r.json() if s.get("NowPlayingItem")]
+            transcodes   = sum(1 for s in active if s.get("TranscodingInfo"))
+            direct_plays = len(active) - transcodes
+            if active:
+                parts = []
+                if direct_plays: parts.append(f"{direct_plays} direct")
+                if transcodes:   parts.append(f"{transcodes} transcode")
+                detail = f" ({', '.join(parts)})" if parts else ""
+                out["info"].append(
+                    f"Jellyfin: {len(active)} active stream{'s' if len(active) != 1 else ''}{detail}"
+                )
+            else:
+                out["info"].append("Jellyfin: no active streams")
 
-        plays_data = plays_r.json().get("response", {}).get("data", {})
-        series     = plays_data.get("series", [])
-        total_7d   = 0
-        by_type: dict[str, list] = {}
-        for s in series:
-            by_type[s["name"]] = s.get("data", [])
-            if s["name"] == "Total":
-                total_7d = sum(s.get("data", []))
-
-        if streams > 0:
-            stream_detail = []
-            if direct_plays:
-                stream_detail.append(f"{direct_plays} direct")
-            if transcodes:
-                stream_detail.append(f"{transcodes} transcode")
-            detail = f" ({', '.join(stream_detail)})" if stream_detail else ""
-            out["info"].append(f"Plex: {streams} active stream{'s' if streams != 1 else ''}{detail}")
-        else:
-            out["info"].append("Plex: no active streams")
-
-        type_strs = [
-            f"{n}: {sum(v)}" for n, v in by_type.items()
-            if n != "Total" and sum(v) > 0
-        ]
-        if total_7d > 0:
-            out["info"].append(
-                f"Plex (7d): {total_7d} plays"
-                + (f" ({', '.join(type_strs)})" if type_strs else "")
-            )
+        if JELLYSTAT_KEY:
+            stats_r = results[idx]
+            stats_r.raise_for_status()
+            views = stats_r.json()
+            total_7d = sum(v for v in views.values() if isinstance(v, (int, float)))
+            type_parts = [f"{k}: {v}" for k, v in views.items()
+                          if isinstance(v, (int, float)) and v > 0]
+            if total_7d > 0:
+                out["info"].append(
+                    f"Jellyfin (7d): {total_7d} plays"
+                    + (f" ({', '.join(type_parts)})" if type_parts else "")
+                )
 
     except Exception as e:
-        log.warning("check_tautulli failed: %s", e)
+        log.warning("check_jellystat failed: %s", e)
 
     return out
 
@@ -1655,7 +1652,7 @@ async def generate_newspaper(
     prometheus: Optional[dict] = None,
     kopia: Optional[dict] = None,
     beszel: Optional[dict] = None,
-    tautulli: Optional[dict] = None,
+    jellystat: Optional[dict] = None,
     asn_suggestions: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
@@ -1731,16 +1728,16 @@ async def generate_newspaper(
         if beszel_lines:
             lines.append("\n" + "\n".join(beszel_lines))
 
-    if tautulli:
-        tautulli_lines: list[str] = []
-        if tautulli.get("alerts"):
-            tautulli_lines.append("PLEX ALERTS:")
-            tautulli_lines.extend(f"  {a}" for a in tautulli["alerts"])
-        if tautulli.get("info"):
-            tautulli_lines.append("PLEX ACTIVITY:")
-            tautulli_lines.extend(f"  {i}" for i in tautulli["info"])
-        if tautulli_lines:
-            lines.append("\n" + "\n".join(tautulli_lines))
+    if jellystat:
+        jellystat_lines: list[str] = []
+        if jellystat.get("alerts"):
+            jellystat_lines.append("JELLYFIN ALERTS:")
+            jellystat_lines.extend(f"  {a}" for a in jellystat["alerts"])
+        if jellystat.get("info"):
+            jellystat_lines.append("JELLYFIN ACTIVITY:")
+            jellystat_lines.extend(f"  {i}" for i in jellystat["info"])
+        if jellystat_lines:
+            lines.append("\n" + "\n".join(jellystat_lines))
 
     situation = "\n".join(lines)
     context = _load_context()
@@ -2113,14 +2110,14 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     log.info("run_news_cycle: %s → %s", since.strftime("%Y-%m-%d %H:%M UTC"), target_file)
 
     (docker_issues, loki_issues, (bans, probes),
-     prometheus, kopia, beszel, tautulli) = await asyncio.gather(
+     prometheus, kopia, beszel, jellystat) = await asyncio.gather(
         check_docker_logs(since_ts=since_ts),
         check_loki(start=since),
         check_fail2ban_bans(),
         check_prometheus(),
         check_kopia(),
         check_beszel(),
-        check_tautulli(),
+        check_jellystat(),
     )
 
     asn_suggestions = _suggest_asn_blocks(bans)
@@ -2154,7 +2151,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         ),
         generate_newspaper(
             docker_issues, loki_issues, update_hosts, unhealthy_names,
-            bans, probes, prometheus, kopia, beszel, tautulli, asn_suggestions,
+            bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions,
         ),
     )
     log.info("run_news_cycle complete: %d articles, %d bans",

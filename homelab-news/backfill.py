@@ -72,7 +72,7 @@ async def process_day(d: date, dry_run: bool, no_llm: bool) -> dict:
                 docker_issues=[], loki_issues=real_issues,
                 update_hosts={}, unhealthy_names=[],
                 bans=[], probes=[],
-                prometheus=None, kopia=None, beszel=None, tautulli=None,
+                prometheus=None, kopia=None, beszel=None, jellystat=None,
             ),
         )
         newspaper = newspaper or []
