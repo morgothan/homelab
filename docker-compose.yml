@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:v3.7.1
+    image: traefik:v3.7.3
     container_name: traefik
     restart: always
     logging: *logging
@@ -194,7 +194,7 @@ services:
       - ${DOCKERDIR}/homepage/images:/app/public/images
       - ${DOCKERDIR}/homepage/icons:/app/public/icons
     environment:
-      - HOMEPAGE_ALLOWED_HOSTS=home.${DOMAIN},homepage.${DOMAIN}
+      - HOMEPAGE_ALLOWED_HOSTS=home.${DOMAIN},homepage.${DOMAIN},home.${LOCAL}
       - NODE_TLS_REJECT_UNAUTHORIZED=0
     restart: unless-stopped
     logging: *logging
@@ -391,7 +391,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.6.4
+    image: amir20/dozzle:v10.6.5
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -670,7 +670,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.84.0
+    image: oliver006/redis_exporter:v1.85.0
     container_name: redis-exporter
     depends_on:
       - redis
