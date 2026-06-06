@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:v3.7.3
+    image: traefik:v3.7.4
     container_name: traefik
     restart: always
     logging: *logging
