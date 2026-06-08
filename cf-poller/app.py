@@ -372,6 +372,9 @@ async def poll_firewall_events(state: dict, zone_id: str, zone_name: str) -> dic
             state = {**state, state_key: events[-1]["datetime"]}
             log.info("[%s] Pushed %d firewall events to Loki", zone_name, len(events))
         else:
+            # Advance cursor to now so inactive zones don't re-query the same window
+            # and don't trigger the "cursor too old" warning every poll cycle.
+            state = {**state, state_key: now.strftime("%Y-%m-%dT%H:%M:%SZ")}
             log.debug("[%s] No new firewall events since %s", zone_name, after)
 
     last_success_gauge.labels(task="firewall", zone=zone_name).set(
@@ -484,7 +487,7 @@ async def _firewall_loop(zone_id: str, zone_name: str) -> None:
                 await save_state_key(state_key, new_cursor)
                 cursor = new_cursor
         except Exception as e:
-            log.error("[%s] Firewall poll error: %s", zone_name, e)
+            log.error("[%s] Firewall poll error: %s: %s", zone_name, type(e).__name__, e)
             errors_counter.labels(task="firewall", zone=zone_name).inc()
         await asyncio.sleep(POLL_INTERVAL)
 
@@ -494,7 +497,7 @@ async def _analytics_loop(zone_id: str, zone_name: str) -> None:
         try:
             await poll_request_analytics({}, zone_id, zone_name)
         except Exception as e:
-            log.error("[%s] Analytics poll error: %s", zone_name, e)
+            log.error("[%s] Analytics poll error: %s: %s", zone_name, type(e).__name__, e)
             errors_counter.labels(task="requests", zone=zone_name).inc()
         await asyncio.sleep(POLL_INTERVAL)
 
