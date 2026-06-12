@@ -224,16 +224,18 @@ docker-compose.override.yml
 CLAUDE.md
 
 # Homelab docs (contain API keys in sync script)
-docs/
+docs/*
 !docs/superpowers/
+docs/superpowers/*
 !docs/superpowers/specs/
+docs/superpowers/specs/*
 !docs/superpowers/specs/*.md
 
 # WAF site-specific exclusions (contain hostnames)
 waf/LOCAL-EXCLUSIONS.conf
 
 # Implementation specs (contain hostnames, IPs, and email addresses)
-specs/
+/specs/
 
 # RainSoft intercept — captured device request logs (contain dealer PII)
 rainsoft/data/
