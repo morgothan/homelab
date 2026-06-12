@@ -230,6 +230,9 @@ docs/superpowers/*
 !docs/superpowers/specs/
 docs/superpowers/specs/*
 !docs/superpowers/specs/*.md
+!docs/superpowers/plans/
+docs/superpowers/plans/*
+!docs/superpowers/plans/*.md
 
 # WAF site-specific exclusions (contain hostnames)
 waf/LOCAL-EXCLUSIONS.conf
