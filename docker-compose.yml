@@ -9,7 +9,7 @@ services:
 ########## Cloudflare Tunnel
 # Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
-    image: cloudflare/cloudflared:2026.5.2
+    image: cloudflare/cloudflared:2026.6.0
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:v3.7.4
+    image: traefik:v3.7.5
     container_name: traefik
     restart: always
     logging: *logging
@@ -178,7 +178,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:v1.13.1
+    image: ghcr.io/gethomepage/homepage:v1.13.2
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -1367,6 +1367,7 @@ services:
       - OAUTH_ADMIN_ROLES=openwebui-admin
       - OAUTH_DEFAULT_ROLE=user
       - OLLAMA_BASE_URL=${OLLAMA_URL}
+      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
       - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET_KEY}
     labels:
       - traefik.enable=true
@@ -1419,6 +1420,51 @@ services:
       - GRAFANA_URL=http://grafana:3000
       - GF_SECURITY_ADMIN_USER=${GRAFANA_USERNAME}
       - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_PASSWORD}
+      - CF_CROWDSEC_RULE_IDS=e6b275c0af6c4674821f42b19c6775ac
+    labels:
+      - traefik.enable=false
+
+########## CrowdSec
+# IPS engine — watches Traefik/Authelia logs and pulls the community blocklist from the cloud
+  crowdsec:
+    image: ghcr.io/crowdsecurity/crowdsec:latest
+    container_name: crowdsec
+    restart: unless-stopped
+    logging: *logging
+    environment:
+      - TZ=America/New_York
+      - COLLECTIONS=crowdsecurity/traefik LePresidente/authelia crowdsecurity/linux
+    volumes:
+      - ${DOCKERDIR}/crowdsec/config:/etc/crowdsec
+      - ${DOCKERDIR}/crowdsec/crowdsec-db:/var/lib/crowdsec/data
+      - ${DOCKERDIR}/crowdsec/log:/var/log/crowdsec
+      - ${DOCKERDIR}/traefik/logs:/var/log/traefik:ro
+      - ${DOCKERDIR}/authelia/log:/var/log/authelia:ro
+      - /var/log/syslog:/var/log/syslog:ro
+      - /etc/localtime:/etc/localtime:ro
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=false
+
+########## CrowdSec Cloudflare Bouncer
+# Syncs CrowdSec decisions (community blocklist + local detections) to a Cloudflare IP List
+  crowdsec-cloudflare-bouncer:
+    image: ghcr.io/crowdsecurity/cloudflare-bouncer:latest
+    container_name: crowdsec-cloudflare-bouncer
+    restart: unless-stopped
+    logging: *logging
+    depends_on:
+      - crowdsec
+    volumes:
+      - ${DOCKERDIR}/crowdsec/cloudflare-bouncer.yaml.template:/etc/crowdsec/bouncers/crowdsec-cloudflare-bouncer.yaml:ro
+    environment:
+      - CROWDSEC_BOUNCER_KEY=${CROWDSEC_BOUNCER_KEY}
+      - CF_ACCOUNT_ID=${CF_ACCOUNT_ID}
+      - CF_ZONE_ID=${CF_ZONE_ID}
+      - CF_CROWDSEC_TOKEN=${CF_CROWDSEC_TOKEN}
+    networks:
+      - ${DOCKERNET}
     labels:
       - traefik.enable=false
 
