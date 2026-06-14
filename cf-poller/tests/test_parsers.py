@@ -11,6 +11,7 @@ os.environ.setdefault("CF_ZONE_ID", "test-zone")
 from app import (
     parse_firewall_events,
     build_loki_payload,
+    remap_crowdsec_source,
     bucket_status_code,
     parse_country_analytics,
     parse_cache_analytics,
@@ -127,6 +128,44 @@ def test_parse_firewall_events_returns_copy():
     # Original must be unchanged
     original = response["data"]["viewer"]["zones"][0]["firewallEventsAdaptive"]
     assert len(original) == 1
+
+
+# ── CrowdSec source remapping ──────────────────────────────────────────────────
+
+def test_remap_crowdsec_source_matches():
+    events = [{"ruleId": "abc123", "source": "firewallRules"}]
+    remap_crowdsec_source(events, frozenset(["abc123"]))
+    assert events[0]["source"] == "crowdsec"
+
+
+def test_remap_crowdsec_source_no_match():
+    events = [{"ruleId": "other-rule", "source": "firewallRules"}]
+    remap_crowdsec_source(events, frozenset(["abc123"]))
+    assert events[0]["source"] == "firewallRules"
+
+
+def test_remap_crowdsec_source_empty_rule_ids():
+    events = [{"ruleId": "abc123", "source": "firewallRules"}]
+    remap_crowdsec_source(events, frozenset())
+    assert events[0]["source"] == "firewallRules"
+
+
+def test_remap_crowdsec_source_only_matching_events_changed():
+    events = [
+        {"ruleId": "abc123", "source": "firewallRules"},
+        {"ruleId": "other",  "source": "waf"},
+    ]
+    remap_crowdsec_source(events, frozenset(["abc123"]))
+    assert events[0]["source"] == "crowdsec"
+    assert events[1]["source"] == "waf"
+
+
+def test_remap_crowdsec_source_loki_payload_reflects_change():
+    events = [{"ruleId": "abc123", "source": "firewallRules", "datetime": "2026-06-09T10:00:00Z"}]
+    remap_crowdsec_source(events, frozenset(["abc123"]))
+    payload = build_loki_payload(events, "example.com")
+    line = json.loads(payload["streams"][0]["values"][0][1])
+    assert line["source"] == "crowdsec"
 
 
 # ── Status code bucketing ──────────────────────────────────────────────────────
