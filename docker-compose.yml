@@ -1305,6 +1305,7 @@ services:
       - BESZEL_PASS=${BESZEL_PASS}
       - BESZEL_URL=${BESZEL_URL}
       - BESZEL_SSH_HOST=${BESZEL_SSH_HOST}
+      - SPARK_SSH_HOST=${SPARK_SSH_HOST}
       - JELLYSTAT_URL=http://jellystat:3000
       - JELLYSTAT_KEY=${JELLYSTAT_KEY}
       - JELLYFIN_URL=http://plex.iot.hirschnet:8096
