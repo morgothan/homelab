@@ -46,8 +46,8 @@
 
 | Path | Keys |
 |------|------|
-| `kv/docker/ollama` | `OLLAMA_API_KEY` |
-| `kv/docker/hermes` | `SIGNAL_HTTP_URL`, `SIGNAL_ACCOUNT`, `SIGNAL_ALLOWED_USERS`, `SIGNAL_HOME_CHANNEL` |
+| `kv/spark/ollama` | `OLLAMA_API_KEY` |
+| `kv/spark/hermes` | `SIGNAL_HTTP_URL`, `SIGNAL_ACCOUNT`, `SIGNAL_ALLOWED_USERS`, `SIGNAL_HOME_CHANNEL` |
 
 ---
 
@@ -121,13 +121,13 @@ openssl rand -hex 32
 
 Copy the output — this is `OLLAMA_API_KEY`. Keep it for Steps 2.2 and 2.4.
 
-- [ ] **Step 2.2: Create `kv/docker/ollama` secret in OpenBao**
+- [ ] **Step 2.2: Create `kv/spark/ollama` secret in OpenBao**
 
 Log in to `https://openbao.<DOMAIN>` → Secrets → `kv/docker/` → Create secret at path `ollama`.
 
 Add key: `OLLAMA_API_KEY` = `<value from Step 2.1>`
 
-- [ ] **Step 2.3: Create `kv/docker/hermes` secret in OpenBao**
+- [ ] **Step 2.3: Create `kv/spark/hermes` secret in OpenBao**
 
 Create secret at path `hermes`. Add these keys (fill in your actual values):
 
@@ -151,7 +151,7 @@ BAO_ADDR=http://localhost:8200
 curl -sf -X PUT \
   -H "X-Vault-Token: ${BAO_TOKEN}" \
   -H "Content-Type: application/json" \
-  -d '{"policy":"path \"kv/data/docker/ollama\" { capabilities = [\"read\"] }\npath \"kv/data/docker/hermes\" { capabilities = [\"read\"] }\npath \"kv/metadata/docker\" { capabilities = [\"list\"] }\npath \"kv/metadata/docker/*\" { capabilities = [\"list\"] }"}' \
+  -d '{"policy":"path \"kv/data/spark/ollama\" { capabilities = [\"read\"] }\npath \"kv/data/spark/hermes\" { capabilities = [\"read\"] }\npath \"kv/metadata/spark\" { capabilities = [\"list\"] }\npath \"kv/metadata/spark/*\" { capabilities = [\"list\"] }"}' \
   "${BAO_ADDR}/v1/sys/policies/acl/spark-policy"
 
 # Create AppRole for spark
@@ -186,7 +186,7 @@ SPARK_TOKEN=$(curl -sf -X POST \
 # Read the ollama secret
 curl -sf \
   -H "X-Vault-Token: ${SPARK_TOKEN}" \
-  "${BAO_ADDR}/v1/kv/data/docker/ollama" | jq '.data.data'
+  "${BAO_ADDR}/v1/kv/data/spark/ollama" | jq '.data.data'
 ```
 
 Expected: JSON with `OLLAMA_API_KEY`.
@@ -219,7 +219,7 @@ cat > /home/nat/docker/.env.openbao << 'EOF'
 BAO_ADDR=http://openbao.hirschnet
 BAO_ROLE_ID=<role_id from Task 2>
 BAO_SECRET_ID=<secret_id from Task 2>
-BAO_KV_PREFIX=docker
+BAO_KV_PREFIX=spark
 EOF
 chmod 600 /home/nat/docker/.env.openbao
 ```
@@ -308,7 +308,7 @@ OLLAMA_API_KEY=$(grep -oP 'OLLAMA_API_KEY=\K.*' /home/nat/docker/.env.openbao 2>
     -d "{\"role_id\":\"${BAO_ROLE_ID}\",\"secret_id\":\"${BAO_SECRET_ID}\"}" \
     "${BAO_ADDR}/v1/auth/approle/login" | jq -r '.auth.client_token') && \
   curl -sf -H "X-Vault-Token: ${TOKEN}" \
-    "${BAO_ADDR}/v1/kv/data/docker/ollama" | jq -r '.data.data.OLLAMA_API_KEY')
+    "${BAO_ADDR}/v1/kv/data/spark/ollama" | jq -r '.data.data.OLLAMA_API_KEY')
 
 curl -sf -H "Authorization: Bearer ${OLLAMA_API_KEY}" http://localhost:11434/api/tags | jq .
 ```
