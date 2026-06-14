@@ -166,6 +166,9 @@ dozzle/
 # CrowdSec database
 crowdsec/crowdsec-db/
 
+# Open WebUI runtime data (SQLite DB, uploads, cache, vector store)
+openwebui/
+
 # Outline runtime data
 outline/
 

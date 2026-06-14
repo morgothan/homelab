@@ -401,32 +401,8 @@ async def check_beszel_update() -> dict:
 
 
 async def check_ollama_update() -> dict:
-    """Check Ollama version via its local API against latest GitHub release."""
-    label = "Ollama"
-    ts = datetime.now(timezone.utc).isoformat()
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get(f"{OLLAMA_URL}/api/version")
-            r.raise_for_status()
-            current_version = r.json().get("version", "")
-    except Exception as e:
-        log.warning("Ollama version check failed: %s", e)
-        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
-
-    release = await fetch_github_release_notes("https://github.com/ollama/ollama")
-    latest_tag = release[0] if release else None
-    new_version = (latest_tag or "").lstrip("v")
-
-    updates = []
-    if new_version and new_version != current_version.lstrip("v"):
-        updates.append({
-            "app":             "ollama",
-            "current_version": current_version,
-            "new_version":     new_version,
-        })
-    log.info("Ollama: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
-    return {"label": label, "status": "done", "ts": ts,
-            "current_version": current_version, "updates": updates}
+    # Inference backend is now vLLM — Ollama update check no longer applicable.
+    return {"label": "Ollama", "status": "skipped", "ts": datetime.now(timezone.utc).isoformat(), "updates": []}
 
 
 _TRAEFIK_YML_PATH = "/traefik/traefik.yml"
