@@ -2154,16 +2154,13 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     updates_raw  = load_json(UPDATES_FILE) or {}
     update_hosts = updates_raw.get("hosts", {})
 
-    # Phase 2: LLM calls — run analysis and newspaper in parallel.
-    (docker_analysis, loki_analysis), newspaper = await asyncio.gather(
-        asyncio.gather(
-            llm_analysis(docker_issues, "Docker container"),
-            llm_analysis(loki_issues,   "network/syslog (from Loki)"),
-        ),
-        generate_newspaper(
-            docker_issues, loki_issues, update_hosts, unhealthy_names,
-            bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions,
-        ),
+    # Phase 2: LLM calls — run sequentially to avoid concurrent KV-cache spikes on vLLM.
+    # (vLLM batches concurrent requests together; 3 simultaneous prefills exhaust memory.)
+    docker_analysis = await llm_analysis(docker_issues, "Docker container")
+    loki_analysis   = await llm_analysis(loki_issues,   "network/syslog (from Loki)")
+    newspaper = await generate_newspaper(
+        docker_issues, loki_issues, update_hosts, unhealthy_names,
+        bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions,
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
