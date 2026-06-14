@@ -32,6 +32,9 @@ SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 SITE_NAME        = os.getenv("SITE_NAME", "Homelab News")
 OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
 OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
+OLLAMA_API_KEY   = os.getenv("OLLAMA_API_KEY", "")
+VLLM_URL         = os.getenv("VLLM_URL", "")
+VLLM_MODEL       = os.getenv("VLLM_MODEL", "")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
 SSH_KEY          = os.getenv("SSH_KEY", "/root/.ssh/id_ed25519")
 PROMETHEUS_URL   = os.getenv("PROMETHEUS_URL", "http://prometheus:9090")
@@ -50,6 +53,11 @@ JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
 # Ollama request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "3600"))
+_OLLAMA_HEADERS: dict = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
+
+# Active LLM backend: prefer vLLM if configured, fall back to Ollama
+_LLM_URL   = VLLM_URL   or OLLAMA_URL
+_LLM_MODEL = VLLM_MODEL or OLLAMA_MODEL
 
 DATA_DIR     = os.getenv("DATA_DIR", "/data")
 TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
@@ -1624,20 +1632,22 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         f"ENTRIES ({context}):\n{entries}"
     )
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
+                f"{_LLM_URL}/v1/chat/completions",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": _LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": dict(num_ctx=4096, temperature=0.1, num_predict=500),
+                    "max_tokens": 500,
+                    "temperature": 0.1,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+            return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
-        log.warning("Ollama analysis failed (%s): %s", type(e).__name__, e)
+        log.warning("LLM analysis failed (%s): %s", type(e).__name__, e)
         return None
 
 
@@ -1782,18 +1792,20 @@ async def generate_newspaper(
         f"CURRENT HOMELAB STATUS:\n{situation}"
     )
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
+                f"{_LLM_URL}/v1/chat/completions",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": _LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=2500),
+                    "max_tokens": 2500,
+                    "temperature": 0.3,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
-            content = resp.json()["message"]["content"].strip()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
             articles = _parse_llm_json(content)
             if articles:
                 valid = _validate_articles(articles)
@@ -1910,18 +1922,20 @@ async def generate_periodic_summary(
         f"SOURCE DATA ({period_label}):\n{body}"
     )
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
+                f"{_LLM_URL}/v1/chat/completions",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": _LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=3000),
+                    "max_tokens": 3000,
+                    "temperature": 0.3,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
-            content = resp.json()["message"]["content"].strip()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
             articles = _parse_llm_json(content)
             if articles:
                 valid = _validate_articles(articles, max_count=10)
@@ -1988,18 +2002,20 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         "Output only the 1-2 sentence summary. No headers, no bullet points, no preamble."
     )
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
+                f"{_LLM_URL}/v1/chat/completions",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": _LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": dict(num_ctx=4096, temperature=0.1, num_predict=1500),
+                    "max_tokens": 1500,
+                    "temperature": 0.1,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
-            return resp.json()["message"]["content"].strip()
+            return resp.json()["choices"][0]["message"]["content"].strip()
     except Exception as e:
         log.warning("Changelog LLM failed for %s: %s", container, e)
         return None
@@ -2067,18 +2083,20 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         f"SOFTWARE UPDATE STATUS:\n{situation}"
     )
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
-                f"{OLLAMA_URL}/api/chat",
+                f"{_LLM_URL}/v1/chat/completions",
                 json={
-                    "model": OLLAMA_MODEL,
+                    "model": _LLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
                     "stream": False,
-                    "options": dict(num_ctx=8192, temperature=0.3, num_predict=2000),
+                    "max_tokens": 2000,
+                    "temperature": 0.3,
+                    "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             resp.raise_for_status()
-            content = resp.json()["message"]["content"].strip()
+            content = resp.json()["choices"][0]["message"]["content"].strip()
             articles = _parse_llm_json(content)
             if articles:
                 valid = _validate_articles(articles, max_count=10)

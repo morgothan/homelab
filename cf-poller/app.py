@@ -42,6 +42,10 @@ DATA_DIR           = Path(os.getenv("DATA_DIR", "/data"))
 POLL_INTERVAL      = int(os.getenv("POLL_INTERVAL", "300"))
 CF_GRAPHQL_URL     = "https://api.cloudflare.com/client/v4/graphql"
 CF_REST_URL        = "https://api.cloudflare.com/client/v4"
+# Comma-separated Cloudflare WAF rule IDs created by the CrowdSec bouncer.
+# Events matching these IDs have their source relabeled to "crowdsec" so they
+# appear as a distinct source in Grafana rather than blending into firewallRules.
+CF_CROWDSEC_RULE_IDS = frozenset(filter(None, os.getenv("CF_CROWDSEC_RULE_IDS", "").split(",")))
 TOP_N_COUNTRIES    = 10
 
 # ── Zone discovery ─────────────────────────────────────────────────────────────
@@ -125,6 +129,15 @@ def parse_firewall_events(data: dict) -> list[dict]:
         return list(result) if isinstance(result, list) else []
     except (KeyError, IndexError, TypeError):
         return []
+
+
+def remap_crowdsec_source(events: list[dict], rule_ids: frozenset) -> None:
+    """Relabel source to 'crowdsec' for events matching known CrowdSec WAF rule IDs."""
+    if not rule_ids:
+        return
+    for ev in events:
+        if ev.get("ruleId") in rule_ids:
+            ev["source"] = "crowdsec"
 
 
 def build_loki_payload(events: list[dict], zone_name: str) -> dict:
@@ -351,6 +364,7 @@ async def poll_firewall_events(state: dict, zone_id: str, zone_name: str) -> dic
             client, _FIREWALL_QUERY, {"zoneTag": zone_id, "after": after}
         )
         events = parse_firewall_events(data)
+        remap_crowdsec_source(events, CF_CROWDSEC_RULE_IDS)
 
         if events:
             payload = build_loki_payload(events, zone_name)
