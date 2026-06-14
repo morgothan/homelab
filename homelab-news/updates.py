@@ -15,7 +15,8 @@ from lib import (
     REMOTE_HOSTS, SSH_KEY,
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
     JELLYFIN_URL, JELLYFIN_KEY,
-    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, OLLAMA_URL,
+    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST,
+    OLLAMA_URL, OLLAMA_API_KEY,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
@@ -401,8 +402,60 @@ async def check_beszel_update() -> dict:
 
 
 async def check_ollama_update() -> dict:
-    # Inference backend is now vLLM — Ollama update check no longer applicable.
-    return {"label": "Ollama", "status": "skipped", "ts": datetime.now(timezone.utc).isoformat(), "updates": []}
+    """Check Ollama version on spark via its API against latest GitHub release."""
+    label = "Ollama"
+    ts = datetime.now(timezone.utc).isoformat()
+    if not OLLAMA_URL:
+        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
+    headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
+    try:
+        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
+            r = await client.get(f"{OLLAMA_URL}/api/version")
+            r.raise_for_status()
+            current_version = r.json().get("version", "")
+    except Exception as e:
+        log.warning("Ollama version check failed: %s", e)
+        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
+    release = await fetch_github_release_notes("https://github.com/ollama/ollama")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
+    updates = []
+    if new_version and new_version != current_version.lstrip("v"):
+        updates.append({
+            "app": "ollama",
+            "current_version": current_version,
+            "new_version": new_version,
+            "_github_url": "https://github.com/ollama/ollama",
+        })
+    log.info("Ollama: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
+    return {"label": label, "status": "done", "ts": ts,
+            "current_version": current_version, "updates": updates}
+
+
+async def check_spark_apt() -> dict:
+    """Check DGX Spark for available apt upgrades (NVIDIA drivers, CUDA, system packages)."""
+    label = "DGX Spark"
+    ts = datetime.now(timezone.utc).isoformat()
+    if not SPARK_SSH_HOST:
+        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
+    ok, out = await _ssh_run(
+        SPARK_SSH_HOST,
+        "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
+        timeout=120,
+    )
+    if not ok:
+        return {"label": label, "status": "error", "ts": ts, "error": out, "updates": []}
+    updates = []
+    for line in out.splitlines():
+        m = re.match(r'^([\w.+\-]+)/\S+\s+(\S+)\s+\S+\s+\[upgradable from: (\S+)\]', line)
+        if m:
+            updates.append({
+                "package": m.group(1),
+                "current_version": m.group(3),
+                "new_version": m.group(2),
+            })
+    log.info("DGX Spark apt: %d upgradable packages", len(updates))
+    return {"label": label, "status": "done", "ts": ts, "updates": updates}
 
 
 _TRAEFIK_YML_PATH = "/traefik/traefik.yml"
@@ -501,6 +554,7 @@ async def run_homelab_checks() -> dict:
         check_truenas_update(),
         check_beszel_update(),
         check_ollama_update(),
+        check_spark_apt(),
         check_traefik_plugins(),
         return_exceptions=True,
     )
@@ -511,7 +565,7 @@ async def run_homelab_checks() -> dict:
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
         + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel", "ollama",
-           "traefik_plugins"]
+           "dgx_spark", "traefik_plugins"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
