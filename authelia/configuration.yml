@@ -86,6 +86,21 @@ access_control:
         - '^/signalr/'
       policy: bypass
 
+    # ttyd and hermes are privileged services — restrict to nat only
+    - domain: 'ttyd.{{ env "DOMAIN" }}'
+      subject: "user:nat"
+      policy: two_factor
+
+    - domain: 'ttyd.{{ env "DOMAIN" }}'
+      policy: deny
+
+    - domain: 'hermes.{{ env "DOMAIN" }}'
+      subject: "user:nat"
+      policy: two_factor
+
+    - domain: 'hermes.{{ env "DOMAIN" }}'
+      policy: deny
+
     - domain:
         - "*.{{ env "DOMAIN" }}"
         - "{{ env "DOMAIN" }}"
