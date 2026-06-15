@@ -16,7 +16,6 @@ from lib import (
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
     JELLYFIN_URL, JELLYFIN_KEY,
     HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST,
-    OLLAMA_URL, OLLAMA_API_KEY,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
@@ -401,37 +400,6 @@ async def check_beszel_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
-async def check_ollama_update() -> dict:
-    """Check Ollama version on spark via its API against latest GitHub release."""
-    label = "Ollama"
-    ts = datetime.now(timezone.utc).isoformat()
-    if not OLLAMA_URL:
-        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
-    headers = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
-    try:
-        async with httpx.AsyncClient(timeout=10, headers=headers) as client:
-            r = await client.get(f"{OLLAMA_URL}/api/version")
-            r.raise_for_status()
-            current_version = r.json().get("version", "")
-    except Exception as e:
-        log.warning("Ollama version check failed: %s", e)
-        return {"label": label, "status": "error", "ts": ts, "error": str(e)[:100], "updates": []}
-    release = await fetch_github_release_notes("https://github.com/ollama/ollama")
-    latest_tag = release[0] if release else None
-    new_version = (latest_tag or "").lstrip("v")
-    updates = []
-    if new_version and new_version != current_version.lstrip("v"):
-        updates.append({
-            "app": "ollama",
-            "current_version": current_version,
-            "new_version": new_version,
-            "_github_url": "https://github.com/ollama/ollama",
-        })
-    log.info("Ollama: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
-    return {"label": label, "status": "done", "ts": ts,
-            "current_version": current_version, "updates": updates}
-
-
 async def check_spark_apt() -> dict:
     """Check DGX Spark for available apt upgrades (NVIDIA drivers, CUDA, system packages)."""
     label = "DGX Spark"
@@ -553,7 +521,6 @@ async def run_homelab_checks() -> dict:
         check_homeassistant_update(),
         check_truenas_update(),
         check_beszel_update(),
-        check_ollama_update(),
         check_spark_apt(),
         check_traefik_plugins(),
         return_exceptions=True,
@@ -564,7 +531,7 @@ async def run_homelab_checks() -> dict:
     keys = (
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
-        + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel", "ollama",
+        + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel",
            "dgx_spark", "traefik_plugins"]
     )
     sources: dict = {}
@@ -585,6 +552,8 @@ async def run() -> None:
     log.info("Starting update check (Docker + homelab)")
     sem = asyncio.Semaphore(5)
     host_specs = [("local", "local")] + list(REMOTE_HOSTS)
+    if SPARK_SSH_HOST:
+        host_specs.append(("spark", f"ssh://{SPARK_SSH_HOST}"))
 
     # Docker image checks and homelab checks run concurrently
     docker_coros = [_check_host(label, url, sem) for label, url in host_specs]
