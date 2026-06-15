@@ -118,7 +118,9 @@ CONTEXT_FILE   = os.path.join(DATA_DIR, "context.md")
 IP_INTEL_FILE  = os.path.join(DATA_DIR, "ip_intel.json")
 IP_INTEL_TTL   = 7 * 86400  # re-query after 7 days
 ABUSEIPDB_KEY  = os.getenv("ABUSEIPDB_KEY", "")
-CROWDSEC_KEY   = os.getenv("CROWDSEC_KEY", "")
+CROWDSEC_KEY      = os.getenv("CROWDSEC_KEY", "")
+CROWDSEC_LAPI_URL = os.getenv("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
+CROWDSEC_LAPI_KEY = os.getenv("CROWDSEC_LAPI_KEY", "")
 GOTIFY_URL     = os.getenv("GOTIFY_URL", "")
 GOTIFY_TOKEN   = os.getenv("GOTIFY_TOKEN", "")
 
@@ -155,14 +157,15 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
     cache: dict[str, dict] = load_json(IP_INTEL_FILE) or {}
     now   = time.time()
     stale = [ip for ip in ips if ip not in cache or now - cache[ip].get("_ts", 0) > IP_INTEL_TTL]
+    _stale_set = set(stale)  # O(1) lookups — stale can be 30k+ items, list membership is O(n²)
     # IPs cached without supplemental data that now have a key available
     needs_abuse = [
         ip for ip in ips
-        if ip not in stale and ABUSEIPDB_KEY and "abuse_score" not in cache.get(ip, {})
+        if ip not in _stale_set and ABUSEIPDB_KEY and "abuse_score" not in cache.get(ip, {})
     ]
     needs_cs = [
         ip for ip in ips
-        if ip not in stale and CROWDSEC_KEY and "crowdsec_score" not in cache.get(ip, {})
+        if ip not in _stale_set and CROWDSEC_KEY and "crowdsec_score" not in cache.get(ip, {})
     ]
 
     dirty = False
@@ -751,6 +754,62 @@ async def check_loki(
     all_issues = _group_by_ip(all_issues)
     return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:500]
 
+# ── CrowdSec LAPI ────────────────────────────────────────────────────────────
+
+_CS_SCENARIO_MAP = {
+    "http-wordpress-scan":          "WordPress scan",
+    "http-admin-interface-probing": "admin probe",
+    "http-probing":                 "http probing",
+    "http-bad-user-agent":          "bad user agent",
+    "http-backdoors-attempts":      "backdoor attempt",
+    "http-technology-probing":      "technology probe",
+    "http-crawl-non_statics":       "crawler",
+    "http-sensitive-files":         "config file sweep",
+    "http-path-traversal-probing":  "path traversal",
+    "ssh-bf":                       "SSH brute force",
+    "ssh-slow-bf":                  "SSH brute force",
+}
+
+
+def _cs_scenario_to_category(scenario: str) -> str:
+    name = scenario.split("/", 1)[-1]
+    return _CS_SCENARIO_MAP.get(name, name.replace("-", " "))
+
+
+def _parse_cs_duration(s: str) -> Optional[float]:
+    """Parse CrowdSec duration string like '3h59m59.7s' into seconds. Negative = expired."""
+    import re as _re
+    m = _re.match(r'^(-?)(?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?$', s.strip())
+    if not m:
+        return None
+    sign = -1 if m.group(1) == '-' else 1
+    h  = int(m.group(2) or 0)
+    mi = int(m.group(3) or 0)
+    sc = float(m.group(4) or 0)
+    return sign * (h * 3600 + mi * 60 + sc)
+
+
+async def fetch_crowdsec_decisions() -> list[dict]:
+    """Fetch active CrowdSec ban decisions from the local LAPI."""
+    if not CROWDSEC_LAPI_KEY:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            resp = await client.get(
+                f"{CROWDSEC_LAPI_URL}/v1/decisions",
+                params={"type": "ban"},
+                headers={"X-Api-Key": CROWDSEC_LAPI_KEY},
+            )
+            if resp.status_code == 204:
+                return []
+            if resp.status_code == 200:
+                return resp.json() or []
+            log.warning("CrowdSec LAPI returned %d", resp.status_code)
+    except Exception as e:
+        log.warning("CrowdSec LAPI fetch failed: %s", e)
+    return []
+
+
 # ── fail2ban ban tracking ─────────────────────────────────────────────────────
 
 def _is_allowlisted(ip_str: str) -> bool:
@@ -950,18 +1009,54 @@ def _security_prompt_block(
     return "\n".join(parts)
 
 
+def _merge_crowdsec(bans: list[dict], cs_decisions: list[dict]) -> list[dict]:
+    """Append CrowdSec ban decisions that aren't already tracked by cf-fail2ban."""
+    if not cs_decisions:
+        return bans
+    existing_ips = {b["ip"] for b in bans}
+    now = datetime.now(timezone.utc)
+    for d in cs_decisions:
+        ip = d.get("value", "")
+        if not ip or d.get("scope", "").lower() != "ip" or ip in existing_ips:
+            continue
+        remaining = _parse_cs_duration(d.get("duration", ""))
+        if remaining is None or remaining <= 0:
+            continue
+        expires_dt  = now + timedelta(seconds=remaining)
+        # CrowdSec ban duration is 4h by default; best estimate of start = now - (4h - remaining)
+        duration_total = 4 * 3600
+        banned_dt   = now - timedelta(seconds=max(0, duration_total - remaining))
+        bans.append({
+            "ip":           ip,
+            "banned_since": banned_dt.strftime("%Y-%m-%d %H:%M UTC"),
+            "expires_at":   expires_dt.strftime("%Y-%m-%d %H:%M UTC"),
+            "blocked_for":  _fmt_duration((now - banned_dt).total_seconds()),
+            "expires_in":   _fmt_duration(remaining),
+            "hit_count":    0,
+            "paths":        [],
+            "category":     _cs_scenario_to_category(d.get("scenario", "")),
+            "offense_count": 1,
+            "source":       "crowdsec",
+        })
+        existing_ips.add(ip)
+    return bans
+
+
 async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
     """Return (active_bans, active_probes).
 
-    active_bans: IPs in cf-fail2ban state file (Cloudflare-blocked), enriched
-      with hit counts and paths from the Traefik access log.
+    active_bans: IPs blocked by cf-fail2ban (Cloudflare IP Access Rules) and/or
+      CrowdSec (Cloudflare IP List via bouncer), enriched with hit counts and paths
+      from the Traefik access log where available.
     active_probes: IPs generating scanner 403s in the last 2h but not yet banned.
 
     Primary source: cf-fail2ban state file (authoritative, matches Cloudflare blocks).
     Fallback: reconstruct from Traefik access log (403+429 sliding window).
+    CrowdSec decisions are merged from the local LAPI in both paths.
     """
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(hours=BANTIME_HOURS + 2)
+    cs_decisions = await fetch_crowdsec_decisions()
 
     # Load access log tail for path/hit-count enrichment (used by both paths)
     access_hits: dict[str, list[tuple[datetime, str]]] = {}
@@ -1040,6 +1135,7 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
                 result,
                 key=lambda x: ("0" if x["expires_at"] == "permanent" else "1" + x["expires_at"]),
             )
+            bans = _merge_crowdsec(bans, cs_decisions)
             banned_ips = {b["ip"] for b in bans}
             probes = _build_probes(access_hits, banned_ips, now)
             return bans, probes
@@ -1084,6 +1180,7 @@ async def check_fail2ban_bans() -> tuple[list[dict], list[dict]]:
         a = ipaddress.ip_address(ip)
         return (a.version, int(a))
     bans = sorted(result, key=lambda x: (-x["hit_count"],) + _ip_key(x["ip"]))
+    bans = _merge_crowdsec(bans, cs_decisions)
     banned_ips = {b["ip"] for b in bans}
     probes = _build_probes(access_hits, banned_ips, now)
     return bans, probes
@@ -2568,10 +2665,28 @@ body {
 .np-blotter-intel .abuse-hi { color: #e05c5c; font-weight: bold; }
 .np-blotter-intel .abuse-med { color: var(--gold2); }
 .np-blotter-intel .badge-threat { background: #7a1a1a; color: #ffcccc; border-radius: 3px; padding: 1px 5px; font-size: 0.68rem; font-weight: bold; letter-spacing: 0.04em; }
-.np-blotter-intel .badge-cs { background: #1a3a5c; color: #aad4ff; border-radius: 3px; padding: 1px 5px; font-size: 0.68rem; }
+.badge-cs { background: #1a3a5c; color: #aad4ff; border-radius: 3px; padding: 1px 5px; font-size: 0.68rem; }
 .np-blotter-count { font-size: 0.7em; color: var(--muted); }
 .np-blotter-empty { padding: 10px 0; }
 .np-blotter-page { border-top: 3px double var(--bdr); padding: 14px 0 0; margin-top: 24px; }
+.np-blotter-section-head {
+  font-size: 0.58rem; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--muted); font-family: "Courier New", monospace;
+  border-bottom: 1px solid var(--dim); padding-bottom: 6px; margin: 16px 0 8px;
+}
+.np-blotter-scroll {
+  max-height: 380px; overflow-y: auto;
+  border: 1px solid var(--bdr); border-radius: 3px;
+  padding: 0 10px; margin-bottom: 10px;
+  scrollbar-width: thin; scrollbar-color: var(--gold2) var(--bg);
+}
+.np-blotter-scroll::-webkit-scrollbar { width: 4px; }
+.np-blotter-scroll::-webkit-scrollbar-track { background: var(--bg); }
+.np-blotter-scroll::-webkit-scrollbar-thumb { background: var(--gold2); border-radius: 2px; }
+.np-blotter-scroll::-webkit-scrollbar-thumb:hover { background: var(--gold); }
+.np-blotter-scroll .np-blotter-item:last-child { border-bottom: none; }
+.np-blotter-sentinel { height: 1px; }
+.np-blotter-loading { padding: 10px 0; color: var(--muted); font-size: 0.78rem; font-family: "Courier New", monospace; }
 .np-blotter-page-head {
   font-size: 0.62rem; letter-spacing: 0.26em; text-transform: uppercase;
   color: var(--gold2); font-family: "Courier New", monospace;
@@ -2801,7 +2916,7 @@ def log_card(title: str, meta: str, issues: list[dict], analysis: Optional[str])
 
 def render_bans_card(bans: list[dict]) -> str:
     n = len(bans)
-    meta = f'{n} active ban{"s" if n != 1 else ""} &nbsp;&middot;&nbsp; 24h bantime'
+    meta = f'{n} active ban{"s" if n != 1 else ""} &nbsp;&middot;&nbsp; cf-fail2ban 24h &middot; CrowdSec 4h'
     if not bans:
         return (
             '<div class="card full"><div class="card-head">'
@@ -2992,48 +3107,174 @@ def _intel_line(info: dict) -> str:
     return '<div class="np-blotter-intel">' + body + "</div>"
 
 
+def _render_ban_row(b: dict, intel: dict) -> str:
+    paths_html = ""
+    if b.get("paths"):
+        paths_html = (
+            '<div class="np-blotter-paths">'
+            + ' &middot; '.join(_h(p) for p in b["paths"][:5])
+            + '</div>'
+        )
+    intel_html = _intel_line(intel.get(b["ip"], {}))
+    offense = b.get("offense_count", 1)
+    offense_html = ""
+    if offense >= 2:
+        tier_cls = "abuse-hi" if offense >= 5 else ("abuse-med" if offense >= 3 else "")
+        suffixes = ["st", "nd", "rd"]
+        suffix = suffixes[offense - 1] if offense <= 3 else "th"
+        label = f"&#x26a0; {offense}{suffix} offense"
+        offense_html = f' &middot; <span class="np-blotter-offense{" " + tier_cls if tier_cls else ""}">{label}</span>'
+    expires_display = "&#x221e; permanent" if b["expires_in"] == "permanent" else _h(b["expires_in"])
+    is_cs = b.get("source") == "crowdsec"
+    hits_html = "" if is_cs else f'&times;{b["hit_count"]} hits &middot; '
+    return (
+        '<div class="np-blotter-item">'
+        + f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
+        + f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
+        + f'<span class="np-blotter-meta">{hits_html}'
+        + f'blocked {_h(b["blocked_for"])}'
+        + f' &middot; expires in {expires_display}'
+        + offense_html + '</span>'
+        + intel_html
+        + paths_html
+        + '</div>'
+    )
+
+
+def _render_ban_rows(bans: list[dict], intel: dict) -> str:
+    return "".join(_render_ban_row(b, intel) for b in bans)
+
+
+def render_blotter_skeleton() -> str:
+    """Blotter page shell — data loaded client-side via /api/bans + /api/cs-bans."""
+    js = r"""
+(function(){
+  var CHUNK=30;
+  var cl=document.getElementById('cs-list');
+  var cf=document.getElementById('cf-list');
+  var cfH=document.getElementById('cf-head');
+  var csH=document.getElementById('cs-head');
+  var cnt=document.getElementById('blotter-count');
+  var asn=document.getElementById('asn-content');
+
+  var csBuf=[];      // rows buffered from server, not yet in DOM
+  var csRendered=0;  // rows inserted into DOM
+  var csFetched=0;   // rows received from server total
+  var csTotal=0;     // total CS bans on server
+  var cfCount=0;
+  var fetching=false;
+  var ob=null,sent=null;
+
+  function flushBuf(){
+    if(!csBuf.length||!sent)return;
+    var batch=csBuf.splice(0,CHUNK);
+    var tmp=document.createElement('div');
+    tmp.innerHTML=batch.join('');
+    while(tmp.firstChild)cl.insertBefore(tmp.firstChild,sent);
+    csRendered+=batch.length;
+    if(csFetched>=csTotal&&!csBuf.length){
+      sent.remove();sent=null;
+      if(ob){ob.disconnect();ob=null;}
+    } else if(ob&&sent){
+      ob.observe(sent);
+    }
+  }
+
+  function fetchMore(){
+    if(fetching||csFetched>=csTotal)return;
+    fetching=true;
+    fetch('/api/cs-bans?offset='+csFetched)
+      .then(function(r){return r.json();})
+      .then(function(d){
+        csTotal=d.total;
+        csBuf=csBuf.concat(d.rows);
+        csFetched+=d.rows.length;
+        fetching=false;
+        updateHead();
+        flushBuf();
+      })
+      .catch(function(){fetching=false;});
+  }
+
+  function updateHead(){
+    csH.innerHTML='CrowdSec — '+csTotal+' ban'+(csTotal!==1?'s':'')+' · 4h bantime';
+    cnt.textContent=(cfCount+csTotal)+' active ban'+((cfCount+csTotal)!==1?'s':'');
+  }
+
+  function setup(data){
+    cfCount=data.cf.length;
+    csTotal=data.cs_total;
+    csFetched=data.cs.length;
+    csBuf=data.cs.slice();
+    csRendered=0;
+
+    cfH.innerHTML='cf-fail2ban — '+cfCount+' ban'+(cfCount!==1?'s':'')+' · 24h bantime';
+    cf.innerHTML=cfCount?data.cf.join(''):'<div class="np-blotter-empty"><span class="c-ok">✓  None.</span></div>';
+    updateHead();
+    cl.innerHTML='';
+
+    if(!csTotal){
+      cl.innerHTML='<div class="np-blotter-empty"><span class="c-ok">✓  None.</span></div>';
+      cnt.textContent=cfCount+' active ban'+(cfCount!==1?'s':'');
+      return;
+    }
+
+    sent=document.createElement('div');sent.className='np-blotter-sentinel';cl.appendChild(sent);
+    ob=new IntersectionObserver(function(e){
+      if(!e[0].isIntersecting)return;
+      ob.unobserve(sent);
+      if(csBuf.length)flushBuf();
+      else fetchMore();
+    },{root:cl,threshold:0.0});
+    ob.observe(sent);
+    flushBuf();
+
+    if(asn)asn.innerHTML=(data.asn_blocks_html||'')+(data.asn_suggestions_html||'');
+  }
+
+  fetch('/api/bans')
+    .then(function(r){return r.json();})
+    .then(setup)
+    .catch(function(){
+      cf.innerHTML='<div class="np-blotter-empty"><span class="c-err">Error loading ban data.</span></div>';
+      cl.innerHTML='';
+    });
+})();
+"""
+    return (
+        '<div class="np-blotter-page">'
+        '<div class="np-blotter-page-head">Police Blotter'
+        '<span class="np-blotter-meta" id="blotter-count" style="margin-left:14px">loading&hellip;</span>'
+        '</div>'
+        '<div class="np-blotter-section-head" id="cf-head">cf-fail2ban &middot; 24h bantime</div>'
+        '<div id="cf-list"><div class="np-blotter-loading">loading&hellip;</div></div>'
+        '<div class="np-blotter-section-head" id="cs-head">CrowdSec &middot; 4h bantime</div>'
+        '<div class="np-blotter-scroll" id="cs-list"><div class="np-blotter-loading">loading&hellip;</div></div>'
+        '</div>'
+        '<div id="asn-content"></div>'
+        f'<script>{js}</script>'
+    )
+
+
 def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Optional[dict] = None) -> str:
-    """Police blotter. collapsed=True renders as a closed <details> for archive snapshots.
-    intel is a dict keyed by IP with geo/ASN/abuse data from enrich_ips()."""
-    n = len(bans)
-    count_str = f'{n} active ban{"s" if n != 1 else ""}'
+    """Server-side blotter render — used for archive snapshots (collapsed=True)."""
     intel = intel or {}
+    cf_bans = [b for b in bans if b.get("source") != "crowdsec"]
+    cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
+    n = len(cf_bans) + len(cs_bans)
+    count_str = f'{n} active ban{"s" if n != 1 else ""}'
 
     if not bans:
         entries_html = '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; No active IP bans.</span></div>'
     else:
-        rows = []
-        for b in bans:
-            paths_html = ""
-            if b.get("paths"):
-                paths_html = (
-                    '<div class="np-blotter-paths">'
-                    + ' &middot; '.join(_h(p) for p in b["paths"][:5])
-                    + '</div>'
-                )
-            intel_html = _intel_line(intel.get(b["ip"], {}))
-            offense = b.get("offense_count", 1)
-            offense_html = ""
-            if offense >= 2:
-                tier_cls = "abuse-hi" if offense >= 5 else ("abuse-med" if offense >= 3 else "")
-                suffixes = ["st", "nd", "rd"]
-                suffix = suffixes[offense - 1] if offense <= 3 else "th"
-                label = f"&#x26a0; {offense}{suffix} offense"
-                offense_html = f' &middot; <span class="np-blotter-offense{" " + tier_cls if tier_cls else ""}">{label}</span>'
-            expires_display = "&#x221e; permanent" if b["expires_in"] == "permanent" else _h(b["expires_in"])
-            rows.append(
-                '<div class="np-blotter-item">'
-                f'<span class="np-blotter-ip c-err">{_h(b["ip"])}</span>'
-                f'<span class="np-blotter-cat c-gold">{_h(b.get("category", "vulnerability scan"))}</span>'
-                f'<span class="np-blotter-meta">&times;{b["hit_count"]} hits'
-                f' &middot; blocked {_h(b["blocked_for"])}'
-                f' &middot; expires in {expires_display}'
-                + offense_html + '</span>'
-                + intel_html
-                + paths_html
-                + '</div>'
-            )
-        entries_html = "".join(rows)
+        cf_html = _render_ban_rows(cf_bans, intel) if cf_bans else '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; None.</span></div>'
+        cs_html = _render_ban_rows(cs_bans, intel) if cs_bans else '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; None.</span></div>'
+        entries_html = (
+            f'<div class="np-blotter-section-head">cf-fail2ban &mdash; {len(cf_bans)} ban{"s" if len(cf_bans) != 1 else ""} &middot; 24h bantime</div>'
+            + cf_html
+            + f'<div class="np-blotter-section-head">CrowdSec &mdash; {len(cs_bans)} ban{"s" if len(cs_bans) != 1 else ""} &middot; 4h bantime</div>'
+            + '<div class="np-blotter-scroll">' + cs_html + '</div>'
+        )
 
     if collapsed:
         return (
@@ -3046,7 +3287,7 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Opt
     return (
         '<div class="np-blotter-page">'
         f'<div class="np-blotter-page-head">Police Blotter'
-        f'<span class="np-blotter-meta" style="margin-left:14px">{count_str} &nbsp;&middot;&nbsp; 24h bantime</span>'
+        f'<span class="np-blotter-meta" style="margin-left:14px">{count_str}</span>'
         f'</div>'
         + entries_html
         + '</div>'
