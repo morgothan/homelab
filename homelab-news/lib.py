@@ -21,6 +21,39 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+try:
+    from headroom import compress as _headroom_compress, CompressConfig as _HeadroomConfig
+    _HEADROOM_AVAILABLE = True
+except ImportError:
+    _HEADROOM_AVAILABLE = False
+
+# Compress LLM messages before dispatch. Uses SmartCrusher for JSON arrays (up to 86%
+# savings) and falls back transparently if headroom is unavailable or raises.
+def _compress_messages(messages: list[dict]) -> list[dict]:
+    if not _HEADROOM_AVAILABLE:
+        return messages
+    try:
+        cfg = _HeadroomConfig(
+            compress_user_messages=True,
+            compress_system_messages=False,  # instructions must stay verbatim
+            protect_recent=0,
+            protect_analysis_context=False,
+            kompress_model="disabled",  # no ML model — SmartCrusher (JSON) only
+        )
+        result = _headroom_compress(messages, model="gpt-4o", config=cfg)
+        if result.tokens_saved > 0:
+            log.debug(
+                "headroom: %d → %d tokens (-%d, %.0f%%); transforms: %s",
+                result.tokens_before, result.tokens_after,
+                result.tokens_saved, result.compression_ratio * 100,
+                result.transforms_applied,
+            )
+        return result.messages
+    except Exception as e:
+        log.debug("headroom compression skipped: %s", e)
+        return messages
+
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 LOKI_URL         = os.getenv("LOKI_URL", "http://loki:3100")
@@ -1619,26 +1652,34 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
     if not issues:
         return None
     ranked = sorted(issues, key=lambda i: (i["level"] != "error", -i["count"]))[:10]
-    entries = "\n".join(
-        f"[{i['source']} {i['level'].upper()} \xd7{i['count']}] {_sanitize_for_llm(i['message'], max_len=140)}"
+    sanitized_issues = [
+        {
+            "source": i["source"],
+            "level":  i["level"].upper(),
+            "count":  i["count"],
+            "message": _sanitize_for_llm(i["message"], max_len=140),
+        }
         for i in ranked
-    )
+    ]
     ctx = _load_context()
-    ctx_block = f"HOMELAB CONTEXT:\n{ctx}\n\n" if ctx else ""
-    prompt = (
-        "Homelab log analysis.\n"
-        + ctx_block
-        + "For each entry: one line saying what it means, one line starting with '→' saying what to do.\n"
-        "If it is harmless noise, write 'Noise: <reason>'. No preamble.\n\n"
-        f"ENTRIES ({context}):\n{entries}"
+    system = (
+        "Homelab log analysis."
+        + (f"\n\nHOMELAB CONTEXT:\n{ctx}" if ctx else "")
+        + "\n\nFor each entry: one line saying what it means, one line starting with '→' "
+        "saying what to do. If it is harmless noise, write 'Noise: <reason>'. No preamble."
     )
+    user = json.dumps({"context": context, "entries": sanitized_issues}, indent=2)
+    messages = _compress_messages([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ])
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
                     "model": _LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                     "max_tokens": 500,
                     "temperature": 0.1,
@@ -1752,7 +1793,7 @@ async def generate_newspaper(
     situation = "\n".join(lines)
     context = _load_context()
     context_block = f"HOMELAB CONTEXT (use this to write accurate service names and understand what's normal):\n{context}\n\n" if context else ""
-    prompt = (
+    system = (
         "You are the editor of a homelab status newspaper covering a full day of events.\n\n"
         + context_block
         + "LAYOUT: The page has one full-width Lead Story at the top, then each section shows its\n"
@@ -1789,16 +1830,19 @@ async def generate_newspaper(
         "    Public Works     — DNS, networking, Traefik configuration\n"
         "  Default to City Hall if unsure.\n"
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
-        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
-        f"CURRENT HOMELAB STATUS:\n{situation}"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
+    messages = _compress_messages([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": f"CURRENT HOMELAB STATUS:\n{situation}"},
+    ])
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
                     "model": _LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                     "max_tokens": 2500,
                     "temperature": 0.3,
@@ -1876,22 +1920,26 @@ async def generate_periodic_summary(
     period_label: str,    # human-readable, e.g. "May 2026" or "2026-05-11 to 2026-05-17"
     entries: list[dict],  # [{"period": str, "articles": [{headline, blurb}, ...]}]
 ) -> Optional[list[dict]]:
-    lines: list[str] = []
+    # Build a sanitized JSON structure — SmartCrusher can deduplicate repeated article shapes
+    sanitized_entries = []
     for entry in entries:
-        lines.append(f"=== {entry['period']} ===")
-        for a in entry.get("articles") or []:
-            headline = _sanitize_for_llm(a.get("headline", ""), max_len=200)
-            blurb    = _sanitize_for_llm(a.get("blurb", ""), max_len=200)
-            lines.append(f"• {headline}: {blurb}")
+        articles = [
+            {
+                "headline": _sanitize_for_llm(a.get("headline", ""), max_len=200),
+                "blurb":    _sanitize_for_llm(a.get("blurb", ""), max_len=200),
+            }
+            for a in (entry.get("articles") or [])
+        ]
         entry_bans = entry.get("ban_summary") or []
         if not entry_bans:
-            # Fallback: build from raw bans list (daily archive entries)
             raw_bans = entry.get("bans") or []
             if raw_bans:
                 entry_bans = _ban_summary(raw_bans)
-        if entry_bans:
-            lines.append(f"  Security: {'; '.join(entry_bans)}")
-    body = "\n".join(lines)
+        sanitized_entries.append({
+            "period":   entry["period"],
+            "articles": articles,
+            "security": "; ".join(entry_bans) if entry_bans else None,
+        })
 
     scope_map = {
         "week":  ("weekly digest",  "daily editions"),
@@ -1902,7 +1950,7 @@ async def generate_periodic_summary(
 
     ctx = _load_context()
     ctx_block = f"HOMELAB CONTEXT (use for accurate service names):\n{ctx}\n\n" if ctx else ""
-    prompt = (
+    system = (
         f"You are the editor writing the {title} for a homelab status newspaper.\n"
         + ctx_block
         + f"Below are summaries from the {source} covering: {period_label}.\n\n"
@@ -1919,16 +1967,19 @@ async def generate_periodic_summary(
         "- Headlines: name the service and the trend, not vague phrases.\n"
         "- Blurbs: 2–3 sentences, quantify recurrence where possible.\n"
         "- Output ONLY a valid JSON array. No markdown, no preamble.\n"
-        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
-        f"SOURCE DATA ({period_label}):\n{body}"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
+    messages = _compress_messages([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": json.dumps(sanitized_entries, indent=2)},
+    ])
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
                     "model": _LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                     "max_tokens": 3000,
                     "temperature": 0.3,
@@ -1987,12 +2038,10 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         f"HOMELAB CONTEXT (use to flag breaking changes that affect this specific setup):\n{ctx}\n\n"
         if ctx else ""
     )
-    prompt = (
+    system = (
         f"You are summarising a Docker image update for a homelab operator.\n"
         + ctx_block
-        + f"Image: {safe_image}  New tag: {safe_tag}\n\n"
-        f"RELEASE NOTES:\n{safe_notes}\n\n"
-        "Write exactly 1-2 sentences describing what changed. Rules:\n"
+        + "Write exactly 1-2 sentences describing what changed. Rules:\n"
         "- You MUST output something — never leave the response blank.\n"
         "- If the notes describe real changes (features, bug fixes, security patches), summarise them.\n"
         "- If the notes are sparse or this is just a base-image/container rebuild, say so: "
@@ -2002,13 +2051,18 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         "  migrations that affect services described in that context, flag them explicitly.\n"
         "Output only the 1-2 sentence summary. No headers, no bullet points, no preamble."
     )
+    user = f"Image: {safe_image}  New tag: {safe_tag}\n\nRELEASE NOTES:\n{safe_notes}"
+    messages = _compress_messages([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": user},
+    ])
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
                     "model": _LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                     "max_tokens": 1500,
                     "temperature": 0.1,
@@ -2067,7 +2121,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
     ctx_block = (
         f"HOMELAB CONTEXT:\n{ctx}\n\n" if ctx else ""
     )
-    prompt = (
+    system = (
         "You are the software intelligence desk editor for a homelab newspaper.\n\n"
         + ctx_block
         + "Write 2–6 newspaper articles summarising the available software updates below.\n\n"
@@ -2080,16 +2134,19 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         "- Assign sections: 'City Hall' (app/container updates), 'Public Safety' (security/CVE),\n"
         "  'Weather' (system/kernel), 'Arts & Entertainment' (Jellyfin/media), 'Public Works' (DNS/network).\n"
         "- Output ONLY a valid JSON array. No markdown, no explanation.\n"
-        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]\n\n"
-        f"SOFTWARE UPDATE STATUS:\n{situation}"
+        "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
+    messages = _compress_messages([
+        {"role": "system", "content": system},
+        {"role": "user",   "content": f"SOFTWARE UPDATE STATUS:\n{situation}"},
+    ])
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
                     "model": _LLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": messages,
                     "stream": False,
                     "max_tokens": 2000,
                     "temperature": 0.3,
