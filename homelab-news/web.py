@@ -1,5 +1,6 @@
 """Web server — reads /data/*.json and serves HTML. No LLM dependency."""
 
+import asyncio
 import logging
 import time
 from datetime import datetime, timezone
@@ -13,11 +14,14 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS, SITE_NAME,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
+    IP_INTEL_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
-    render_articles_html, render_blotter_html, render_asn_suggestions_html, render_asn_blocklist_html,
+    render_articles_html, render_blotter_html, render_blotter_skeleton,
+    render_asn_suggestions_html, render_asn_blocklist_html,
+    _render_ban_row,
     log_card, containers_card, updates_card,
 )
 
@@ -286,6 +290,16 @@ async def wire_reports():
 
 @app.get("/blotter")
 async def blotter():
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = masthead_rolling(now_str) + nav_bar("blotter") + render_blotter_skeleton()
+    return Response(content=page_wrap(body), media_type="text/html; charset=utf-8")
+
+
+_CS_PAGE = 50  # rows per page for CrowdSec infinite scroll
+
+
+@app.get("/api/bans")
+async def api_bans():
     global _blotter_cache
     now = time.monotonic()
     if _blotter_cache is None or now - _blotter_cache[2] > BLOTTER_TTL:
@@ -293,19 +307,42 @@ async def blotter():
         _blotter_cache = (bans, probes, now)
     else:
         bans, probes, _ = _blotter_cache
-    intel = await enrich_ips([b["ip"] for b in bans])
+    ip_cache = load_json(IP_INTEL_FILE) or {}
+    intel = {b["ip"]: ip_cache.get(b["ip"], {}) for b in bans}
+    asyncio.create_task(enrich_ips([b["ip"] for b in bans]))
+    cf_bans = [b for b in bans if b.get("source") != "crowdsec"]
+    cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
     asn_suggestions = _suggest_asn_blocks(bans)
     asn_blocks      = check_asn_blocks()
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    body = (
-        masthead_rolling(now_str)
-        + nav_bar("blotter")
-        + render_blotter_html(bans, intel=intel)
-        + render_asn_blocklist_html(asn_blocks)
-        + render_asn_suggestions_html(asn_suggestions)
-    )
-    return Response(content=page_wrap(body, refresh=60),
-                    media_type="text/html; charset=utf-8")
+    # Return only the first page of CS rows; JS fetches more via /api/cs-bans
+    first_cs = cs_bans[:_CS_PAGE]
+    return JSONResponse({
+        "cf":                   [_render_ban_row(b, intel) for b in cf_bans],
+        "cs":                   [_render_ban_row(b, intel) for b in first_cs],
+        "cs_total":             len(cs_bans),
+        "asn_blocks_html":      render_asn_blocklist_html(asn_blocks),
+        "asn_suggestions_html": render_asn_suggestions_html(asn_suggestions),
+    })
+
+
+@app.get("/api/cs-bans")
+async def api_cs_bans(offset: int = 0):
+    global _blotter_cache
+    now = time.monotonic()
+    if _blotter_cache is None or now - _blotter_cache[2] > BLOTTER_TTL:
+        bans, probes = await check_fail2ban_bans()
+        _blotter_cache = (bans, probes, now)
+    else:
+        bans, probes, _ = _blotter_cache
+    cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
+    page = cs_bans[offset:offset + _CS_PAGE]
+    ip_cache = load_json(IP_INTEL_FILE) or {}
+    intel = {b["ip"]: ip_cache.get(b["ip"], {}) for b in page}
+    return JSONResponse({
+        "rows":     [_render_ban_row(b, intel) for b in page],
+        "total":    len(cs_bans),
+        "has_more": offset + _CS_PAGE < len(cs_bans),
+    })
 
 
 @app.get("/detailed")
