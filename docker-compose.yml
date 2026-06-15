@@ -1472,6 +1472,27 @@ services:
     labels:
       - traefik.enable=false
 
+########## Headroom
+# Context compression proxy — sits between Claude Code and the Anthropic API
+# Set ANTHROPIC_BASE_URL=http://localhost:8787 in ~/.claude/settings.json to use
+  headroom:
+    build: ./headroom
+    pull_policy: never
+    container_name: headroom
+    image: headroom:latest
+    restart: unless-stopped
+    logging: *logging
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+      - SYS_PTRACE
+      - SYS_ADMIN
+    ports:
+      - "127.0.0.1:8787:8787"
+    labels:
+      - traefik.enable=false
+
 networks:
   proxy:  #create with docker network create proxy
     external: {}
