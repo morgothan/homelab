@@ -4,3 +4,4 @@ docker
 httpx
 supervisor
 tzdata
+headroom-ai
