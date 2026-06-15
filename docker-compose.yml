@@ -9,7 +9,7 @@ services:
 ########## Cloudflare Tunnel
 # Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
-    image: cloudflare/cloudflared:2026.5.2
+    image: cloudflare/cloudflared:2026.6.0
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:v3.7.4
+    image: traefik:v3.7.5
     container_name: traefik
     restart: always
     logging: *logging
@@ -1317,7 +1317,9 @@ services:
       - ADGUARD_PRIMARY_URL=${ADGUARD_PRIMARY_URL}
       - ADGUARD_KIDS_URL=${ADGUARD_KIDS_URL}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
-      - CROWDSEC_KEY=${CROWDSEC_KEY}    # optional: enables CrowdSec CTI on police blotter
+      - CROWDSEC_KEY=${CROWDSEC_KEY}         # optional: enables CrowdSec CTI on police blotter
+      - CROWDSEC_LAPI_URL=http://crowdsec:8080
+      - CROWDSEC_LAPI_KEY=${CROWDSEC_LAPI_KEY} # bouncer key for reading active decisions
       - GOTIFY_URL=${GOTIFY_URL}        # optional: push notifications for critical update findings
       - GOTIFY_TOKEN=${GOTIFY_TOKEN}    # optional: Gotify app token
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
