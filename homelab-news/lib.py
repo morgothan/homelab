@@ -939,6 +939,9 @@ def _build_probes(
     return sorted(probes, key=lambda x: x["hit_count"], reverse=True)[:10]
 
 
+_CS_LOCAL_ORIGINS = frozenset({"crowdsec", "cscli"})
+
+
 def _security_prompt_block(
     bans: list[dict],
     probes: list[dict],
@@ -956,10 +959,21 @@ def _security_prompt_block(
     parts: list[str] = []
 
     if bans:
-        auth_bans    = [b for b in bans if b.get("category") == "credential stuffing"]
-        scanner_bans = [b for b in bans if b.get("category") != "credential stuffing"]
+        # Split locally-detected attacks from preemptive community/blocklist blocks.
+        # Only local bans represent IPs that actually hit this host.
+        local_bans = [
+            b for b in bans
+            if b.get("source") != "crowdsec" or b.get("cs_origin", "") in _CS_LOCAL_ORIGINS
+        ]
+        preemptive_bans = [
+            b for b in bans
+            if b.get("source") == "crowdsec" and b.get("cs_origin", "") not in _CS_LOCAL_ORIGINS
+        ]
 
-        parts.append(f"SECURITY — {len(bans)} IPs Cloudflare-blocked (24h ban):")
+        auth_bans    = [b for b in local_bans if b.get("category") == "credential stuffing"]
+        scanner_bans = [b for b in local_bans if b.get("category") != "credential stuffing"]
+
+        parts.append(f"SECURITY — {len(local_bans)} IPs actively blocked (attacked this host directly):")
 
         if auth_bans:
             parts.append(
@@ -990,6 +1004,13 @@ def _security_prompt_block(
                     f"    {b['ip']}: {b['hit_count']} probe hits"
                     f" ({b.get('category', 'scan')}), banned {b['blocked_for']} ago"
                 )
+
+        if preemptive_bans:
+            parts.append(
+                f"  NOTE: {len(preemptive_bans)} additional IPs preemptively blocked via"
+                f" CrowdSec community feeds/blocklists — these IPs did NOT scan this host;"
+                f" they are flagged in other people's threat intel. Do not report them as attackers."
+            )
 
     if probes:
         parts.append(
@@ -1025,13 +1046,20 @@ def _security_prompt_block(
 
 
 def _merge_crowdsec(bans: list[dict], cs_decisions: list[dict]) -> list[dict]:
-    """Append CrowdSec ban decisions that aren't already tracked by cf-fail2ban."""
+    """Append CrowdSec ban decisions that aren't already tracked by cf-fail2ban.
+
+    All decisions (local IDS + CAPI + blocklists) are included so the police blotter
+    shows the full picture. The 'cs_origin' field is stored on each entry so callers
+    can distinguish locally-detected attacks ('crowdsec', 'cscli') from preemptive
+    community/blocklist blocks ('CAPI', 'lists:*').
+    """
     if not cs_decisions:
         return bans
     existing_ips = {b["ip"] for b in bans}
     now = datetime.now(timezone.utc)
     for d in cs_decisions:
         ip = d.get("value", "")
+        origin = d.get("origin", "")
         if not ip or d.get("scope", "").lower() != "ip" or ip in existing_ips:
             continue
         remaining = _parse_cs_duration(d.get("duration", ""))
@@ -1052,6 +1080,7 @@ def _merge_crowdsec(bans: list[dict], cs_decisions: list[dict]) -> list[dict]:
             "category":     _cs_scenario_to_category(d.get("scenario", "")),
             "offense_count": 1,
             "source":       "crowdsec",
+            "cs_origin":    origin,
         })
         existing_ips.add(ip)
     return bans
