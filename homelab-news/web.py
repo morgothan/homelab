@@ -309,9 +309,12 @@ async def api_bans():
         bans, probes, _ = _blotter_cache
     ip_cache = load_json(IP_INTEL_FILE) or {}
     intel = {b["ip"]: ip_cache.get(b["ip"], {}) for b in bans}
-    asyncio.create_task(enrich_ips([b["ip"] for b in bans]))
     cf_bans = [b for b in bans if b.get("source") != "crowdsec"]
     cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
+    # Only query AbuseIPDB for IPs that actually connected (cf-fail2ban + probes);
+    # CrowdSec preemptive blocks never touched the server so skip them there.
+    cf_ban_ips = {b["ip"] for b in cf_bans}
+    asyncio.create_task(enrich_ips([b["ip"] for b in bans], abuse_only_ips=cf_ban_ips))
     asn_suggestions = _suggest_asn_blocks(bans)
     asn_blocks      = check_asn_blocks()
     # Return only the first page of CS rows; JS fetches more via /api/cs-bans
