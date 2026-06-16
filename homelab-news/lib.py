@@ -1317,9 +1317,11 @@ def _suggest_asn_blocks(bans: list[dict]) -> list[dict]:
     except Exception:
         already_blocked = frozenset()
 
-    # Group banned IPs by ASN
+    # Group banned IPs by ASN — only locally-detected attacks, not preemptive blocklist blocks
     by_asn: dict[str, dict] = {}
     for b in bans:
+        if b.get("source") == "crowdsec" and b.get("cs_origin", "") not in _CS_LOCAL_ORIGINS:
+            continue
         ip  = b["ip"]
         intel = cache.get(ip, {})
         asn = intel.get("asn", "").strip()
