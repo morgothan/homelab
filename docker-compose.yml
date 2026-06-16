@@ -1342,49 +1342,6 @@ services:
       - traefik.http.routers.lab-monitor-local.service=lab-monitor
 
 
-########## Open WebUI
-# Chat interface for Ollama — Authelia trusted-header SSO, no login form shown
-  open-webui:
-    image: ghcr.io/open-webui/open-webui:main
-    container_name: open-webui
-    restart: unless-stopped
-    logging: *logging
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost:8080/health || exit 1"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    networks:
-      - ${DOCKERNET}
-    volumes:
-      - ${DOCKERDIR}/openwebui:/app/backend/data
-    environment:
-      - OAUTH_CLIENT_ID=${OIDC_OPENWEBUI_CLIENT_ID}
-      - OAUTH_CLIENT_SECRET=${OPENWEBUI_OIDC_CLIENT_SECRET}
-      - OPENID_PROVIDER_URL=https://authelia.${DOMAIN}/.well-known/openid-configuration
-      - OAUTH_PROVIDER_NAME=Authelia
-      - OAUTH_SCOPES=openid profile email groups
-      - ENABLE_OAUTH_SIGNUP=True
-      - OAUTH_MERGE_ACCOUNTS_BY_EMAIL=True
-      - ENABLE_LOGIN_FORM=False
-      - ENABLE_OAUTH_ROLE_MANAGEMENT=True
-      - OAUTH_ROLES_CLAIM=groups
-      - OAUTH_ADMIN_ROLES=openwebui-admin
-      - OAUTH_DEFAULT_ROLE=user
-      - OLLAMA_BASE_URL=${OLLAMA_URL}
-      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
-      - WEBUI_SECRET_KEY=${OPEN_WEBUI_SECRET_KEY}
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.open-webui-https.entrypoints=https
-      - traefik.http.routers.open-webui-https.rule=Host(`ai.${DOMAIN}`)
-      - traefik.http.routers.open-webui-https.middlewares=chain-authelia-nowaf@file
-      - traefik.http.routers.open-webui-https.service=open-webui
-      - traefik.http.routers.open-webui-https.tls.certresolver=letsencrypt
-      - traefik.http.routers.open-webui-https.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.open-webui-https.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.open-webui.loadbalancer.server.port=8080
 
 ########## RainSoft EC5 V75 Intercept
 # Captures outbound HTTP calls from water purifier to remind.rainsoft.com
