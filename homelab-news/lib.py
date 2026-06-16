@@ -143,13 +143,20 @@ def _load_context() -> str:
         return ""
 
 
-async def enrich_ips(ips: list[str]) -> dict[str, dict]:
+async def enrich_ips(
+    ips: list[str],
+    abuse_only_ips: "set[str] | None" = None,
+) -> dict[str, dict]:
     """Return geo/ASN/abuse/CTI intel for a list of IPs, using a persistent 7-day cache.
 
     Always queries ip-api.com (free, no key) for geo + ASN + ISP/org.
     Optionally queries AbuseIPDB for abuse score if ABUSEIPDB_KEY is set.
     Optionally queries CrowdSec CTI for threat score + behaviors if CROWDSEC_KEY is set.
     Results cached in /data/ip_intel.json so the blotter page stays fast.
+
+    abuse_only_ips: if provided, AbuseIPDB lookups are restricted to this set.
+      Use to avoid querying preemptively-blocked IPs (e.g. CrowdSec-only bans)
+      that never actually connected to this host.
     """
     if not ips:
         return {}
@@ -161,7 +168,10 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
     # IPs cached without supplemental data that now have a key available
     needs_abuse = [
         ip for ip in ips
-        if ip not in _stale_set and ABUSEIPDB_KEY and "abuse_score" not in cache.get(ip, {})
+        if ip not in _stale_set
+        and ABUSEIPDB_KEY
+        and "abuse_score" not in cache.get(ip, {})
+        and (abuse_only_ips is None or ip in abuse_only_ips)
     ]
     needs_cs = [
         ip for ip in ips
@@ -203,7 +213,12 @@ async def enrich_ips(ips: list[str]) -> dict[str, dict]:
             log.warning("ip-api.com enrichment failed: %s", e)
 
     # ── AbuseIPDB per-IP (optional — only if key configured) ─────────────
-    abuse_targets = [ip for ip in stale if ip in cache] + needs_abuse
+    # Restrict to IPs that actually connected if abuse_only_ips is provided,
+    # so preemptively-blocked IPs (e.g. CrowdSec-only bans) don't burn quota.
+    _abuse_stale = [ip for ip in stale if ip in cache]
+    if abuse_only_ips is not None:
+        _abuse_stale = [ip for ip in _abuse_stale if ip in abuse_only_ips]
+    abuse_targets = _abuse_stale + needs_abuse
     if ABUSEIPDB_KEY and abuse_targets:
         async with httpx.AsyncClient(timeout=10) as client:
             for ip in abuse_targets:
