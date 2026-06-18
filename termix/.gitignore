@@ -1,0 +1,4 @@
+# Termix runtime data — do not commit
+db.sqlite.encrypted
+opkssh/
+session_logs/
