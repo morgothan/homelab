@@ -1,5 +1,0 @@
-#!/bin/sh
-# TTYD_USER: the host user to su into (set via docker-compose environment)
-USER="${TTYD_USER:-$(id -un)}"
-# Single-quoted so ~ expands under su's shell in the host namespace, not here
-exec nsenter -t 1 -m -u -i -n -p -- su - "$USER" -c '~/bin/start-tmux.sh'
