@@ -744,10 +744,10 @@ services:
       - PORT=8080
       - OIDC_CLIENT_ID=${TERMIX_OIDC_CLIENT_ID}
       - OIDC_CLIENT_SECRET=${TERMIX_OIDC_CLIENT_SECRET}
-      - OIDC_ISSUER_URL=https://auth.${DOMAIN}
-      - OIDC_AUTHORIZATION_URL=https://auth.${DOMAIN}/api/oidc/authorization
-      - OIDC_TOKEN_URL=https://auth.${DOMAIN}/api/oidc/token
-      - OIDC_USERINFO_URL=https://auth.${DOMAIN}/api/oidc/userinfo
+      - OIDC_ISSUER_URL=https://authelia.${DOMAIN}
+      - OIDC_AUTHORIZATION_URL=https://authelia.${DOMAIN}/api/oidc/authorization
+      - OIDC_TOKEN_URL=https://authelia.${DOMAIN}/api/oidc/token
+      - OIDC_USERINFO_URL=https://authelia.${DOMAIN}/api/oidc/userinfo
       - OIDC_SCOPES=openid email profile groups
       - OIDC_SYSTEM_SECRET=${TERMIX_OIDC_SYSTEM_SECRET}
     labels:
