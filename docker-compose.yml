@@ -758,7 +758,7 @@ services:
       - traefik.http.routers.termix.tls.certresolver=letsencrypt
       - traefik.http.routers.termix.tls.domains[0].main=${DOMAIN}
       - traefik.http.routers.termix.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.termix.loadBalancer.server.port=8080
+      - traefik.http.services.termix.loadbalancer.server.port=8080
 
 ########## ttyd
 # ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
