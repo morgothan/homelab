@@ -683,50 +683,6 @@ services:
     command:
       - '--redis.addr=redis://redis:6379'
 
-########## Guacamole
-# Web-based remote desktop gateway with OIDC login (implicit grant — PKCE not supported)
-  guacamole:
-    container_name: guacamole
-    image: jwetzell/guacamole:latest
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/ || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-      start_period: 60s
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-      - ${DOCKERDIR}/guac:/config
-      - ${DOCKERDIR}/guac/fonts:/usr/share/fonts/truetype/nerdfonts:ro
-      - ${DOCKERDIR}/guac/custom-cont-init.d/10-fonts.sh:/etc/cont-init.d/10-fonts.sh:ro
-    restart: unless-stopped
-    logging: *logging
-    networks:
-      - ${DOCKERNET}
-    environment:
-      - EXTENSIONS=auth-sso-openid
-      - LOG_LEVEL=warn
-      # JVM heap tuning: prevents GC pauses from causing sporadic input lag
-      - CATALINA_OPTS=-Xms256m -Xmx768m -XX:+UseG1GC -XX:MaxGCPauseMillis=100
-    labels:
-      - traefik.enable=true
-      # External HTTPS via Cloudflare Tunnel
-      - traefik.http.routers.guac-http.entrypoints=https
-      - traefik.http.routers.guac-http.rule=Host(`guac.${DOMAIN}`)
-      - traefik.http.middlewares.guac-headers.headers.customrequestheaders.X-Forwarded-Proto=https
-      - traefik.http.routers.guac-http.middlewares=guac-headers,chain-authelia-nowaf@file
-      - traefik.http.routers.guac-http.service=guac
-      - traefik.http.routers.guac-http.tls.certresolver=letsencrypt
-      - traefik.http.routers.guac-http.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.guac-http.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.guac.loadbalancer.server.port=8080
-      # Local access — bypasses Cloudflare Tunnel entirely (much lower latency on LAN)
-      - traefik.http.routers.guac-http-local.entrypoints=http
-      - traefik.http.routers.guac-http-local.rule=Host(`guac.${LOCAL}`)
-      - traefik.http.routers.guac-http-local.service=guac
-
-
 ########## Termix
 # Browser-based SSH management — replaces ttyd and guacamole
   termix:
@@ -740,6 +696,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/termix:/app/data
+      - /home/nat/docker/termix/backend/users-dist.js:/app/dist/backend/backend/database/routes/users.js:ro
     environment:
       - PORT=8080
       - OIDC_CLIENT_ID=${TERMIX_OIDC_CLIENT_ID}
@@ -759,57 +716,6 @@ services:
       - traefik.http.routers.termix.tls.domains[0].main=${DOMAIN}
       - traefik.http.routers.termix.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.termix.loadbalancer.server.port=8080
-
-########## ttyd
-# ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
-  ttyd-user:
-    image: tsl0922/ttyd:1.7.8
-    container_name: ttyd-user
-    restart: unless-stopped
-    logging: *logging
-    healthcheck:
-      test: ["CMD-SHELL", "pgrep ttyd || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    command: ttyd -W /shell
-    environment:
-      - TINI_SUBREAPER=1
-      - TTYD_USER
-    privileged: true
-    pid: host
-    volumes:
-      - ${USERDIR}/bin/ttyd-shell:/shell:ro
-    networks:
-      - ${DOCKERNET}
-
-# ttyd-router: nginx that routes to the right ttyd instance based on Remote-User header
-# set by Authelia. Unknown users get 403. Add new users in ttyd/nginx.conf.
-  ttyd-router:
-    image: nginx:alpine
-    container_name: ttyd-router
-    restart: unless-stopped
-    logging: *logging
-    depends_on:
-      - ttyd-user
-    healthcheck:
-      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    volumes:
-      - ${DOCKERDIR}/ttyd/nginx.conf:/etc/nginx/conf.d/default.conf:ro
-    networks:
-      - ${DOCKERNET}
-    labels:
-      - traefik.enable=true
-      - traefik.http.routers.ttyd-https.entryPoints=https
-      - traefik.http.routers.ttyd-https.rule=Host(`ttyd.${DOMAIN}`)
-      - traefik.http.routers.ttyd-https.middlewares=chain-authelia-nowaf@file
-      - traefik.http.routers.ttyd-https.tls.certresolver=letsencrypt
-      - traefik.http.routers.ttyd-https.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.ttyd-https.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.ttyd.loadBalancer.server.port=80
 
 # TODO: migrate from Gotify to ntfy — OIDC integration needs more research
 #       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
