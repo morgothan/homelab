@@ -268,28 +268,26 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
           #        claims_policy: 'default'
 
-#GUACAMOLE
-      - client_id: '{{ env "OIDC_GUACAMOLE_CLIENT_ID" }}'
-        client_name: 'guacamole'
-        client_secret: '{{ env "OIDC_GUACAMOLE_CLIENT_SECRET" }}'
+#TERMIX
+      - client_id: '{{ env "OIDC_TERMIX_CLIENT_ID" }}'
+        client_name: 'Termix'
+        client_secret: '{{ env "OIDC_TERMIX_CLIENT_SECRET" }}'
         public: false
         authorization_policy: 'two_factor'
-        require_pkce: false
-        pkce_challenge_method: ''
+        pkce_challenge_method: 'S256'
         redirect_uris:
-          - 'https://guac.{{ env "DOMAIN" }}'
+          - 'https://termix.{{ env "DOMAIN" }}/users/oidc/callback'
         scopes:
           - 'openid'
           - 'profile'
           - 'groups'
           - 'email'
         response_types:
-          - 'id_token'
+          - 'code'
         grant_types:
-          - 'implicit'
-        userinfo_signed_response_alg: 'none'
-        claims_policy: 'default'  #needed since guac no longer works with the updated authelia oidc settings
+          - 'authorization_code'
         token_endpoint_auth_method: 'client_secret_basic'
+        userinfo_signed_response_alg: 'none'
 
 
 ######## Proxmox ###############
