@@ -727,6 +727,39 @@ services:
       - traefik.http.routers.guac-http-local.service=guac
 
 
+########## Termix
+# Browser-based SSH management — replaces ttyd and guacamole
+  termix:
+    image: ghcr.io/lukegus/termix:latest
+    container_name: termix
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/termix:/app/data
+    environment:
+      - PORT=8080
+      - OIDC_CLIENT_ID=${TERMIX_OIDC_CLIENT_ID}
+      - OIDC_CLIENT_SECRET=${TERMIX_OIDC_CLIENT_SECRET}
+      - OIDC_ISSUER_URL=https://auth.${DOMAIN}
+      - OIDC_AUTHORIZATION_URL=https://auth.${DOMAIN}/api/oidc/authorization
+      - OIDC_TOKEN_URL=https://auth.${DOMAIN}/api/oidc/token
+      - OIDC_USERINFO_URL=https://auth.${DOMAIN}/api/oidc/userinfo
+      - OIDC_SCOPES=openid email profile groups
+      - OIDC_SYSTEM_SECRET=${TERMIX_OIDC_SYSTEM_SECRET}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.termix.entrypoints=https
+      - traefik.http.routers.termix.rule=Host(`termix.${DOMAIN}`)
+      - traefik.http.routers.termix.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.termix.tls.certresolver=letsencrypt
+      - traefik.http.routers.termix.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.termix.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.termix.loadBalancer.server.port=8080
+
 ########## ttyd
 # ttyd-user: privileged host shell via nsenter — not exposed directly, only via ttyd-router
   ttyd-user:
