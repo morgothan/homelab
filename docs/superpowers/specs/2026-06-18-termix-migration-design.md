@@ -102,8 +102,7 @@ Generate credentials with:
 docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
   --random --random.length 64 --random.charset alphanumeric
 ```
-Run twice. Each invocation prints a random string and its pbkdf2 digest. Use the **random string** from run 1 as `OIDC_TERMIX_CLIENT_ID` (stored in `kv/docker/authelia`). Use the **random string** from run 2 as the plaintext client_secret (stored in `kv/docker/termix` as `TERMIX_OIDC_CLIENT_SECRET` for Termix to present), and the **pbkdf2 digest** from run 2 as `OIDC_TERMIX_CLIENT_SECRET` in `kv/docker/authelia` (what Authelia verifies against). Also store the client_id plaintext in `kv/docker/termix` as `TERMIX_OIDC_CLIENT_ID`. Generate a separate random 32+ char string for `TERMIX_OIDC_SYSTEM_SECRET` and store in `kv/docker/termix`.
-
+Run twice. Each invocation prints a random string and its pbkdf2 digest. Use the **random string** from run 1 as `OIDC_TERMIX_CLIENT_ID` (stored in `kv/docker/authelia`). Use the **random string** from run 2 as the plaintext client_secret (stored in `kv/docker/termix` as `TERMIX_OIDC_CLIENT_SECRET` for Termix to present), and the **pbkdf2 digest** from run 2 as `OIDC_TERMIX_CLIENT_SECRET` in `kv/docker/authelia` (what Authelia verifies against). Also store the client_id plaintext in `kv/docker/termix` as `TERMIX_OIDC_CLIENT_ID`. 
 Remove the existing guacamole OIDC client entry and its secrets from `kv/docker/authelia`.
 
 ## SSH Host Configuration
