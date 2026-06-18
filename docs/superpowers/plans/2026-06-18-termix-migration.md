@@ -50,6 +50,12 @@ Obtain a temporary root token (see openbao_admin_process memory), then write to 
 ```
 TERMIX_OIDC_CLIENT_ID     = <Run 1 random string>
 TERMIX_OIDC_CLIENT_SECRET = <Run 2 random string>
+TERMIX_OIDC_SYSTEM_SECRET = <openssl rand -base64 32 output>
+```
+
+Generate the system secret first:
+```bash
+openssl rand -base64 32
 ```
 
 **Path `kv/docker/authelia`** — values Authelia reads:
@@ -195,6 +201,7 @@ Insert the following block after the guacamole service (around line 728, before 
       - OIDC_TOKEN_URL=https://auth.${DOMAIN}/api/oidc/token
       - OIDC_USERINFO_URL=https://auth.${DOMAIN}/api/oidc/userinfo
       - OIDC_SCOPES=openid email profile groups
+      - OIDC_SYSTEM_SECRET=${TERMIX_OIDC_SYSTEM_SECRET}
     labels:
       - traefik.enable=true
       - traefik.http.routers.termix.entrypoints=https
@@ -218,7 +225,7 @@ Insert the following block after the guacamole service (around line 728, before 
 ./dc.sh logs termix --tail=30
 ```
 
-Expected: Termix prints startup messages, no crash, nginx starting, backend running. If you see an OIDC env var error, double-check that `TERMIX_OIDC_CLIENT_ID` and `TERMIX_OIDC_CLIENT_SECRET` are in `kv/docker/termix` and that `dc.sh` injected them.
+Expected: Termix prints startup messages, no crash, nginx starting, backend running. If you see an OIDC env var error, double-check that `TERMIX_OIDC_CLIENT_ID`, `TERMIX_OIDC_CLIENT_SECRET`, and `TERMIX_OIDC_SYSTEM_SECRET` are in `kv/docker/termix` and that `dc.sh` injected them.
 
 ---
 
