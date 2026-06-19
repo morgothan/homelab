@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from lib import REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS, run_news_cycle
+from lib import REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS, run_news_cycle, run_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("rolling")
@@ -17,13 +17,7 @@ async def run() -> None:
 
 
 async def main() -> None:
-    while True:
-        try:
-            await run()
-        except Exception as e:
-            log.error("Run failed: %s", e)
-        log.info("Next run in %ds", REFRESH_INTERVAL)
-        await asyncio.sleep(REFRESH_INTERVAL)
+    await run_loop(run, REFRESH_INTERVAL, log)
 
 
 if __name__ == "__main__":
