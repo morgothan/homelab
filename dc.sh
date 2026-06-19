@@ -44,25 +44,34 @@ for arg in "$@"; do
 done
 set -- "${ARGS[@]+"${ARGS[@]}"}"
 
+# ── Poll helper: wait until BAO_ADDR/v1/sys/health returns 200 ───────────────
+_bao_wait() {
+    local msg="$1" ok_msg="$2" err_msg="$3"
+    echo -n "${msg}"
+    for i in $(seq 1 30); do
+        local code
+        code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
+            "${BAO_ADDR}/v1/sys/health" 2>/dev/null || echo "000")
+        if [[ "${code}" == "200" ]]; then
+            echo " ${ok_msg}"
+            return 0
+        fi
+        echo -n "."
+        sleep 2
+        if [[ "${i}" -eq 30 ]]; then
+            echo ""
+            echo "Error: ${err_msg}" >&2
+            exit 1
+        fi
+    done
+}
+
 # ── Auto-start OpenBao stack if unreachable (local host only) ────────────────
 if ! curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
     if [[ -f "${BAO_COMPOSE}" ]]; then
         echo "OpenBao not reachable — starting openbao stack..."
         docker compose -f "${BAO_COMPOSE}" up -d
-        echo -n "Waiting for OpenBao to be ready..."
-        for i in $(seq 1 30); do
-            if curl -sf --max-time 2 "${BAO_ADDR}/v1/sys/health" >/dev/null 2>&1; then
-                echo " ready."
-                break
-            fi
-            echo -n "."
-            sleep 2
-            if [[ "${i}" -eq 30 ]]; then
-                echo ""
-                echo "Error: OpenBao did not become ready in time." >&2
-                exit 1
-            fi
-        done
+        _bao_wait "Waiting for OpenBao to be ready..." "ready." "OpenBao did not become ready in time."
     else
         echo "Error: OpenBao at ${BAO_ADDR} is unreachable." >&2
         exit 1
@@ -73,22 +82,7 @@ fi
 health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
     "${BAO_ADDR}/v1/sys/health" 2>/dev/null || echo "000")
 if [[ "${health_code}" == "503" ]]; then
-    echo -n "OpenBao is sealed, waiting for auto-unseal..."
-    for i in $(seq 1 30); do
-        health_code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 2 \
-            "${BAO_ADDR}/v1/sys/health" 2>/dev/null || echo "000")
-        if [[ "${health_code}" == "200" ]]; then
-            echo " unsealed."
-            break
-        fi
-        echo -n "."
-        sleep 2
-        if [[ "${i}" -eq 30 ]]; then
-            echo ""
-            echo "Error: OpenBao did not unseal in time." >&2
-            exit 1
-        fi
-    done
+    _bao_wait "OpenBao is sealed, waiting for auto-unseal..." "unsealed." "OpenBao did not unseal in time."
 fi
 
 # ── Authenticate with AppRole ─────────────────────────────────────────────────
