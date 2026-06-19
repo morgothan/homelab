@@ -54,7 +54,6 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
     "bazarr":         "https://github.com/morpheus65535/bazarr",
     "nextcloud":      "https://github.com/nextcloud/server",
     "vaultwarden":    "https://github.com/dani-garcia/vaultwarden",
-    "jellyfin":       "https://github.com/jellyfin/jellyfin",
     "home-assistant": "https://github.com/home-assistant/core",
     "homeassistant":  "https://github.com/home-assistant/core",
     "beszel":         "https://github.com/henrygd/beszel",
