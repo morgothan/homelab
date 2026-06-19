@@ -19,7 +19,7 @@ from lib import (
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
-    load_json, save_json, notify_gotify,
+    load_json, save_json, notify_gotify, run_loop,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -665,13 +665,7 @@ async def run() -> None:
 
 
 async def main() -> None:
-    while True:
-        try:
-            await run()
-        except Exception as e:
-            log.error("Run failed: %s", e)
-        log.info("Next run in %ds", UPDATE_INTERVAL)
-        await asyncio.sleep(UPDATE_INTERVAL)
+    await run_loop(run, UPDATE_INTERVAL, log)
 
 
 if __name__ == "__main__":

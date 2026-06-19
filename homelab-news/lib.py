@@ -1559,16 +1559,6 @@ async def check_prometheus() -> dict:
 
 # ── Kopia backup health ───────────────────────────────────────────────────────
 
-def _kopia_ssl_ctx() -> ssl.SSLContext:
-    # Kopia uses a self-signed cert on its WebUI (kopia-webui:5151).
-    # Verification is intentionally disabled: this connection is Docker-internal
-    # on the proxy network only, so MITM risk is negligible.
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
-    return ctx
-
-
 async def check_kopia() -> dict:
     """Query the Kopia WebUI API for backup source health.
 
@@ -1582,7 +1572,10 @@ async def check_kopia() -> dict:
         return out
 
     try:
-        ctx = _kopia_ssl_ctx()
+        # Kopia uses a self-signed cert; connection is Docker-internal only.
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
         async with httpx.AsyncClient(
             verify=ctx, timeout=20, auth=(KOPIA_USER, KOPIA_PASS)
         ) as client:
@@ -1836,6 +1829,20 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         return None
 
 
+def _fmt_section(data: Optional[dict], alerts_hdr: str, info_hdr: Optional[str] = None) -> str:
+    if not data:
+        return ""
+    out: list[str] = []
+    if data.get("alerts"):
+        out.append(alerts_hdr)
+        out.extend(f"  {a}" for a in data["alerts"])
+    if data.get("info"):
+        if info_hdr:
+            out.append(info_hdr)
+        out.extend(f"  {i}" for i in data["info"])
+    return ("\n" + "\n".join(out)) if out else ""
+
+
 async def generate_newspaper(
     docker_issues: list[dict],
     loki_issues: list[dict],
@@ -1891,47 +1898,14 @@ async def generate_newspaper(
 
     lines.append("\n" + _security_prompt_block(bans or [], probes or [], asn_suggestions))
 
-    if prometheus:
-        prom_lines: list[str] = []
-        if prometheus.get("alerts"):
-            prom_lines.append("PROMETHEUS ALERTS:")
-            prom_lines.extend(f"  {a}" for a in prometheus["alerts"])
-        if prometheus.get("info"):
-            prom_lines.append("PROMETHEUS METRICS:")
-            prom_lines.extend(f"  {i}" for i in prometheus["info"])
-        if prom_lines:
-            lines.append("\n" + "\n".join(prom_lines))
-
-    if kopia:
-        kopia_lines: list[str] = []
-        if kopia.get("alerts"):
-            kopia_lines.append("BACKUP ALERTS:")
-            kopia_lines.extend(f"  {a}" for a in kopia["alerts"])
-        if kopia.get("info"):
-            kopia_lines.extend(f"  {i}" for i in kopia["info"])
-        if kopia_lines:
-            lines.append("\n" + "\n".join(kopia_lines))
-
-    if beszel:
-        beszel_lines: list[str] = []
-        if beszel.get("alerts"):
-            beszel_lines.append("HOST ALERTS:")
-            beszel_lines.extend(f"  {a}" for a in beszel["alerts"])
-        if beszel.get("info"):
-            beszel_lines.extend(f"  {i}" for i in beszel["info"])
-        if beszel_lines:
-            lines.append("\n" + "\n".join(beszel_lines))
-
-    if jellystat:
-        jellystat_lines: list[str] = []
-        if jellystat.get("alerts"):
-            jellystat_lines.append("JELLYFIN ALERTS:")
-            jellystat_lines.extend(f"  {a}" for a in jellystat["alerts"])
-        if jellystat.get("info"):
-            jellystat_lines.append("JELLYFIN ACTIVITY:")
-            jellystat_lines.extend(f"  {i}" for i in jellystat["info"])
-        if jellystat_lines:
-            lines.append("\n" + "\n".join(jellystat_lines))
+    for block in [
+        _fmt_section(prometheus, "PROMETHEUS ALERTS:", "PROMETHEUS METRICS:"),
+        _fmt_section(kopia,      "BACKUP ALERTS:"),
+        _fmt_section(beszel,     "HOST ALERTS:"),
+        _fmt_section(jellystat,  "JELLYFIN ALERTS:", "JELLYFIN ACTIVITY:"),
+    ]:
+        if block:
+            lines.append(block)
 
     situation = "\n".join(lines)
     context = _load_context()
@@ -2375,6 +2349,20 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
     })
+
+
+# ── Worker loop helper ───────────────────────────────────────────────────────
+
+async def run_loop(fn, interval: int, log=None) -> None:
+    if log is None:
+        log = logging.getLogger("lab-monitor")
+    while True:
+        try:
+            await fn()
+        except Exception as e:
+            log.error("Run failed: %s", e)
+        log.info("Next run in %ds", interval)
+        await asyncio.sleep(interval)
 
 
 # ── GitHub release notes ──────────────────────────────────────────────────────
@@ -2876,52 +2864,43 @@ def nav_bar(active: str) -> str:
     )
 
 
-def masthead_rolling(now_str: str) -> str:
+def _masthead(subtitle: str, meta: str) -> str:
     return (
         f'<header class="mast"><hr class="rule-dbl">'
         f'<div class="mast-name">{SITE_NAME}</div>'
-        '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
+        f'<div class="mast-sub">{subtitle}</div>'
         '<hr class="rule-sng" style="margin:10px 0">'
-        f'<div class="mast-meta">Generated {_h(now_str)}'
-        f' &nbsp;&middot;&nbsp; Refresh {REFRESH_INTERVAL // 60}m'
-        f' &nbsp;&middot;&nbsp; Log window {LOG_HOURS}h</div>'
+        f'<div class="mast-meta">{meta}</div>'
         '<hr class="rule-sng" style="margin-top:10px"></header>'
+    )
+
+
+def masthead_rolling(now_str: str) -> str:
+    return _masthead(
+        "Homelab Intelligence Dispatch &mdash; Est. 2026",
+        f'Generated {_h(now_str)} &nbsp;&middot;&nbsp; Refresh {REFRESH_INTERVAL // 60}m &nbsp;&middot;&nbsp; Log window {LOG_HOURS}h',
     )
 
 
 def masthead_today() -> str:
     today_str = datetime.now(_ET).strftime("%A, %B %-d, %Y")
-    return (
-        f'<header class="mast"><hr class="rule-dbl">'
-        f'<div class="mast-name">{SITE_NAME}</div>'
-        '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
-        '<hr class="rule-sng" style="margin:10px 0">'
-        f'<div class="mast-meta">Today\'s Edition &mdash; {_h(today_str)}'
-        f' &nbsp;&middot;&nbsp; Updated hourly</div>'
-        '<hr class="rule-sng" style="margin-top:10px"></header>'
+    return _masthead(
+        "Homelab Intelligence Dispatch &mdash; Est. 2026",
+        f"Today's Edition &mdash; {_h(today_str)} &nbsp;&middot;&nbsp; Updated hourly",
     )
 
 
 def masthead_archive(date_str: str) -> str:
-    return (
-        f'<header class="mast"><hr class="rule-dbl">'
-        f'<div class="mast-name">{SITE_NAME}</div>'
-        '<div class="mast-sub">Homelab Intelligence Dispatch &mdash; Est. 2026</div>'
-        '<hr class="rule-sng" style="margin:10px 0">'
-        f'<div class="mast-meta">Edition for {_h(date_str)}</div>'
-        '<hr class="rule-sng" style="margin-top:10px"></header>'
+    return _masthead(
+        "Homelab Intelligence Dispatch &mdash; Est. 2026",
+        f"Edition for {_h(date_str)}",
     )
 
 
 def masthead_wire(checked_at: str) -> str:
-    return (
-        f'<header class="mast"><hr class="rule-dbl">'
-        f'<div class="mast-name">{SITE_NAME}</div>'
-        '<div class="mast-sub">Wire Reports &mdash; Software Intelligence Desk</div>'
-        '<hr class="rule-sng" style="margin:10px 0">'
-        f'<div class="mast-meta">Last checked {_h(checked_at)}'
-        f' &nbsp;&middot;&nbsp; Updates every {UPDATE_INTERVAL // 60}m</div>'
-        '<hr class="rule-sng" style="margin-top:10px"></header>'
+    return _masthead(
+        "Wire Reports &mdash; Software Intelligence Desk",
+        f'Last checked {_h(checked_at)} &nbsp;&middot;&nbsp; Updates every {UPDATE_INTERVAL // 60}m',
     )
 
 

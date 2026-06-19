@@ -5,7 +5,7 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from lib import UPDATE_INTERVAL, TODAY_FILE, run_news_cycle
+from lib import UPDATE_INTERVAL, TODAY_FILE, run_news_cycle, run_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("today")
@@ -20,13 +20,7 @@ async def run() -> None:
 
 
 async def main() -> None:
-    while True:
-        try:
-            await run()
-        except Exception as e:
-            log.error("Run failed: %s", e)
-        log.info("Next run in %ds", UPDATE_INTERVAL)
-        await asyncio.sleep(UPDATE_INTERVAL)
+    await run_loop(run, UPDATE_INTERVAL, log)
 
 
 if __name__ == "__main__":
