@@ -2361,8 +2361,9 @@ async def run_loop(fn, interval: int, log=None) -> None:
             await fn()
         except Exception as e:
             log.error("Run failed: %s", e)
-        log.info("Next run in %ds", interval)
-        await asyncio.sleep(interval)
+        wait = interval - (time.time() % interval)
+        log.info("Next run in %ds", int(wait))
+        await asyncio.sleep(wait)
 
 
 # ── GitHub release notes ──────────────────────────────────────────────────────
