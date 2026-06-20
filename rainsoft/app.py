@@ -281,7 +281,13 @@ async def handle_get_time(request: Request):
     data = parse_body(await request.body())
     log_entry(request.url.path, data)
     track(request.url.path)
-    return JSONResponse({"ts": int(time.time())})
+    ts = int(time.time())
+    # Mirror real server format: echo id/t, wrap time in content.payload
+    return JSONResponse({
+        "content": {"ts": ts, "payload": {"time": ts}},
+        "id": data.get("id", ""),
+        "t": str(ts),
+    })
 
 
 @app.api_route(
