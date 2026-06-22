@@ -9,7 +9,7 @@ services:
 ########## Cloudflare Tunnel
 # Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
-    image: cloudflare/cloudflared:2026.6.0
+    image: cloudflare/cloudflared:2026.6.1
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
@@ -696,7 +696,7 @@ services:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
       - ${DOCKERDIR}/termix:/app/data
-      - /home/nat/docker/termix/backend/users-dist.js:/app/dist/backend/backend/database/routes/users.js:ro
+      - /home/nat/docker/termix/backend/users.js:/app/dist/backend/backend/database/routes/users.js:ro
     environment:
       - PORT=8080
       - OIDC_CLIENT_ID=${TERMIX_OIDC_CLIENT_ID}
