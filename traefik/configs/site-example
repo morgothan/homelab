@@ -14,7 +14,7 @@ http:
         - "https"
       rule: Host(`myservice.yourdomain.com`)
       middlewares:
-        - chain-authelia
+        - chain-authelia-nowaf
       service: "myservice"
 
     # Example: service accessible on local LAN only (no auth)

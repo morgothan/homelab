@@ -63,9 +63,6 @@ LOG_HOURS        = int(os.getenv("LOG_HOURS", "1"))
 DOCKER_AUTH      = os.getenv("DOCKER_AUTH_FILE", "/root/.docker/config.json")
 SKOPEO_TIMEOUT   = int(os.getenv("SKOPEO_TIMEOUT", "20"))
 SITE_NAME        = os.getenv("SITE_NAME", "Homelab News")
-OLLAMA_URL       = os.getenv("OLLAMA_URL", "http://ollama:11434")
-OLLAMA_MODEL     = os.getenv("OLLAMA_MODEL", "gemma4:e4b")
-OLLAMA_API_KEY   = os.getenv("OLLAMA_API_KEY", "")
 VLLM_URL         = os.getenv("VLLM_URL", "")
 VLLM_MODEL       = os.getenv("VLLM_MODEL", "")
 GITHUB_TOKEN     = os.getenv("GITHUB_TOKEN", "")
@@ -83,14 +80,12 @@ JELLYSTAT_KEY    = os.getenv("JELLYSTAT_KEY", "")
 JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "http://plex.iot.hirschnet:8096")
 JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
 
-# Ollama request timeout — generous to survive a full queue at midnight
+# LLM request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
 OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "3600"))
-_OLLAMA_HEADERS: dict = {"Authorization": f"Bearer {OLLAMA_API_KEY}"} if OLLAMA_API_KEY else {}
 
-# Active LLM backend: prefer vLLM if configured, fall back to Ollama
-_LLM_URL   = VLLM_URL   or OLLAMA_URL
-_LLM_MODEL = VLLM_MODEL or OLLAMA_MODEL
+_LLM_URL   = VLLM_URL
+_LLM_MODEL = VLLM_MODEL
 
 DATA_DIR     = os.getenv("DATA_DIR", "/data")
 TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
@@ -1810,7 +1805,7 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         {"role": "user",   "content": user},
     ])
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
@@ -1954,7 +1949,7 @@ async def generate_newspaper(
         {"role": "user",   "content": f"CURRENT HOMELAB STATUS:\n{situation}"},
     ])
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
@@ -2091,7 +2086,7 @@ async def generate_periodic_summary(
         {"role": "user",   "content": json.dumps(sanitized_entries, indent=2)},
     ])
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
@@ -2174,7 +2169,7 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         {"role": "user",   "content": user},
     ])
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
@@ -2258,7 +2253,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         {"role": "user",   "content": f"SOFTWARE UPDATE STATUS:\n{situation}"},
     ])
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT, headers=_OLLAMA_HEADERS) as client:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{_LLM_URL}/v1/chat/completions",
                 json={
