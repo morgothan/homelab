@@ -1,0 +1,6 @@
+http:
+  middlewares:
+    middlewares-seerr-sso:
+      forwardAuth:
+        address: "http://seerr-sso:5056/"
+        trustForwardHeader: true
