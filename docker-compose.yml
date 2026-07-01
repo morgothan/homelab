@@ -214,7 +214,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.42.0
+    image: portainer/portainer-ce:2.43.0
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -284,7 +284,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.0.2
+    image: grafana/grafana:13.1.0
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -391,7 +391,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.6.6
+    image: amir20/dozzle:v10.6.7
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -947,7 +947,7 @@ services:
       - traefik.enable=true
       - traefik.http.routers.overseerr-http.entrypoints=https
       - traefik.http.routers.overseerr-http.rule=Host(`overseerr.${DOMAIN}`)
-      - traefik.http.routers.overseerr-http.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.overseerr-http.middlewares=chain-authelia-nowaf@file,middlewares-seerr-sso@file
       - traefik.http.routers.overseerr-http.service=overseerr
       - traefik.http.routers.overseerr-http.tls.certresolver=letsencrypt
       - traefik.http.routers.overseerr-http.tls.domains[0].main=${DOMAIN}
@@ -957,6 +957,17 @@ services:
       - traefik.http.routers.overseerr-http-local.entrypoints=http
       - traefik.http.routers.overseerr-http-local.rule=Host(`overseerr.${LOCAL}`)
       - traefik.http.routers.overseerr-http-local.service=overseerr
+
+  seerr-sso:
+    build: ./seerr-sso
+    container_name: seerr-sso
+    environment:
+      - SEERR_URL=http://overseerr:5055
+      - SEERR_SSO_USERS=${SEERR_SSO_USERS}
+    networks:
+      - ${DOCKERNET}
+    restart: unless-stopped
+    logging: *logging
 
 
 ########## trigarr  (TODO: currently has hard links to be on http, when it can move to https reset up
@@ -1156,7 +1167,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.19.2 #
+    image: ghcr.io/mealie-recipes/mealie:v3.20.1 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
@@ -1229,9 +1240,6 @@ services:
       - ${USERDIR}/docker/traefik/traefik.yml:/traefik/traefik.yml:ro
     environment:
       - LOKI_URL=${LOKI_URL}
-      - OLLAMA_URL=${OLLAMA_URL}
-      - OLLAMA_MODEL=${OLLAMA_MODEL}
-      - OLLAMA_API_KEY=${OLLAMA_API_KEY}
       - VLLM_URL=${VLLM_URL}
       - VLLM_MODEL=${VLLM_MODEL}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
@@ -1300,7 +1308,6 @@ services:
       - ${DOCKERDIR}/openwebui:/app/backend/data
     environment:
       - OPENAI_API_BASE_URL=http://spark.${LOCAL}:8000/v1
-      - OPENAI_API_KEY=${VLLM_API_KEY}
       - ENABLE_OLLAMA_API=False
       - OAUTH_CLIENT_ID=${OIDC_OPENWEBUI_CLIENT_ID}
       - OAUTH_CLIENT_SECRET=${OPENWEBUI_OIDC_CLIENT_SECRET}
