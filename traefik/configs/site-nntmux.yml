@@ -1,0 +1,21 @@
+http:
+  routers:
+    nntmux-https:
+      entryPoints:
+        - "https"
+      rule: Host(`nntmux.sketchyasfuckistan.net`)
+      middlewares:
+        - chain-authelia-nowaf
+      service: "nntmux"
+      tls:
+        certresolver: letsencrypt
+        domains:
+          - main: "sketchyasfuckistan.net"
+            sans:
+              - "*.sketchyasfuckistan.net"
+
+  services:
+    nntmux:
+      loadBalancer:
+        servers:
+          - url: "http://nntmux.hirschnet/"
