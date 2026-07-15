@@ -14,13 +14,13 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS, SITE_NAME,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
-    IP_INTEL_FILE,
+    IP_INTEL_FILE, LIBRARY_SCAN_FILE,
     _FAVICON_SVG, _CSS,
     load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
-    render_asn_suggestions_html, render_asn_blocklist_html,
+    render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html,
     _render_ban_row,
     log_card, containers_card, updates_card,
 )
@@ -346,6 +346,14 @@ async def api_cs_bans(offset: int = 0):
         "total":    len(cs_bans),
         "has_more": offset + _CS_PAGE < len(cs_bans),
     })
+
+
+@app.get("/entertainment")
+async def entertainment():
+    data = load_json(LIBRARY_SCAN_FILE)
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = masthead_rolling(now_str) + nav_bar("entertainment") + render_library_scan_html(data)
+    return Response(content=page_wrap(body), media_type="text/html; charset=utf-8")
 
 
 @app.get("/detailed")

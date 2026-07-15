@@ -1,0 +1,393 @@
+#!/usr/bin/env python3
+"""
+library-dupe-scan — find mislabeled/duplicate episode files in the Sonarr TV library.
+
+Two checks:
+  1. Audio-language outliers: files missing the series' majority audio
+     language entirely (a file with an extra dub track alongside the
+     expected language is NOT flagged).
+  2. Duplicate-content: two different episodes whose files are actually the
+     same underlying video (a batch-import mixup). Candidates come from
+     Sonarr's 1-second-precision runtime field (adjacent episodes in the
+     same season sharing an exact runtime); confirmed via Jellyfin's
+     pre-generated trickplay thumbnails — a dHash of the 50%-duration tile,
+     then a 3-point (20/50/80%) byte-size fingerprint for any hash match.
+     ffmpeg only ever decodes small trickplay JPEGs on the Jellyfin host
+     itself; the source video files are never read. This is what makes a
+     full-library run take minutes instead of hours.
+
+Nothing is deleted or re-grabbed automatically. Findings are written to a
+report file; only NEW findings (vs. the last run) trigger a Gotify
+notification, so a fix already awaiting manual review doesn't re-alert
+every week.
+
+Required env vars (OpenBao kv/docker/library-dupe-scan):
+  SONARR_URL SONARR_API_KEY JELLYFIN_URL JELLYFIN_API_KEY
+Optional:
+  JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: plex.iot.hirschnet)
+  GOTIFY_URL GOTIFY_TOKEN
+
+Usage:
+  library-dupe-scan             # full scan, write report + state, notify on new findings
+  library-dupe-scan --dry-run   # print report, skip state update and notification
+"""
+import json
+import os
+import statistics
+import subprocess
+import sys
+import urllib.request
+from collections import Counter, defaultdict
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _openbao import fetch_secrets
+
+DRY_RUN = "--dry-run" in sys.argv
+
+BIN_DIR = Path(__file__).resolve().parent
+STATE_FILE = BIN_DIR / ".library-dupe-scan-state.json"
+REPORT_FILE = Path.home() / "logs" / "library-dupe-scan-report.txt"
+JSON_REPORT_FILE = Path("/home/nat/docker/traefik/monitor/library-dupe-scan.json")
+TRICKPLAY_HELPER = BIN_DIR / "_trickplay_hash.py"
+
+cfg = {**os.environ, **fetch_secrets()}
+SONARR_URL = cfg.get("SONARR_URL", "").rstrip("/")
+SONARR_KEY = cfg.get("SONARR_API_KEY", "")
+JELLYFIN_URL = cfg.get("JELLYFIN_URL", "").rstrip("/")
+JELLYFIN_KEY = cfg.get("JELLYFIN_API_KEY", "")
+JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", "plex.iot.hirschnet")
+GOTIFY_URL = cfg.get("GOTIFY_URL", "")
+# GOTIFY_URL from OpenBao is the docker-internal hostname (http://gotify), only
+# reachable from containers on the proxy network. This script runs as a plain
+# host process, so use the LAN-routed Traefik hostname instead.
+if GOTIFY_URL == "http://gotify":
+    GOTIFY_URL = "http://gotify.hirschnet"
+GOTIFY_TOKEN = cfg.get("GOTIFY_TOKEN", "")
+
+
+def log(msg):
+    print(msg, flush=True)
+
+
+def die(msg):
+    log(f"ERROR: {msg}")
+    sys.exit(1)
+
+
+def api_get(base, key, path, params=None):
+    url = f"{base}{path}"
+    if params:
+        qs = "&".join(f"{k}={v}" for k, v in params.items())
+        url = f"{url}?{qs}"
+    req = urllib.request.Request(url, headers={"X-Api-Key": key})
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+
+# ── Sonarr scan (validated logic — see docs/superpowers/plans for history) ──
+
+def parse_runtime(s):
+    if not s:
+        return None
+    parts = [int(p) for p in s.split(":")]
+    while len(parts) < 3:
+        parts.insert(0, 0)
+    h, m, sec = parts
+    return h * 3600 + m * 60 + sec
+
+
+def scan_sonarr():
+    series_list = api_get(SONARR_URL, SONARR_KEY, "/series")
+    dupe_candidates = []
+    lang_flags = []
+
+    for s in series_list:
+        eps = api_get(SONARR_URL, SONARR_KEY, "/episode",
+                       {"seriesId": s["id"], "includeEpisodeFile": "true"})
+        lang_by_file = {}
+        entries = []
+        runtime_groups = defaultdict(list)  # (season, runtime_str) -> [(ep, epFile)]
+
+        for e in eps:
+            if not e.get("hasFile"):
+                continue
+            ef = e.get("episodeFile") or {}
+            fid = ef.get("id")
+            mi = ef.get("mediaInfo") or {}
+            rt_str = mi.get("runTime")
+            actual_sec = parse_runtime(rt_str)
+            if not actual_sec:
+                continue
+            entries.append((e, ef, actual_sec))
+            langs = set(
+                l.strip().lower()
+                for l in (mi.get("audioLanguages") or "").replace(",", "/").split("/")
+                if l.strip()
+            )
+            lang_by_file[fid] = langs or {"unknown"}
+            runtime_groups[(e["seasonNumber"], rt_str)].append((e, ef))
+
+        if len(entries) >= 5:
+            median_sec = statistics.median(a for _, _, a in entries)
+            stdev_sec = statistics.pstdev(a for _, _, a in entries)
+            cv = stdev_sec / median_sec if median_sec else 0
+
+            # Duplicate-content candidates: same-season runtime collisions,
+            # restricted to members that border another member by episode
+            # number (real batch-import mixups involve adjacent episodes;
+            # far-apart matches on long shows are pigeonhole-coincidence noise).
+            if cv >= 0.01:
+                for (season_num, rt_str), group in runtime_groups.items():
+                    if len({ef.get("id") for e, ef in group}) <= 1:
+                        continue
+                    sorted_group = sorted(group, key=lambda pair: pair[0]["episodeNumber"])
+                    ep_nums = [e["episodeNumber"] for e, ef in sorted_group]
+                    adjacent = set()
+                    for i in range(len(ep_nums) - 1):
+                        if ep_nums[i + 1] - ep_nums[i] == 1:
+                            adjacent.add(i)
+                            adjacent.add(i + 1)
+                    if not adjacent:
+                        continue
+                    kept = [sorted_group[i] for i in sorted(adjacent)]
+                    if len({ef.get("id") for e, ef in kept}) <= 1:
+                        continue
+                    dupe_candidates.append({
+                        "series": s["title"], "season": season_num,
+                        "episodes": kept,
+                    })
+
+        if len(lang_by_file) >= 5:
+            lang_counter = Counter()
+            for langs in lang_by_file.values():
+                lang_counter.update(langs)
+            majority_lang, majority_count = lang_counter.most_common(1)[0]
+            if majority_lang != "unknown" and majority_count / len(lang_by_file) >= 0.7:
+                for e, ef, _ in entries:
+                    langs = lang_by_file.get(ef.get("id"), {"unknown"})
+                    if "unknown" in langs or majority_lang in langs:
+                        continue
+                    lang_flags.append({
+                        "series": s["title"], "season": e["seasonNumber"],
+                        "episode": e["episodeNumber"], "title": e.get("title"),
+                        "expected_lang": majority_lang, "actual_lang": "/".join(sorted(langs)),
+                        "path": ef.get("path"),
+                    })
+
+    return dupe_candidates, lang_flags
+
+
+# ── Jellyfin path mapping ────────────────────────────────────────────────
+
+def jellyfin_get(path):
+    req = urllib.request.Request(f"{JELLYFIN_URL}{path}", headers={"X-Emby-Token": JELLYFIN_KEY})
+    return json.loads(urllib.request.urlopen(req, timeout=30).read())
+
+
+def jellyfin_suffix_map():
+    suffix_map = {}
+    start, limit = 0, 2000
+    while True:
+        d = jellyfin_get(
+            f"/Items?IncludeItemTypes=Episode&Recursive=true&Fields=Path"
+            f"&StartIndex={start}&Limit={limit}"
+        )
+        for item in d["Items"]:
+            p = item.get("Path", "")
+            idx = p.find("/TV/")
+            if idx != -1:
+                suffix_map[p[idx + 4:]] = item["Id"]
+        start += limit
+        if start >= d["TotalRecordCount"]:
+            break
+    return suffix_map
+
+
+def to_jellyfin_id(suffix_map, sonarr_path):
+    idx = sonarr_path.find("/TV/")
+    if idx == -1:
+        return None
+    return suffix_map.get(sonarr_path[idx + 4:])
+
+
+# ── Trickplay verification (runs remotely on the Jellyfin host) ─────────
+
+def run_trickplay(mode, items):
+    """items: list of [jellyfin_item_id, label]. Returns {label: result}."""
+    if not items:
+        return {}
+    subprocess.run(
+        ["scp", "-q", str(TRICKPLAY_HELPER), f"nat@{JELLYFIN_SSH_HOST}:/tmp/_trickplay_hash.py"],
+        check=True, timeout=30,
+    )
+    payload = {"token": JELLYFIN_KEY, "items": items}
+    proc = subprocess.run(
+        ["ssh", f"nat@{JELLYFIN_SSH_HOST}", "python3", "/tmp/_trickplay_hash.py", mode],
+        input=json.dumps(payload).encode(), capture_output=True, timeout=1800,
+    )
+    if proc.returncode != 0:
+        log(f"WARNING: trickplay {mode} run failed: {proc.stderr.decode(errors='replace')[:500]}")
+        return {}
+    return json.loads(proc.stdout)
+
+
+def confirm_duplicates(dupe_candidates, suffix_map):
+    """Two-pass trickplay confirmation: dHash first, byte-fingerprint on any match."""
+    path_by_label = {}
+    hash_items = []
+    for cand in dupe_candidates:
+        for e, ef in cand["episodes"]:
+            path = ef.get("path", "")
+            jid = to_jellyfin_id(suffix_map, path)
+            if not jid:
+                continue
+            label = path
+            path_by_label[label] = jid
+            hash_items.append([jid, label])
+
+    if not hash_items:
+        return []
+
+    log(f"Computing trickplay dHash for {len(hash_items)} candidate files...")
+    hashes = run_trickplay("hash", hash_items)
+
+    exact_match_groups = []
+    for cand in dupe_candidates:
+        by_hash = defaultdict(list)
+        for e, ef in cand["episodes"]:
+            path = ef.get("path", "")
+            h = hashes.get(path)
+            if h is None or isinstance(h, str):
+                continue
+            by_hash[h].append((e, ef))
+        for h, members in by_hash.items():
+            if len({ef.get("path") for e, ef in members}) > 1:
+                exact_match_groups.append({**cand, "episodes": members})
+
+    if not exact_match_groups:
+        return []
+
+    fp_items = []
+    for g in exact_match_groups:
+        for e, ef in g["episodes"]:
+            path = ef.get("path", "")
+            jid = path_by_label.get(path)
+            if jid:
+                fp_items.append([jid, path])
+
+    log(f"Byte-fingerprint verification for {len(fp_items)} files...")
+    fingerprints = run_trickplay("fingerprint", fp_items)
+
+    confirmed = []
+    for g in exact_match_groups:
+        by_fp = defaultdict(list)
+        for e, ef in g["episodes"]:
+            path = ef.get("path", "")
+            fp = fingerprints.get(path)
+            if fp is None or isinstance(fp, str):
+                continue
+            by_fp[tuple(fp)].append((e, ef))
+        for fp, members in by_fp.items():
+            distinct_paths = {ef.get("path") for e, ef in members}
+            if len(distinct_paths) > 1:
+                confirmed.append({**g, "episodes": members})
+
+    return confirmed
+
+
+# ── Notification / state diffing ─────────────────────────────────────────
+
+def lang_signature(f):
+    return f"lang:{f['series']}:S{f['season']:02d}E{f['episode']:02d}"
+
+
+def dupe_signature(d):
+    eps = sorted(f"S{e['seasonNumber']:02d}E{e['episodeNumber']:02d}" for e, ef in d["episodes"])
+    return f"dupe:{d['series']}:{'|'.join(eps)}"
+
+
+def notify_gotify(title, message, priority=5):
+    if not GOTIFY_URL or not GOTIFY_TOKEN:
+        log("(Gotify not configured — skipping notification)")
+        return
+    body = json.dumps({"title": title, "message": message, "priority": priority}).encode()
+    req = urllib.request.Request(
+        f"{GOTIFY_URL}/message", data=body, method="POST",
+        headers={"X-Gotify-Key": GOTIFY_TOKEN, "Content-Type": "application/json"},
+    )
+    try:
+        urllib.request.urlopen(req, timeout=10)
+    except Exception as e:
+        log(f"WARNING: Gotify notification failed: {e}")
+
+
+def main():
+    if not all([SONARR_URL, SONARR_KEY, JELLYFIN_URL, JELLYFIN_KEY]):
+        die("missing SONARR_URL / SONARR_API_KEY / JELLYFIN_URL / JELLYFIN_API_KEY "
+            "(add them to OpenBao kv/docker/library-dupe-scan)")
+
+    log("Scanning Sonarr library...")
+    dupe_candidates, lang_flags = scan_sonarr()
+    log(f"{len(dupe_candidates)} same-season runtime-collision groups, "
+        f"{len(lang_flags)} audio-language outliers")
+
+    log("Mapping file paths to Jellyfin library items...")
+    suffix_map = jellyfin_suffix_map()
+
+    confirmed_dupes = confirm_duplicates(dupe_candidates, suffix_map)
+    log(f"{len(confirmed_dupes)} confirmed duplicate-content groups")
+
+    lines = []
+    lines.append(f"=== CONFIRMED DUPLICATE-CONTENT: {len(confirmed_dupes)} ===")
+    for d in confirmed_dupes:
+        eps = ", ".join(f"S{e['seasonNumber']:02d}E{e['episodeNumber']:02d} \"{e.get('title')}\""
+                         for e, ef in d["episodes"])
+        lines.append(f"{d['series']} — {eps}")
+        for e, ef in d["episodes"]:
+            lines.append(f"    {ef.get('path')}")
+
+    lines.append(f"\n=== AUDIO-LANGUAGE OUTLIERS: {len(lang_flags)} ===")
+    for f in lang_flags:
+        lines.append(f"{f['series']} S{f['season']:02d}E{f['episode']:02d} \"{f['title']}\" — "
+                      f"series is mostly {f['expected_lang']}, this file has {f['actual_lang']}")
+        lines.append(f"    {f['path']}")
+
+    report = "\n".join(lines)
+    log("\n" + report)
+
+    if DRY_RUN:
+        return
+
+    REPORT_FILE.parent.mkdir(parents=True, exist_ok=True)
+    REPORT_FILE.write_text(report + "\n")
+
+    JSON_REPORT_FILE.write_text(json.dumps({
+        "generated_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC"),
+        "confirmed_dupes": [
+            {"series": d["series"],
+             "episodes": [{"season": e["seasonNumber"], "episode": e["episodeNumber"],
+                            "title": e.get("title"), "path": ef.get("path")}
+                           for e, ef in d["episodes"]]}
+            for d in confirmed_dupes
+        ],
+        "lang_flags": lang_flags,
+    }, indent=2))
+
+    prev_state = set()
+    if STATE_FILE.exists():
+        prev_state = set(json.loads(STATE_FILE.read_text()))
+
+    cur_state = {dupe_signature(d) for d in confirmed_dupes} | {lang_signature(f) for f in lang_flags}
+    new_findings = cur_state - prev_state
+    STATE_FILE.write_text(json.dumps(sorted(cur_state)))
+
+    if new_findings:
+        msg = f"{len(new_findings)} new finding(s) — see {REPORT_FILE}\n\n" + "\n".join(sorted(new_findings)[:20])
+        notify_gotify("library-dupe-scan: new findings", msg)
+    else:
+        log("No new findings since last run.")
+
+
+if __name__ == "__main__":
+    main()
