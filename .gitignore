@@ -249,3 +249,6 @@ rainsoft/data/
 # cf-poller runtime state (cursor timestamps)
 cf-poller/data/*
 !cf-poller/data/.gitkeep
+
+# library-dupe-scan runtime state (dedup signatures, not source)
+bin/.library-dupe-scan-state.json

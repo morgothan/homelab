@@ -94,6 +94,7 @@ ARCHIVE_FILE = os.path.join(DATA_DIR, "archive.json")
 UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
 PERIODIC_FILE      = os.path.join(DATA_DIR, "periodic.json")
 HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
+LIBRARY_SCAN_FILE  = os.getenv("LIBRARY_SCAN_FILE", "/traefik/monitor/library-dupe-scan.json")
 
 PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
@@ -2853,6 +2854,8 @@ def nav_bar(active: str) -> str:
         + " &nbsp;&middot;&nbsp; "
         + _item("/blotter", "Police Blotter", "blotter")
         + " &nbsp;&middot;&nbsp; "
+        + _item("/entertainment", "Arts &amp; Entertainment", "entertainment")
+        + " &nbsp;&middot;&nbsp; "
         + _item("/archive", "Archive", "archive")
         + " &nbsp;&middot;&nbsp; "
         + _item("/trends", "Trends", "trends")
@@ -3312,6 +3315,66 @@ def render_blotter_html(bans: list[dict], *, collapsed: bool = False, intel: Opt
         f'</div>'
         + entries_html
         + '</div>'
+    )
+
+
+def render_library_scan_html(data: Optional[dict]) -> str:
+    """Render the weekly library-dupe-scan findings (duplicate content + wrong audio language)."""
+    if not data:
+        return (
+            '<div class="np-blotter-page">'
+            '<div class="np-blotter-page-head">Media Library Report</div>'
+            '<div class="np-blotter-empty"><span class="np-pending">No scan has run yet.</span></div>'
+            '</div>'
+        )
+
+    generated_at = data.get("generated_at", "unknown")
+    dupes = data.get("confirmed_dupes", [])
+    langs = data.get("lang_flags", [])
+
+    def _dupe_row(d: dict) -> str:
+        eps = ", ".join(
+            f'S{e["season"]:02d}E{e["episode"]:02d} &ldquo;{_h(e.get("title") or "")}&rdquo;'
+            for e in d["episodes"]
+        )
+        paths = "".join(f'<div class="np-blotter-paths">{_h(p)}</div>' for p in dict.fromkeys(e["path"] for e in d["episodes"]))
+        return (
+            '<div class="np-blotter-item">'
+            f'<span class="np-blotter-cat c-err">{_h(d["series"])}</span>'
+            f'<span class="np-blotter-meta">{eps}</span>'
+            + paths +
+            '</div>'
+        )
+
+    def _lang_row(f: dict) -> str:
+        return (
+            '<div class="np-blotter-item">'
+            f'<span class="np-blotter-cat c-warn">{_h(f["series"])} S{f["season"]:02d}E{f["episode"]:02d}</span>'
+            f'<span class="np-blotter-meta">&ldquo;{_h(f.get("title") or "")}&rdquo;'
+            f' &mdash; expected {_h(f["expected_lang"])}, found {_h(f["actual_lang"])}</span>'
+            f'<div class="np-blotter-paths">{_h(f["path"])}</div>'
+            '</div>'
+        )
+
+    dupes_html = (
+        "".join(_dupe_row(d) for d in dupes)
+        if dupes else '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; None found.</span></div>'
+    )
+    langs_html = (
+        "".join(_lang_row(f) for f in langs)
+        if langs else '<div class="np-blotter-empty"><span class="c-ok">&#x2713;&nbsp; None found.</span></div>'
+    )
+
+    return (
+        '<div class="np-blotter-page">'
+        f'<div class="np-blotter-page-head">Media Library Report'
+        f'<span class="np-blotter-meta" style="margin-left:14px">last scanned {_h(generated_at)}</span>'
+        '</div>'
+        f'<div class="np-blotter-section-head">Duplicate-Content Episodes &mdash; {len(dupes)} group{"s" if len(dupes) != 1 else ""}</div>'
+        + dupes_html +
+        f'<div class="np-blotter-section-head">Wrong Audio-Language Episodes &mdash; {len(langs)} file{"s" if len(langs) != 1 else ""}</div>'
+        + langs_html +
+        '</div>'
     )
 
 
