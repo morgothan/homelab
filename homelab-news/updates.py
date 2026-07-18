@@ -27,6 +27,7 @@ log = logging.getLogger("updates")
 
 _digest_cache: dict = {}
 _source_cache: dict = {}
+_version_cache: dict = {}
 
 # Detects semver-pinned image tags so we can check :latest for update availability.
 # Matches: v3.7.1, 3.7.1, 4.39.20, 2026.5.2, 8.8.0-alpine, etc.
@@ -86,14 +87,15 @@ def _is_new_finding(notified: dict, key: str, now: float) -> bool:
 
 async def _cached_digest(image_ref: str, sem: asyncio.Semaphore):
     if image_ref in _digest_cache:
-        return _digest_cache[image_ref], _source_cache.get(image_ref)
+        return _digest_cache[image_ref], _source_cache.get(image_ref), _version_cache.get(image_ref)
     async with sem:
         if image_ref in _digest_cache:
-            return _digest_cache[image_ref], _source_cache.get(image_ref)
-        digest, source = await remote_digest(image_ref)
+            return _digest_cache[image_ref], _source_cache.get(image_ref), _version_cache.get(image_ref)
+        digest, source, version = await remote_digest(image_ref)
     _digest_cache[image_ref] = digest
     _source_cache[image_ref] = source
-    return digest, source
+    _version_cache[image_ref] = version
+    return digest, source, version
 
 
 async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
@@ -116,16 +118,24 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
         # For semver-pinned tags (e.g. traefik:v3.7.1), check :latest so we detect
         # newer releases even though the pinned tag digest never changes.
         check_ref = _latest_ref(image_ref) or image_ref
-        digest, source = await _cached_digest(check_ref, sem)
+        digest, source, version = await _cached_digest(check_ref, sem)
         if digest is None and check_ref != image_ref:
             # :latest unavailable — fall back to the pinned tag (will always report current)
             log.debug("No :latest for %s, falling back to pinned tag", image_ref)
-            digest, source = await _cached_digest(image_ref, sem)
+            digest, source, version = await _cached_digest(image_ref, sem)
         if digest is None:
             return {"container": c["name"], "image": image_ref, "status": "check_failed"}
         if c["local_digest"] is None:
             return {"container": c["name"], "image": image_ref, "status": "unknown"}
         status = "update_available" if c["local_digest"] != digest else "current"
+        if status == "update_available" and check_ref != image_ref and version:
+            # Registries (esp. Docker Hub) mutate manifest-list digests after publish
+            # (build attestations/SBOMs attached post-push), so a digest mismatch alone
+            # is unreliable here. Trust the :latest image's own version label instead:
+            # if it matches our pinned tag, we're already current.
+            pinned_version = image_ref.rsplit(":", 1)[-1]
+            if version.lstrip("v") == pinned_version.lstrip("v"):
+                status = "current"
         r = {"container": c["name"], "image": image_ref, "status": status}
         if status == "update_available" and source:
             r["_source"] = source
@@ -543,9 +553,10 @@ async def run_homelab_checks() -> dict:
 
 
 async def run() -> None:
-    global _digest_cache, _source_cache
+    global _digest_cache, _source_cache, _version_cache
     _digest_cache = {}
     _source_cache = {}
+    _version_cache = {}
 
     now_ts = datetime.now(timezone.utc).isoformat()
     log.info("Starting update check (Docker + homelab)")
