@@ -2420,8 +2420,14 @@ def parse_image_ref(raw: str) -> str:
     return raw
 
 
-async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str]]:
-    """Return (digest, oci_source_url) for an image, trying auth then no-creds."""
+async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    """Return (digest, oci_source_url, oci_version_label) for an image, trying auth then no-creds.
+
+    Registries (esp. Docker Hub) mutate the manifest-list digest after the fact when they
+    attach build attestations/SBOMs to an already-published tag — same content, new digest.
+    That makes digest equality unreliable as the sole "is there a newer version" signal, so
+    callers should prefer the version label when the registry provides one.
+    """
     has_auth = os.path.exists(DOCKER_AUTH)
     attempts = [["--authfile", DOCKER_AUTH]] if has_auth else []
     attempts.append(["--no-creds"])
@@ -2439,7 +2445,8 @@ async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str]]:
                 data = json.loads(out)
                 labels = data.get("Labels") or {}
                 source = labels.get("org.opencontainers.image.source")
-                return data.get("Digest"), source
+                version = labels.get("org.opencontainers.image.version")
+                return data.get("Digest"), source, version
         except Exception:
             if proc is not None:
                 try:
@@ -2447,7 +2454,7 @@ async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str]]:
                     await proc.communicate()
                 except Exception:
                     pass
-    return None, None
+    return None, None, None
 
 
 def get_containers_local() -> list[dict]:
