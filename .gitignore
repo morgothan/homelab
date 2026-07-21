@@ -227,15 +227,8 @@ docker-compose.override.yml
 CLAUDE.md
 
 # Homelab docs (contain API keys in sync script)
+# Superpowers plans/specs also excluded — they've leaked real LAN IPs/hostnames when committed
 docs/*
-!docs/superpowers/
-docs/superpowers/*
-!docs/superpowers/specs/
-docs/superpowers/specs/*
-!docs/superpowers/specs/*.md
-!docs/superpowers/plans/
-docs/superpowers/plans/*
-!docs/superpowers/plans/*.md
 
 # WAF site-specific exclusions (contain hostnames)
 waf/LOCAL-EXCLUSIONS.conf
