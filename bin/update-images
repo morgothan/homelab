@@ -10,11 +10,13 @@ Usage:
   bin/update-images              # interactive: show changes, prompt to apply
   bin/update-images --dry-run    # check only, no changes
   bin/update-images --yes        # skip confirmation prompt
+  bin/update-images --all        # also update beszel/whisper/spark/sketchy-nas over SSH
 """
 
 import argparse
 import asyncio
 import json
+import platform
 import re
 import subprocess
 import sys
@@ -30,6 +32,12 @@ COMPOSE_FILES = [
 
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+")
 _SEM_SIZE = 6  # concurrent skopeo requests
+
+# Remote hosts with their own ~/docker/dc.sh stack — updated via `--all`
+REMOTE_DC_HOSTS = ["beszel.hirschnet", "whisper.hirschnet", "spark.hirschnet"]
+REMOTE_DC_CMD = "cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa"
+SKETCHY_NAS_HOST = "sketchy-nas.hirschnet"
+SKETCHY_NAS_CMD = "~/docker-update.sh"
 
 
 # ── sort / pattern helpers ─────────────────────────────────────────────────────
@@ -113,6 +121,28 @@ async def _remote_digest(ref: str, sem: asyncio.Semaphore) -> Optional[str]:
                 return json.loads(out).get("Digest")
             except json.JSONDecodeError:
                 return None
+    # Fallback for multi-arch images where skopeo can't resolve the host platform
+    # (e.g. owasp/modsecurity-crs:nginx-alpine): parse the raw manifest index and
+    # return the best available platform digest.
+    host_arch = {"x86_64": "amd64"}.get(platform.machine(), platform.machine())
+    for flags in (["--no-creds"], []):
+        out, _ = await _skopeo_run(["skopeo", "inspect", "--raw", *flags, f"docker://{ref}"], sem)
+        if out is not None:
+            try:
+                manifests = json.loads(out).get("manifests", [])
+                first = None
+                for m in manifests:
+                    p = m.get("platform", {})
+                    d = m.get("digest")
+                    if first is None:
+                        first = d
+                    if p.get("architecture") == host_arch and p.get("os") == "linux":
+                        return d
+                if first:
+                    return first  # ponytail: best-effort; no exact arch match
+            except (json.JSONDecodeError, KeyError):
+                pass
+            break
     print(f"  [warn] skopeo inspect {ref}: {last_err}", file=sys.stderr)
     return None
 
@@ -410,6 +440,22 @@ def _run(cmd: list, check: bool = True) -> int:
     return result.returncode
 
 
+# ── remote hosts (--all) ───────────────────────────────────────────────────────
+
+def _update_remote_hosts() -> None:
+    """SSH into each remote host and run its own pull/up/prune (or update script)."""
+    failed = []
+    for host in REMOTE_DC_HOSTS:
+        print(f"\n=== {host} ===")
+        if _run(["ssh", f"nat@{host}", REMOTE_DC_CMD], check=False) != 0:
+            failed.append(host)
+    print(f"\n=== {SKETCHY_NAS_HOST} ===")
+    if _run(["ssh", f"nat@{SKETCHY_NAS_HOST}", SKETCHY_NAS_CMD], check=False) != 0:
+        failed.append(SKETCHY_NAS_HOST)
+    if failed:
+        print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
+
+
 # ── entry point ────────────────────────────────────────────────────────────────
 
 def main() -> None:
@@ -420,6 +466,8 @@ def main() -> None:
                         help="check only, make no changes")
     parser.add_argument("--yes", "-y", action="store_true",
                         help="skip confirmation prompt")
+    parser.add_argument("--all", "-a", action="store_true",
+                        help="also update beszel/whisper/spark/sketchy-nas over SSH")
     args = parser.parse_args()
 
     results        = asyncio.run(_check_all())
@@ -460,21 +508,33 @@ def main() -> None:
         f"{n_builds} local rebuild(s)."
     )
 
-    if total == 0 or args.dry_run:
-        if args.dry_run and total:
+    if args.dry_run:
+        if total:
             print("Dry run — no changes made.")
+        if args.all:
+            print(f"Dry run — would also update: {', '.join(REMOTE_DC_HOSTS + [SKETCHY_NAS_HOST])}")
+        return
+
+    if total == 0 and not args.all:
         return
 
     # ── confirm ────────────────────────────────────────────────────────────────
     if not args.yes:
+        prompt = "\nApply all updates, rebuild, redeploy, and prune"
+        prompt += " (then update beszel/whisper/spark/sketchy-nas over SSH)" if args.all else ""
+        prompt += "? [y/N] "
         try:
-            resp = input("\nApply all updates, rebuild, redeploy, and prune? [y/N] ").strip().lower()
+            resp = input(prompt).strip().lower()
         except (EOFError, KeyboardInterrupt):
             print("\nAborted.")
             return
         if resp != "y":
             print("Aborted.")
             return
+
+    if total == 0:
+        _update_remote_hosts()
+        return
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
     openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
@@ -533,6 +593,9 @@ def main() -> None:
     # aren't referenced by running containers, causing false-positive stale
     # detection on the next run.
     _run(["docker", "system", "prune", "-f"])
+
+    if args.all:
+        _update_remote_hosts()
 
     print("\nDone.")
 
