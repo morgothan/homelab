@@ -133,7 +133,9 @@ if [[ "${FULL}" == "true" && "${1:-}" == "down" ]]; then
     docker compose -f "${BAO_COMPOSE}" down
 elif [[ "${1:-}" == "pull" ]]; then
     docker compose "$@"
-    [[ -f "${BAO_COMPOSE}" ]] && docker compose -f "${BAO_COMPOSE}" pull
+    if [[ -f "${BAO_COMPOSE}" ]]; then
+        docker compose -f "${BAO_COMPOSE}" pull
+    fi
 else
     exec docker compose "$@"
 fi
