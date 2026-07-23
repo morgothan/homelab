@@ -10,7 +10,7 @@ Usage:
   bin/update-images              # interactive: show changes, prompt to apply
   bin/update-images --dry-run    # check only, no changes
   bin/update-images --yes        # skip confirmation prompt
-  bin/update-images --all        # also update beszel/whisper/spark/sketchy-nas over SSH
+  bin/update-images --all        # also update beszel/whisper/spark/sketchy-nas/nntmux over SSH
 """
 
 import argparse
@@ -38,6 +38,13 @@ REMOTE_DC_HOSTS = ["beszel.hirschnet", "whisper.hirschnet", "spark.hirschnet"]
 REMOTE_DC_CMD = "cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa"
 SKETCHY_NAS_HOST = "sketchy-nas.hirschnet"
 SKETCHY_NAS_CMD = "~/docker-update.sh"
+
+# nntmux LXC (CT 106) has no direct SSH — must go through pve.hirschnet's pct exec.
+NNTMUX_HOST = "pve.hirschnet"
+NNTMUX_CMD = (
+    "sudo -n /usr/sbin/pct exec 106 -- bash -c "
+    "'cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa'"
+)
 
 
 # ── sort / pattern helpers ─────────────────────────────────────────────────────
@@ -452,6 +459,9 @@ def _update_remote_hosts() -> None:
     print(f"\n=== {SKETCHY_NAS_HOST} ===")
     if _run(["ssh", f"nat@{SKETCHY_NAS_HOST}", SKETCHY_NAS_CMD], check=False) != 0:
         failed.append(SKETCHY_NAS_HOST)
+    print("\n=== nntmux.hirschnet (via pve pct exec) ===")
+    if _run(["ssh", NNTMUX_HOST, NNTMUX_CMD], check=False) != 0:
+        failed.append("nntmux.hirschnet")
     if failed:
         print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
 
@@ -467,7 +477,7 @@ def main() -> None:
     parser.add_argument("--yes", "-y", action="store_true",
                         help="skip confirmation prompt")
     parser.add_argument("--all", "-a", action="store_true",
-                        help="also update beszel/whisper/spark/sketchy-nas over SSH")
+                        help="also update beszel/whisper/spark/sketchy-nas/nntmux over SSH")
     args = parser.parse_args()
 
     results        = asyncio.run(_check_all())
@@ -512,7 +522,7 @@ def main() -> None:
         if total:
             print("Dry run — no changes made.")
         if args.all:
-            print(f"Dry run — would also update: {', '.join(REMOTE_DC_HOSTS + [SKETCHY_NAS_HOST])}")
+            print(f"Dry run — would also update: {', '.join(REMOTE_DC_HOSTS + [SKETCHY_NAS_HOST, 'nntmux.hirschnet'])}")
         return
 
     if total == 0 and not args.all:
@@ -521,7 +531,7 @@ def main() -> None:
     # ── confirm ────────────────────────────────────────────────────────────────
     if not args.yes:
         prompt = "\nApply all updates, rebuild, redeploy, and prune"
-        prompt += " (then update beszel/whisper/spark/sketchy-nas over SSH)" if args.all else ""
+        prompt += " (then update beszel/whisper/spark/sketchy-nas/nntmux over SSH)" if args.all else ""
         prompt += "? [y/N] "
         try:
             resp = input(prompt).strip().lower()
