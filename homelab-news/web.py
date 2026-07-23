@@ -22,7 +22,7 @@ from lib import (
     render_articles_html, render_blotter_html, render_blotter_skeleton,
     render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html,
     _render_ban_row,
-    log_card, containers_card, updates_card,
+    log_card, containers_card, updates_card, update_howto,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -229,7 +229,8 @@ async def wire_reports():
     # Source status grid
     source_rows: list[str] = []
     for key, src in sources.items():
-        lbl    = _h(src.get("label", key))
+        raw_label = src.get("label", key)
+        lbl    = _h(raw_label)
         status = src.get("status", "unknown")
         updates = src.get("updates", [])
         ts_str  = src.get("ts", "")
@@ -248,9 +249,11 @@ async def wire_reports():
         else:
             row_body = '<span class="c-ok">&#x2713; current</span>'
 
+        lbl_cls = "c-gold has-tip" if updates else "c-gold"
+        tip_attr = f' data-tip="{_h(update_howto(source_label=raw_label))}"' if updates else ""
         source_rows.append(
             '<div class="upd">'
-            f'<span class="c-gold">{lbl}'
+            f'<span class="{lbl_cls}"{tip_attr}>{lbl}'
             + (f'<span class="c-dim" style="font-size:11px"> &mdash; {ts_disp}</span>' if ts_disp else '')
             + f'</span>{row_body}</div>'
         )
@@ -263,9 +266,10 @@ async def wire_reports():
             continue
         for r in available[:5]:
             ver = f" &#x2192; {_h(r['new_version'])}" if r.get("new_version") else ""
+            tip = _h(update_howto(container=r["container"], host=label))
             docker_rows.append(
                 '<div class="upd">'
-                f'<span class="c-blue">{_h(label)}/{_h(r["container"])}</span>'
+                f'<span class="c-blue has-tip" data-tip="{tip}">{_h(label)}/{_h(r["container"])}</span>'
                 f'<span class="c-dim">{_h(r["image"])}{ver}</span>'
                 '</div>'
             )
