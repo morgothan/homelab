@@ -9,7 +9,7 @@ services:
 ########## Cloudflare Tunnel
 # Connects to Cloudflare Zero Trust — routes all external HTTPS traffic to this host
   tunnel:
-    image: cloudflare/cloudflared:2026.6.1
+    image: cloudflare/cloudflared:2026.7.2
     container_name: cf_tunnel
     restart: unless-stopped
     logging: *logging
@@ -25,7 +25,7 @@ services:
 ########## Traefik
 # Reverse proxy and SSL termination for all services
   traefik:
-    image: traefik:v3.7.5
+    image: traefik:v3.7.8
     container_name: traefik
     restart: always
     logging: *logging
@@ -241,7 +241,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:v3.12.0
+    image: prom/prometheus:v3.13.1
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -284,7 +284,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.1.0
+    image: grafana/grafana:13.1.1
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -391,7 +391,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.6.7
+    image: amir20/dozzle:v10.6.11
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -553,6 +553,8 @@ services:
       - OIDC_OPENBAO_CLIENT_SECRET
       - OIDC_JELLYFIN_CLIENT_ID
       - OIDC_JELLYFIN_CLIENT_SECRET
+      - OIDC_HERMES_CLIENT_ID
+      - OIDC_HERMES_CLIENT_SECRET
     secrets:
       - authelia_jwt_secret
       - authelia_storage_encryption_key
@@ -670,7 +672,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.86.0
+    image: oliver006/redis_exporter:v1.87.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -751,7 +753,7 @@ services:
 ########## Gotify
 # Push notification server — receives Docker image update alerts from Diun
   gotify:
-    image: gotify/server:2.9.1
+    image: gotify/server:3.0.0
     restart: unless-stopped
     logging: *logging
     container_name: gotify
