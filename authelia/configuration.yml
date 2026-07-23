@@ -349,6 +349,25 @@ identity_providers:
         claims_policy: 'default'
 
 
+############ Hermes Dashboard #####################
+
+      - client_id: '{{ env "OIDC_HERMES_CLIENT_ID" }}'
+        client_name: 'Hermes Dashboard'
+        client_secret: '{{ env "OIDC_HERMES_CLIENT_SECRET" }}'
+        public: false
+        authorization_policy: 'two_factor'
+        require_pkce: true
+        pkce_challenge_method: 'S256'
+        redirect_uris:
+          - 'https://hermes.{{ env "DOMAIN" }}/auth/callback'
+        scopes:
+          - 'openid'
+          - 'profile'
+          - 'email'
+        userinfo_signed_response_alg: 'none'
+        token_endpoint_auth_method: 'client_secret_basic'
+
+
 ############ outline #####################
 
       - client_id: '{{ env "OIDC_OUTLINE_CLIENT_ID" }}'
