@@ -7,17 +7,21 @@ app = Flask(__name__)
 SEERR_URL = os.environ["SEERR_URL"]
 USERS = json.loads(os.environ["SEERR_SSO_USERS"])  # {"email": "password"}
 
+# ponytail: email→sid cache; resets on container restart which triggers re-auth (acceptable)
+_sessions: dict[str, str] = {}
+
 
 @app.route("/", defaults={"path": ""})
 @app.route("/<path:path>")
 def check(path):
-    if "connect.sid" in request.cookies:
-        return "", 200
-
     email = request.headers.get("Remote-Email", "")
     password = USERS.get(email)
     if not password:
         return "Unauthorized", 401
+
+    sid = request.cookies.get("connect.sid")
+    if sid and _sessions.get(email) == sid:
+        return "", 200
 
     try:
         resp = requests.post(
@@ -31,13 +35,18 @@ def check(path):
     if resp.status_code != 200:
         return "Login failed", 401
 
+    cookie = resp.headers.get("Set-Cookie", "")
+    for part in cookie.split(";"):
+        if part.strip().startswith("connect.sid="):
+            _sessions[email] = part.strip().split("=", 1)[1]
+            break
+
     proto = request.headers.get("X-Forwarded-Proto", "https")
     host = request.headers.get("X-Forwarded-Host", "")
     uri = request.headers.get("X-Forwarded-Uri", "/")
 
     r = make_response("", 302)
     r.headers["Location"] = f"{proto}://{host}{uri}"
-    cookie = resp.headers.get("Set-Cookie")
     if cookie:
         r.headers["Set-Cookie"] = cookie
     return r
