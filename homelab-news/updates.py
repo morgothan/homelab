@@ -17,7 +17,7 @@ from lib import (
     JELLYFIN_URL, JELLYFIN_KEY,
     HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST,
     remote_digest, parse_image_ref,
-    get_containers_local, get_containers_tcp, get_containers_ssh,
+    get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
     load_json, save_json, notify_gotify, run_loop,
 )
@@ -59,6 +59,7 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
     "homeassistant":  "https://github.com/home-assistant/core",
     "beszel":         "https://github.com/henrygd/beszel",
     "ollama":         "https://github.com/ollama/ollama",
+    "vllm":           "https://github.com/vllm-project/vllm",
     "truenas":        None,
     # Traefik plugins (keyed by moduleName path)
     "madebymode/traefik-modsecurity-plugin":       "https://github.com/madebymode/traefik-modsecurity-plugin",
@@ -105,6 +106,9 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
             containers = await loop.run_in_executor(None, get_containers_local)
         elif url.startswith("ssh://"):
             containers = await get_containers_ssh(url)
+        elif url.startswith("pct://"):
+            pve_host, ctid = url[len("pct://"):].split("/", 1)
+            containers = await get_containers_pct(pve_host, ctid)
         else:
             containers = await loop.run_in_executor(None, get_containers_tcp, url)
     except Exception as e:
@@ -409,6 +413,38 @@ async def check_beszel_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
+async def check_vllm_update() -> dict:
+    """Check installed vLLM version (native uv venv on spark) against latest GitHub release."""
+    label = "vLLM"
+    ts = datetime.now(timezone.utc).isoformat()
+    if not SPARK_SSH_HOST:
+        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
+    ok, out = await _ssh_run(
+        SPARK_SSH_HOST,
+        "~/venvs/vllm025/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
+        timeout=20,
+    )
+    if not ok or not out.strip():
+        return {"label": label, "status": "error", "ts": ts,
+                "error": "could not read vLLM version", "updates": []}
+    current_version = out.strip()
+
+    release = await fetch_github_release_notes("https://github.com/vllm-project/vllm")
+    latest_tag = release[0] if release else None
+    new_version = (latest_tag or "").lstrip("v")
+
+    updates = []
+    if new_version and new_version != current_version.lstrip("v"):
+        updates.append({
+            "app":             "vllm",
+            "current_version": current_version,
+            "new_version":     new_version,
+        })
+    log.info("vLLM: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
+    return {"label": label, "status": "done", "ts": ts,
+            "current_version": current_version, "updates": updates}
+
+
 async def check_spark_apt() -> dict:
     """Check DGX Spark for available apt upgrades (NVIDIA drivers, CUDA, system packages)."""
     label = "DGX Spark"
@@ -530,6 +566,7 @@ async def run_homelab_checks() -> dict:
         check_homeassistant_update(),
         check_truenas_update(),
         check_beszel_update(),
+        check_vllm_update(),
         check_spark_apt(),
         check_traefik_plugins(),
         return_exceptions=True,
@@ -541,7 +578,7 @@ async def run_homelab_checks() -> dict:
         ["proxmox"]
         + [_key(label) for _, label in ADGUARD_URLS]
         + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel",
-           "dgx_spark", "traefik_plugins"]
+           "vllm", "dgx_spark", "traefik_plugins"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
@@ -564,6 +601,9 @@ async def run() -> None:
     host_specs = [("local", "local")] + list(REMOTE_HOSTS)
     if SPARK_SSH_HOST:
         host_specs.append(("spark", f"ssh://{SPARK_SSH_HOST}"))
+    if PVE_SSH_HOST:
+        # nntmux LXC (CT 106) has no direct SSH — relayed via pve pct exec, see get_containers_pct.
+        host_specs.append(("nntmux", f"pct://{PVE_SSH_HOST}/106"))
 
     # Docker image checks and homelab checks run concurrently
     docker_coros = [_check_host(label, url, sem) for label, url in host_specs]
