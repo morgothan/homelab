@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import shlex
 import ssl
 import time
 from collections import defaultdict
@@ -2490,36 +2491,18 @@ def get_containers_tcp(url: str) -> list[dict]:
     return out
 
 
-async def get_containers_ssh(url: str) -> list[dict]:
-    target = url[len("ssh://"):]
-    detect_cmd = (
-        "docker_bin=$(which docker 2>/dev/null || "
-        "for p in /usr/local/bin/docker /usr/bin/docker; do [ -x $p ] && echo $p && break; done); "
-        r'$docker_bin ps --format "{{.Names}}\t{{.Image}}" 2>/dev/null | '
-        r"while IFS=$(printf '\t') read name image; do "
-        r'  digests=$($docker_bin image inspect "$image" --format "{{json .RepoDigests}}" 2>/dev/null || echo "[]"); '
-        r'  printf "%s\t%s\t%s\n" "$name" "$image" "$digests"; '
-        r"done"
-    )
-    proc = await asyncio.create_subprocess_exec(
-        "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-        "-i", SSH_KEY, target, detect_cmd,
-        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=40)
-    except asyncio.TimeoutError:
-        if proc.returncode is None:
-            try:
-                proc.kill()
-                await proc.communicate()
-            except Exception:
-                pass
-        return []
-    if proc.returncode != 0:
-        log.warning("SSH to %s failed: %s", target, err.decode(errors="replace")[:200])
-        return []
+_DETECT_CONTAINERS_CMD = (
+    "docker_bin=$(which docker 2>/dev/null || "
+    "for p in /usr/local/bin/docker /usr/bin/docker; do [ -x $p ] && echo $p && break; done); "
+    r'$docker_bin ps --format "{{.Names}}\t{{.Image}}" 2>/dev/null | '
+    r"while IFS=$(printf '\t') read name image; do "
+    r'  digests=$($docker_bin image inspect "$image" --format "{{json .RepoDigests}}" 2>/dev/null || echo "[]"); '
+    r'  printf "%s\t%s\t%s\n" "$name" "$image" "$digests"; '
+    r"done"
+)
+
+
+def _parse_container_ls(out: bytes) -> list[dict]:
     containers = []
     for line in out.decode(errors="replace").splitlines():
         parts = line.strip().split("\t", 2)
@@ -2534,6 +2517,50 @@ async def get_containers_ssh(url: str) -> list[dict]:
             local_digest = None
         containers.append({"name": name, "image": parse_image_ref(image), "local_digest": local_digest})
     return containers
+
+
+async def _run_ssh_detect(argv: list[str], desc: str) -> list[dict]:
+    proc = await asyncio.create_subprocess_exec(
+        *argv, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        out, err = await asyncio.wait_for(proc.communicate(), timeout=40)
+    except asyncio.TimeoutError:
+        if proc.returncode is None:
+            try:
+                proc.kill()
+                await proc.communicate()
+            except Exception:
+                pass
+        return []
+    if proc.returncode != 0:
+        log.warning("SSH to %s failed: %s", desc, err.decode(errors="replace")[:200])
+        return []
+    return _parse_container_ls(out)
+
+
+async def get_containers_ssh(url: str) -> list[dict]:
+    target = url[len("ssh://"):]
+    argv = [
+        "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+        "-i", SSH_KEY, target, _DETECT_CONTAINERS_CMD,
+    ]
+    return await _run_ssh_detect(argv, target)
+
+
+async def get_containers_pct(host: str, ctid: str) -> list[dict]:
+    """Like get_containers_ssh, but for an LXC with no direct SSH access — relays
+    through the Proxmox host's `pct exec` (same pattern as bin/update-images'
+    NNTMUX_CMD). shlex.quote handles the nested-quoting since _DETECT_CONTAINERS_CMD
+    itself contains single quotes."""
+    relay_cmd = f"sudo -n /usr/sbin/pct exec {ctid} -- bash -c {shlex.quote(_DETECT_CONTAINERS_CMD)}"
+    argv = [
+        "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
+        "-i", SSH_KEY, host, relay_cmd,
+    ]
+    return await _run_ssh_detect(argv, f"pct/{ctid}@{host}")
 
 # ── HTML rendering ────────────────────────────────────────────────────────────
 
@@ -2767,7 +2794,9 @@ details.np-section[open] > summary::after { content: " ▴"; }
   line-height: 1.7;
   padding: 7px 12px;
   border-radius: 4px;
-  white-space: pre;
+  white-space: pre-wrap;
+  max-width: 340px;
+  width: max-content;
   pointer-events: none;
   opacity: 0;
   transition: opacity 0.15s;
@@ -3011,6 +3040,50 @@ def containers_card(unhealthy: list, starting: list, n_running: int) -> str:
     )
 
 
+# Per-host mapping for Docker-based updates: label (as reported by _check_host) -> FQDN
+# running this repo's dc.sh wrapper. Hosts not listed here aren't managed by this repo.
+_DC_SH_HOSTS = {
+    "local": "traefik.hirschnet",
+    "spark": "spark.hirschnet",
+}
+
+# Non-Docker update sources (see updates.py check_* functions) -> how to actually apply them.
+_SOURCE_HOWTO = {
+    "Proxmox VE":      "SSH to the Proxmox host: apt update && apt upgrade -y "
+                        "(hypervisor — do this in a maintenance window)",
+    "Primary DNS":     "AdGuard Home UI → Settings → General → Check for updates (self-updates in place)",
+    "Kids DNS":        "AdGuard Home UI → Settings → General → Check for updates (self-updates in place)",
+    "Jellyfin":        "Jellyfin Dashboard → General → Check for updates (not managed by this repo)",
+    "TrueNAS Apps":    'TrueNAS UI → Apps → Update, or over SSH: midclt call app.upgrade \'["<app>"]\'',
+    "TrueNAS Scale":   "TrueNAS UI → System → Update (reboots the NAS), or: midclt call update.update",
+    "Home Assistant":  "HA UI → Settings → System → Updates → Update",
+    "Beszel":          "SSH to the Beszel host: docker compose pull beszel && docker compose up -d beszel",
+    "vLLM":            "SSH to spark.hirschnet: source ~/venvs/vllm025/bin/activate && pip install -U vllm, "
+                        "then: systemctl --user restart vllm. Re-check ~/bin/start-vllm.sh flags "
+                        "(e.g. --gpu-memory-utilization) still apply after the version bump.",
+    "DGX Spark":       "SSH to spark.hirschnet: sudo apt update && sudo apt upgrade "
+                        "(NVIDIA driver/CUDA packages — review before rebooting)",
+    "Traefik Plugins": "Bump the version: field for the plugin in traefik/traefik.yml, "
+                        "then: ./dc.sh restart traefik",
+}
+
+
+def update_howto(*, container: str = "", host: str = "", source_label: str = "") -> str:
+    """Tooltip text explaining how to actually apply a given update."""
+    if source_label:
+        return _SOURCE_HOWTO.get(
+            source_label,
+            f"Update via {source_label}'s own admin UI/CLI — not orchestrated by this repo.",
+        )
+    fqdn = _DC_SH_HOSTS.get(host)
+    if fqdn:
+        return f"On {fqdn}: ./dc.sh pull {container} && ./dc.sh up -d {container}"
+    if host == "nntmux":
+        return ("No direct SSH to the nntmux LXC — via pve.hirschnet: sudo pct exec 106 -- "
+                f"bash -c 'cd ~/docker && ./dc.sh pull {container} && ./dc.sh up -d {container}'")
+    return f"SSH to {host} and update via its own docker workflow — not part of this repo's compose stack."
+
+
 def updates_card(update_hosts: dict) -> str:
     if not update_hosts:
         body = '<span class="c-dim">No update data yet — check running.</span>'
@@ -3042,9 +3115,10 @@ def updates_card(update_hosts: dict) -> str:
             for r in available:
                 new_ver = r.get("new_version", "")
                 tag_html = f'<span class="changelog-tag">&#x2192; {_h(new_ver)}</span>' if new_ver else ""
+                tip = _h(update_howto(container=r["container"], host=label))
                 rows.append(
                     '<div class="upd">'
-                    f'<span class="c-blue">{_h(r["container"])}</span>'
+                    f'<span class="c-blue has-tip" data-tip="{tip}">{_h(r["container"])}</span>'
                     f'<span class="c-dim">{_h(r["image"])}{tag_html}</span></div>'
                 )
                 cl = r.get("changelog_analysis")
