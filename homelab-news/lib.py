@@ -88,6 +88,10 @@ OLLAMA_TIMEOUT = int(os.getenv("OLLAMA_TIMEOUT", "3600"))
 _LLM_URL   = VLLM_URL
 _LLM_MODEL = VLLM_MODEL
 
+HINDSIGHT_URL     = os.getenv("HINDSIGHT_URL", "")
+HINDSIGHT_BANK    = os.getenv("HINDSIGHT_BANK", "homelab_news")
+HINDSIGHT_TIMEOUT = int(os.getenv("HINDSIGHT_TIMEOUT", "30"))
+
 DATA_DIR     = os.getenv("DATA_DIR", "/data")
 TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
 ROLLING_FILE = os.path.join(DATA_DIR, "rolling.json")
@@ -138,6 +142,56 @@ def _load_context() -> str:
     except Exception as e:
         log.warning("Could not read context.md: %s", e)
         return ""
+
+
+async def hindsight_recall(query: str, max_tokens: int = 600) -> str:
+    """Recall relevant past homelab-news memories for use as LLM context.
+
+    Best-effort — returns "" if Hindsight is unconfigured or unreachable so
+    callers can always fall back to no recall.
+    """
+    if not HINDSIGHT_URL or not query:
+        return ""
+    try:
+        async with httpx.AsyncClient(timeout=HINDSIGHT_TIMEOUT) as client:
+            resp = await client.post(
+                f"{HINDSIGHT_URL}/v1/default/banks/{HINDSIGHT_BANK}/memories/recall",
+                json={
+                    "query": _sanitize_for_llm(query, max_len=2000),
+                    "budget": "low",
+                    "max_tokens": max_tokens,
+                },
+            )
+            resp.raise_for_status()
+            results = resp.json().get("results", [])
+            return "\n".join(f"- {r['text']}" for r in results if r.get("text"))
+    except Exception as e:
+        log.warning("Hindsight recall failed: %s", e)
+        return ""
+
+
+async def hindsight_retain_newspaper(date_str: str, articles: list[dict]) -> None:
+    """Fire-and-forget: store a day's newspaper articles as memories for future recall."""
+    if not HINDSIGHT_URL or not articles:
+        return
+    items = [
+        {
+            "content":     f"{a['headline']}. {a['blurb']}",
+            "context":     a.get("section", "City Hall"),
+            "document_id": f"newspaper_{date_str}_{i}",
+            "timestamp":   f"{date_str}T12:00:00Z",
+        }
+        for i, a in enumerate(articles)
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=HINDSIGHT_TIMEOUT) as client:
+            resp = await client.post(
+                f"{HINDSIGHT_URL}/v1/default/banks/{HINDSIGHT_BANK}/memories",
+                json={"items": items, "async": True},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        log.warning("Hindsight retain failed for %s: %s", date_str, e)
 
 
 async def enrich_ips(
@@ -1795,9 +1849,13 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         for i in ranked
     ]
     ctx = _load_context()
+    recalled = await hindsight_recall(
+        context + "\n" + "\n".join(i["message"] for i in sanitized_issues[:5])
+    )
     system = (
         "Homelab log analysis."
         + (f"\n\nHOMELAB CONTEXT:\n{ctx}" if ctx else "")
+        + (f"\n\nRELEVANT PAST INCIDENTS (from memory — reference if directly relevant):\n{recalled}" if recalled else "")
         + "\n\nFor each entry: one line saying what it means, one line starting with '→' "
         "saying what to do. If it is harmless noise, write 'Noise: <reason>'. No preamble."
     )
@@ -1907,9 +1965,16 @@ async def generate_newspaper(
     situation = "\n".join(lines)
     context = _load_context()
     context_block = f"HOMELAB CONTEXT (use this to write accurate service names and understand what's normal):\n{context}\n\n" if context else ""
+    recalled = await hindsight_recall(situation[:2000])
+    recalled_block = (
+        f"RELEVANT PAST CONTEXT (from memory — reference if directly relevant, e.g. "
+        f"a recurring issue or 'as previously reported'; don't force it):\n{recalled}\n\n"
+        if recalled else ""
+    )
     system = (
         "You are the editor of a homelab status newspaper covering a full day of events.\n\n"
         + context_block
+        + recalled_block
         + "LAYOUT: The page has one full-width Lead Story at the top, then each section shows its\n"
         "articles side-by-side in columns. Write 1–3 articles per section that has noteworthy\n"
         "activity — aim for 8–16 articles total. The FIRST article in your array is the Lead Story\n"
@@ -3058,9 +3123,10 @@ _SOURCE_HOWTO = {
     "TrueNAS Scale":   "TrueNAS UI → System → Update (reboots the NAS), or: midclt call update.update",
     "Home Assistant":  "HA UI → Settings → System → Updates → Update",
     "Beszel":          "SSH to the Beszel host: docker compose pull beszel && docker compose up -d beszel",
-    "vLLM":            "SSH to spark.hirschnet: source ~/venvs/vllm025/bin/activate && pip install -U vllm, "
-                        "then: systemctl --user restart vllm. Re-check ~/bin/start-vllm.sh flags "
-                        "(e.g. --gpu-memory-utilization) still apply after the version bump.",
+    "vLLM":            "SSH to spark.hirschnet: ~/bin/update-vllm.sh <version> "
+                        "(builds a fresh ~/venvs/vllm-<version> venv, symlinks ~/venvs/vllm-active to it, "
+                        "restarts vllm.service). Rollback: ln -sfn ~/venvs/<old-version> ~/venvs/vllm-active "
+                        "&& systemctl --user restart vllm.",
     "DGX Spark":       "SSH to spark.hirschnet: sudo apt update && sudo apt upgrade "
                         "(NVIDIA driver/CUDA packages — review before rebooting)",
     "Traefik Plugins": "Bump the version: field for the plugin in traefik/traefik.yml, "
