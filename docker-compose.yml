@@ -1244,6 +1244,8 @@ services:
       - LOKI_URL=${LOKI_URL}
       - VLLM_URL=${VLLM_URL}
       - VLLM_MODEL=${VLLM_MODEL}
+      - HINDSIGHT_URL=${HINDSIGHT_URL}    # optional: enables memory recall/retain for wire report + log analysis
+      - HINDSIGHT_BANK=${HINDSIGHT_BANK}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
       - SSH_KEY=${SSH_KEY}
       - DOCKER_AUTH_FILE=/home/appuser/.docker/config.json
