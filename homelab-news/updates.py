@@ -187,7 +187,7 @@ async def check_proxmox_apt() -> dict:
     # Use || true so the pipeline always exits 0.
     ok, out = await _ssh_run(
         PVE_SSH_HOST,
-        "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
+        "sudo -n apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
         timeout=90,
     )
     if not ok:
