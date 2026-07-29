@@ -421,7 +421,7 @@ async def check_vllm_update() -> dict:
         return {"label": label, "status": "skipped", "ts": ts, "updates": []}
     ok, out = await _ssh_run(
         SPARK_SSH_HOST,
-        "~/venvs/vllm025/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
+        "~/venvs/vllm-active/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
         timeout=20,
     )
     if not ok or not out.strip():
