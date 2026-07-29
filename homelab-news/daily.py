@@ -12,6 +12,7 @@ from zoneinfo import ZoneInfo
 from lib import (
     ARCHIVE_FILE, ARCHIVE_DIR, ARCHIVE_INDEX,
     TODAY_FILE, load_json, save_json,
+    hindsight_retain_newspaper,
 )
 
 _ET = ZoneInfo("America/New_York")
@@ -60,23 +61,23 @@ def _migrate_archive_if_needed() -> None:
     log.info("Migrated %d archive records to per-day files", migrated)
 
 
-def snapshot(date_str: str) -> None:
+def snapshot(date_str: str) -> "dict | None":
     os.makedirs(ARCHIVE_DIR, exist_ok=True)
     day_path = os.path.join(ARCHIVE_DIR, f"{date_str}.json")
 
     if os.path.exists(day_path):
         log.info("Archive already exists for %s, skipping", date_str)
-        return
+        return None
 
     today = load_json(TODAY_FILE)
     if not today:
         log.warning("No today.json available to archive for %s", date_str)
-        return
+        return None
 
     newspaper = today.get("newspaper")
     if not newspaper:
         log.warning("Today's newspaper is empty for %s — skipping archive", date_str)
-        return
+        return None
 
     record = {
         "date": date_str,
@@ -91,6 +92,7 @@ def snapshot(date_str: str) -> None:
     save_json(day_path, record)
     _rebuild_index()
     log.info("Archived %s edition (%d articles)", date_str, len(newspaper))
+    return record
 
 
 async def main() -> None:
@@ -105,7 +107,9 @@ async def main() -> None:
 
         yesterday = (datetime.now(_ET) - timedelta(days=1)).strftime("%Y-%m-%d")
         try:
-            snapshot(yesterday)
+            record = snapshot(yesterday)
+            if record:
+                await hindsight_retain_newspaper(yesterday, record["newspaper"])
         except Exception as e:
             log.error("Daily archive failed: %s", e)
 
