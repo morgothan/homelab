@@ -111,6 +111,7 @@ HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "")
 HOMEASSISTANT_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
 BESZEL_SSH_HOST     = os.getenv("BESZEL_SSH_HOST",     "")
 SPARK_SSH_HOST      = os.getenv("SPARK_SSH_HOST",      "")
+HERMES_SSH_HOST     = os.getenv("HERMES_SSH_HOST",     "")
 
 MAX_WEEKLY    = int(os.getenv("MAX_WEEKLY",    "16"))  # ~4 months of weeklies
 MAX_MONTHLY   = int(os.getenv("MAX_MONTHLY",   "24"))  # 2 years of monthlies
