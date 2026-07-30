@@ -15,7 +15,7 @@ from lib import (
     REMOTE_HOSTS, SSH_KEY,
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
     JELLYFIN_URL, JELLYFIN_KEY,
-    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST,
+    HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST, HERMES_SSH_HOST,
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
@@ -601,6 +601,8 @@ async def run() -> None:
     host_specs = [("local", "local")] + list(REMOTE_HOSTS)
     if SPARK_SSH_HOST:
         host_specs.append(("spark", f"ssh://{SPARK_SSH_HOST}"))
+    if HERMES_SSH_HOST:
+        host_specs.append(("hermes", f"ssh://{HERMES_SSH_HOST}"))
     if PVE_SSH_HOST:
         # nntmux LXC (CT 106) has no direct SSH — relayed via pve pct exec, see get_containers_pct.
         host_specs.append(("nntmux", f"pct://{PVE_SSH_HOST}/106"))
