@@ -214,7 +214,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.43.0
+    image: portainer/portainer-ce:2.44.0
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -241,7 +241,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:v3.13.1
+    image: prom/prometheus:v3.13.2
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -391,7 +391,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.6.13
+    image: amir20/dozzle:v10.6.14
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -637,7 +637,7 @@ services:
 ########## Redis
 # Shared session store for Authelia (db 0) and Traefik (db 1), exposed to LAN on :6379
   redis:
-    image: redis:8.8.1
+    image: redis:8.10.0
       #image: docker.io/valkey/valkey:latest
     container_name: redis
     healthcheck:
@@ -922,7 +922,7 @@ services:
 # Media request management for Jellyfin — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
-    image: ghcr.io/seerr-team/seerr:v3.4.0
+    image: ghcr.io/seerr-team/seerr:v3.4.1
     init: true
     container_name: overseerr
     environment:
