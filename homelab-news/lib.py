@@ -90,7 +90,7 @@ _LLM_MODEL = VLLM_MODEL
 
 HINDSIGHT_URL     = os.getenv("HINDSIGHT_URL", "")
 HINDSIGHT_BANK    = os.getenv("HINDSIGHT_BANK", "homelab_news")
-HINDSIGHT_TIMEOUT = int(os.getenv("HINDSIGHT_TIMEOUT", "30"))
+HINDSIGHT_TIMEOUT = int(os.getenv("HINDSIGHT_TIMEOUT", "90"))
 
 DATA_DIR     = os.getenv("DATA_DIR", "/data")
 TODAY_FILE   = os.path.join(DATA_DIR, "today.json")
@@ -158,16 +158,18 @@ async def hindsight_recall(query: str, max_tokens: int = 600) -> str:
             resp = await client.post(
                 f"{HINDSIGHT_URL}/v1/default/banks/{HINDSIGHT_BANK}/memories/recall",
                 json={
-                    "query": _sanitize_for_llm(query, max_len=2000),
+                    "query": _sanitize_for_llm(query, max_len=1400),
                     "budget": "low",
                     "max_tokens": max_tokens,
                 },
             )
+            if resp.status_code == 400:
+                log.warning("Hindsight 400 body=%r query=%r", resp.text, query)
             resp.raise_for_status()
             results = resp.json().get("results", [])
             return "\n".join(f"- {r['text']}" for r in results if r.get("text"))
     except Exception as e:
-        log.warning("Hindsight recall failed: %s", e)
+        log.warning("Hindsight recall failed: %s: %r", type(e).__name__, e)
         return ""
 
 
