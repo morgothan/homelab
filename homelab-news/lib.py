@@ -1933,8 +1933,8 @@ async def generate_newspaper(
         for r in host.get("results", []):
             if r["status"] != "update_available":
                 continue
-            ver = f" -> {r['new_version']}" if r.get("new_version") else ""
-            line = f"UPDATE on {label}: {r['container']} ({r['image']}{ver})"
+            ver = f", update available: {r['new_version']}" if r.get("new_version") else ""
+            line = f"UPDATE AVAILABLE (not yet applied) on {label}: {r['container']} ({r['image']}{ver})"
             cl = r.get("changelog_analysis")
             if cl:
                 # Sanitize before re-embedding: this text is LLM-generated from
@@ -1996,6 +1996,10 @@ async def generate_newspaper(
         "  If present, write one Public Safety article: name the ASN(s), IP count, and that manual\n"
         "  review is recommended. Do NOT suggest or imply automatic blocking.\n\n"
         "Rules:\n"
+        "- 'UPDATE AVAILABLE' lines are PENDING updates that have NOT been installed — nothing has\n"
+        "  been upgraded, rebuilt, or refreshed yet. Write these as availability, not completed action:\n"
+        "  say 'Update Available for X' or 'X Update Pending', never 'X Jumps to', 'X Upgraded to',\n"
+        "  'saw an update', 'now running', or other past-tense/completed phrasing.\n"
         "- Group related items into one article. 'Five *arr apps have routine updates' = 1 article, not 5.\n"
         "- Within a section, order by importance: errors first, routine updates last.\n"
         "- Headline: punchy, specific, real-newspaper style. Name the attack type and scale.\n"
@@ -2266,7 +2270,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         for r in host.get("results", []):
             if r["status"] != "update_available":
                 continue
-            ver = f" → {r.get('new_version', '')}" if r.get("new_version") else ""
+            ver = f" (update available: {r.get('new_version', '')})" if r.get("new_version") else ""
             cl  = _sanitize_for_llm(r.get("changelog_analysis", ""), max_len=120)
             docker_updates.append(
                 f"  {label}/{r['container']}: {r['image']}{ver}" + (f" — {cl}" if cl else "")
@@ -2295,7 +2299,8 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
             new = _sanitize_for_llm(u.get("new_version", "?"), max_len=30)
             cl  = _sanitize_for_llm(u.get("changelog_analysis", ""), max_len=150)
             lines.append(
-                f"{lbl.upper()} UPDATE: {pkg} {cur} → {new}" + (f" — {cl}" if cl else "")
+                f"{lbl.upper()} UPDATE AVAILABLE: {pkg} {cur} (update available: {new})"
+                + (f" — {cl}" if cl else "")
             )
 
     situation = "\n".join(lines)
@@ -2308,6 +2313,10 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         + ctx_block
         + "Write 2–6 newspaper articles summarising the available software updates below.\n\n"
         "Rules:\n"
+        "- Everything below is a PENDING update that has NOT been installed yet — nothing has\n"
+        "  been upgraded, rebuilt, or refreshed. Write headlines/blurbs as availability, not\n"
+        "  completed action: say 'Update Available for X' or 'X Update Pending', never 'X Jumps to',\n"
+        "  'X Upgraded to', 'saw an update', 'now running', or any other past-tense/completed phrasing.\n"
         "- Lead with security patches and kernel updates (most urgent).\n"
         "- Group related items: multiple *arr app updates = 1 article; Docker rebuilds = 1 article.\n"
         "- If everything is current, write a single brief 'All Systems Current' article.\n"
