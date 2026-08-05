@@ -137,7 +137,12 @@ def _load_context() -> str:
     try:
         with open(CONTEXT_FILE) as f:
             ctx = f.read().strip()
-        return _sanitize_for_llm(ctx, max_len=3000)
+        if VLLM_MODEL:
+            ctx = (
+                "## Live Config (authoritative, overrides anything below)\n"
+                f"- Currently loaded vLLM model on spark.hirschnet: `{VLLM_MODEL}`\n\n"
+            ) + ctx
+        return _sanitize_for_llm(ctx, max_len=12000)
     except FileNotFoundError:
         return ""
     except Exception as e:
