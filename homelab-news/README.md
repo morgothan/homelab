@@ -1,192 +1,257 @@
 # Homelab News
 
-A self-hosted daily intelligence digest for your homelab, rendered as a newspaper. Pulls data from Docker, Loki, Prometheus, and optional integrations, then uses a local LLM (via Ollama) to write AP wire-style articles about what happened.
+A self-hosted operations digest that presents homelab activity as a newspaper. It gathers container state, logs, metrics, backup status, security events, media activity, and software updates, then uses an OpenAI-compatible local LLM endpoint to generate concise articles and trend reports.
 
-## What it does
+The web server reads previously generated JSON files and does not depend on the LLM being available. If generation fails, the last successful edition remains visible and its timestamp is marked as potentially stale.
 
-| Page | What it shows | Refresh |
-|------|---------------|---------|
-| **Front Page** | Full-day edition — Docker + Loki logs from midnight to now, LLM-generated articles | Hourly |
-| **Current Events** | Rolling 6-hour window, same sources | Every 15 min |
-| **Police Blotter** | All active Cloudflare-blocked IPs with geo/ASN/abuse intel, attack categories, probe paths | 60s live fetch |
-| **Archive** | Daily snapshots, infinite retention, grouped by month | — |
-| **Trends** | LLM-synthesised weekly, monthly, and yearly digests identifying patterns across periods | — |
+## Pages
 
-Articles are grouped into six sections: **City Hall** (container health, updates), **Public Safety** (bans, scanners), **Weather** (UPS/power), **City Archives** (backups), **Arts & Entertainment** (media pipeline), and **Public Works** (DNS, networking). The most important article of the day is promoted to a full-width **Lead Story**.
+| Page | What it shows | Default refresh |
+|------|---------------|-----------------|
+| **Front Page** | Current-day edition built from midnight to now | Generated hourly |
+| **Current Events** | Rolling operational report and detailed source cards | Generated every 15 minutes |
+| **Wire Reports** | Container-image and application update intelligence with LLM summaries | Generated hourly |
+| **Police Blotter** | Active edge and CrowdSec decisions with optional geo, ASN, and abuse intelligence | Live API-backed view |
+| **Arts & Entertainment** | Results from an optional media-library scan | On page load |
+| **Archive** | One snapshot per day, grouped by month | Daily |
+| **Trends** | Weekly, monthly, and yearly synthesized reports | Scheduled |
 
-## Requirements
-
-- Docker
-- **Ollama** with a capable model (tested with `gemma4:e4b`; needs good instruction-following and JSON output)
-- **Loki** — log aggregation (Promtail or alloy feeding Docker container logs)
-- **Prometheus** — for UPS, disk, and service metrics (optional but recommended)
-- The Docker socket mounted read-only for local container inspection
-- SSH key for remote Docker hosts over SSH (optional)
+Generated articles use newspaper-style sections such as **City Hall**, **Public Safety**, **Weather**, **City Archives**, **Arts & Entertainment**, and **Public Works**. The most important item can be promoted to a lead story.
 
 ## Architecture
 
-Five [supervisord](http://supervisord.org/) workers run inside a single container alongside a FastAPI web server:
+A single container runs a FastAPI web server and five background workers under Supervisor:
 
-| Worker | Role | Schedule |
-|--------|------|----------|
-| `today` | Generates the front-page edition from midnight to now | Hourly |
-| `rolling` | Generates the current-events edition for the last 6 hours | Every 15 min |
-| `daily` | Snapshots `today.json` into the daily archive at 00:01 UTC | Nightly |
-| `updates` | Checks Docker images for updates, fetches GitHub release notes, runs LLM changelog summaries | Hourly |
-| `periodic` | Generates weekly/monthly/yearly trend digests | Sun/1st/Jan 1 at 00:01 UTC |
+| Program | Role | Schedule |
+|---------|------|----------|
+| `web` | Serves HTML and JSON-backed views | Continuous |
+| `today` | Builds the current-day front page | `UPDATE_INTERVAL` |
+| `rolling` | Builds the rolling Current Events report | `REFRESH_INTERVAL` |
+| `daily` | Copies the last successful edition into the archive | Daily at 00:01 local time |
+| `updates` | Checks container images and supported applications, summarizes release information, and optionally notifies | `UPDATE_INTERVAL` |
+| `periodic` | Builds weekly, monthly, and yearly reports and recovers missed schedules after downtime | Scheduled at 00:01 local time |
 
-Data is persisted to `/data` (bind-mounted from the host):
+The news workers collect and persist raw observations before calling the LLM. During generation, the existing articles and successful-generation timestamp remain in place. A successful response replaces the edition; a failed response preserves it with `generation_status: stale`.
 
-```
+## Requirements
+
+- Docker Engine and Docker Compose
+- An OpenAI-compatible local inference endpoint, such as vLLM
+- Loki for aggregated logs
+- Optional Prometheus metrics and the integrations described below
+- A deliberately scoped way to inspect local and remote container state
+
+The supplied image includes `skopeo` and an SSH client. The service expects its persistent data directory to be writable by user ID `1001`.
+
+> **Security:** Access to the Docker API is equivalent to sensitive host access unless an authorization proxy restricts it. Prefer a least-privilege socket proxy or Docker over SSH. Do not publish an unauthenticated Docker API endpoint. Mount only a dedicated SSH key, not an entire personal SSH directory.
+
+## Persistent data
+
+The application stores state below `DATA_DIR`, which defaults to `/data`:
+
+```text
 data/
-  today.json            # current front-page edition
-  rolling.json          # current rolling edition
-  archive/              # one YYYY-MM-DD.json per day, infinite retention
-    index.json          # lightweight index (date, headline, issue count) for fast listing
-  periodic.json         # weekly/monthly/yearly digests
-  context.md            # optional homelab context fed to the LLM
-  ip_intel.json         # geo/ASN/abuse cache (7-day TTL)
+  today.json              # current-day edition and collection results
+  rolling.json            # rolling edition and collection results
+  updates.json            # image update state
+  homelab_intel.json      # generated update intelligence
+  periodic.json           # weekly, monthly, and yearly reports
+  context.md              # optional operator-supplied LLM context
+  ip_intel.json           # cached IP intelligence
+  notified_updates.json   # notification de-duplication state
+  archive/
+    index.json            # lightweight archive index
+    YYYY-MM-DD.json       # one archived edition per day
 ```
+
+`archive.json` is a legacy format. The daily worker migrates it to per-day files at startup and renames the old file with a `.migrated` suffix.
 
 ## Configuration
 
-All configuration is via environment variables. Set them in your `docker-compose.yml` or `.env` file.
+All configuration is supplied through environment variables. Values containing credentials should come from a secret manager or Docker secrets and must not be committed.
 
-### Core
+### Runtime and LLM
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `SITE_NAME` | Publication name shown in the masthead and page title | `Homelab News` |
-| `OLLAMA_URL` | Ollama API base URL | `http://ollama:11434` |
-| `OLLAMA_MODEL` | Model to use | `gemma4:e4b` |
+| `SITE_NAME` | Publication name shown in the masthead | `Homelab News` |
+| `DATA_DIR` | Persistent state directory | `/data` |
+| `VLLM_URL` | Base URL of the OpenAI-compatible inference endpoint | Empty |
+| `VLLM_MODEL` | Model identifier sent to the inference endpoint | Empty |
+| `OLLAMA_TIMEOUT` | LLM request timeout in seconds; retained as a legacy variable name | `3600` |
+| `REFRESH_INTERVAL` | Rolling-report interval in seconds | `900` |
+| `UPDATE_INTERVAL` | Front-page and update-check interval in seconds | `3600` |
+| `ROLLING_HOURS` | Lookback window for Current Events | `1` |
+| `LOG_HOURS` | Labelled log window used by the UI | `1` |
+| `HINDSIGHT_URL` | Optional Hindsight-compatible memory service | Empty |
+| `HINDSIGHT_BANK` | Memory bank name | `homelab_news` |
+| `HINDSIGHT_TIMEOUT` | Memory request timeout in seconds | `90` |
+
+### Docker and update discovery
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `REMOTE_DOCKER_HOSTS` | Comma-separated remote targets. Each entry may use `label=url`; supported URL schemes include `ssh://`, `tcp://`, and `pct://` | Empty |
+| `SSH_KEY` | Dedicated private key used for remote checks | `/root/.ssh/id_ed25519` |
+| `DOCKER_AUTH_FILE` | Registry authentication file used by `skopeo` | `/root/.docker/config.json` |
+| `SKOPEO_TIMEOUT` | Remote image-inspection timeout in seconds | `20` |
+| `GITHUB_TOKEN` | Optional token that raises the release-information API rate limit | Empty |
+
+Example using role-based, non-production names:
+
+```yaml
+environment:
+  REMOTE_DOCKER_HOSTS: >-
+    compute=ssh://monitor@compute.example.invalid,
+    media=ssh://monitor@media.example.invalid
+  SSH_KEY: /run/secrets/monitoring_ssh_key
+```
+
+### Logs, metrics, and backups
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `LOKI_URL` | Loki HTTP API base URL | `http://loki:3100` |
+| `PROMETHEUS_URL` | Prometheus HTTP API base URL | `http://prometheus:9090` |
+| `NODE_EXPORTER_INSTANCE` | Prometheus instance label used for host metrics | Empty |
+| `KOPIA_URL` | Kopia server URL | `https://kopia-webui:5151` |
+| `KOPIA_USER` | Kopia server username | `admin` |
+| `KOPIA_PASS` | Kopia server password | Empty |
+| `TRAEFIK_ACCESS_LOG` | Reverse-proxy access-log path | `/traefik/access.log` |
+| `LIBRARY_SCAN_FILE` | Optional media-library scan result | `/traefik/monitor/library-dupe-scan.json` |
 
-### Docker / container health
+### Host and application checks
 
 | Variable | Description |
 |----------|-------------|
-| `REMOTE_DOCKER_HOSTS` | Comma-separated Docker host URLs to check for container health. Supports `tcp://host:2375` and `ssh://user@host`. Local Docker socket is always checked. |
-| `SSH_KEY` | Path inside the container to the SSH private key used for `ssh://` remote hosts (default: `/root/.ssh/id_ed25519`) |
+| `PVE_SSH_HOST` | SSH target used for virtualization-host update checks |
+| `TRUENAS_SSH_HOST` | SSH target used for storage-host update checks |
+| `BESZEL_SSH_HOST` | SSH target used for monitoring-host version checks |
+| `SPARK_SSH_HOST` | SSH target used for compute-host version checks |
+| `HERMES_SSH_HOST` | SSH target used for agent-host version checks |
+| `ADGUARD_PRIMARY_URL` | Primary DNS service URL |
+| `ADGUARD_KIDS_URL` | Optional secondary DNS service URL |
+| `HOMEASSISTANT_URL` | Home Assistant API URL |
+| `HOMEASSISTANT_TOKEN` | Home Assistant long-lived access token |
+| `BESZEL_URL` | Beszel API URL |
+| `BESZEL_EMAIL` | Beszel login identity |
+| `BESZEL_PASS` | Beszel login password |
+| `JELLYFIN_URL` | Jellyfin API URL |
+| `JELLYFIN_KEY` | Jellyfin API key |
+| `JELLYSTAT_URL` | Jellystat API URL |
+| `JELLYSTAT_KEY` | Jellystat API key |
 
-### Monitoring integrations (optional)
+Unset optional integrations are skipped or reported as unconfigured.
+
+### Security intelligence and notifications
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `PROMETHEUS_URL` | Prometheus HTTP API base URL | `http://prometheus:9090` |
-| `NODE_EXPORTER_INSTANCE` | Node exporter instance label used for disk/load checks | — |
-| `BESZEL_URL` | Beszel PocketBase URL for host health data | — |
-| `BESZEL_EMAIL` | Beszel login email | — |
-| `BESZEL_PASS` | Beszel login password | — |
-| `KOPIA_URL` | Kopia WebUI URL for backup health | `https://kopia-webui:5151` |
-| `KOPIA_USER` | Kopia server username | — |
-| `KOPIA_PASS` | Kopia server password | — |
-| `TAUTULLI_URL` | Tautulli base URL for Plex activity | `http://tautulli:8181` |
-| `TAUTULLI_KEY` | Tautulli API key | — |
-| `HOMEASSISTANT_URL` | Home Assistant base URL | — |
-| `HOMEASSISTANT_TOKEN` | Home Assistant long-lived access token | — |
+| `CF_FAIL2BAN_STATE` | Edge-ban state file | `/traefik/monitor/fail2ban-state.json` |
+| `ABUSEIPDB_KEY` | Optional AbuseIPDB API key | Empty |
+| `CROWDSEC_KEY` | Optional CrowdSec CTI API key | Empty |
+| `CROWDSEC_LAPI_URL` | CrowdSec local API URL | `http://crowdsec:8080` |
+| `CROWDSEC_LAPI_KEY` | CrowdSec local API key | Empty |
+| `GOTIFY_URL` | Optional Gotify server URL | Empty |
+| `GOTIFY_TOKEN` | Gotify application token | Empty |
 
-### Remote SSH checks (optional)
+Public IPs are enriched through a third-party geolocation API and cached for seven days. Consider the privacy and availability implications before enabling this feature.
 
-These enable OS-level update checks via `midclt` / `apt` over SSH. The SSH key must be authorised on the target hosts.
+### Trend retention
 
-| Variable | Description |
-|----------|-------------|
-| `PVE_SSH_HOST` | SSH target for Proxmox VE apt update checks (e.g. `root@pve.local`) |
-| `TRUENAS_SSH_HOST` | SSH target for TrueNAS SCALE OS update checks (e.g. `admin@truenas.local`) |
-| `BESZEL_SSH_HOST` | SSH target for reading the Beszel container image version (e.g. `user@beszel.local`) |
-| `PLEX_LXC_ID` | Proxmox LXC container ID hosting Plex — used to fetch the Plex version via PVE API |
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `MAX_WEEKLY` | Maximum retained weekly reports | `16` |
+| `MAX_MONTHLY` | Maximum retained monthly reports | `24` |
 
-### DNS / AdGuard (optional)
+Yearly reports are retained without a configured cap.
 
-| Variable | Description |
-|----------|-------------|
-| `ADGUARD_PRIMARY_URL` | AdGuard Home base URL for the primary DNS instance |
-| `ADGUARD_KIDS_URL` | AdGuard Home base URL for a secondary (e.g. filtered) DNS instance |
+## Homelab context
 
-### Police blotter / IP intel (optional)
+An optional `context.md` helps the LLM understand normal behavior, service roles, and which events deserve attention. Treat this file as private operational data: it is read at runtime and should not be committed to a public repository.
 
-| Variable | Description |
-|----------|-------------|
-| `ABUSEIPDB_KEY` | [AbuseIPDB](https://www.abuseipdb.com/) API key — enables abuse confidence scores on the blotter |
-| `CROWDSEC_KEY` | [CrowdSec](https://www.crowdsec.net/) CTI API key — enriches blotter IPs with threat intelligence |
+Sanitized example:
 
-IPs are geo/ASN enriched via ip-api.com regardless of whether these keys are set.
-
-The blotter reads ban state from `cf-fail2ban`'s state file (`traefik/monitor/fail2ban-state.json`). If that file is absent it falls back to reconstructing bans from the Traefik access log.
-
-### Notifications (optional)
-
-| Variable | Description |
-|----------|-------------|
-| `GOTIFY_URL` | Gotify base URL — enables push notifications for critical update findings |
-| `GOTIFY_TOKEN` | Gotify app token |
-
-### GitHub (optional)
-
-| Variable | Description |
-|----------|-------------|
-| `GITHUB_TOKEN` | Personal access token — raises GitHub API rate limit from 60 to 5,000 req/hr for release note fetching |
-
-## Homelab context file
-
-Create `data/context.md` with a plain-text description of your homelab — service names, what's normal, what matters. This file is injected into every LLM prompt, which helps the model:
-
-- Use your actual service names instead of generic ones
-- Understand what "normal" looks like so it can focus on anomalies
-- Flag breaking changes in Docker image updates that affect your specific setup
-
-Example:
 ```markdown
-Stack: Traefik reverse proxy, Authelia SSO, Jellyfin media server, *arr suite.
-Media server is Jellyfin (not Plex). Authelia handles all external auth via OIDC.
-Nightly backups via Kopia to Backblaze B2. UPS is APC Back-UPS 600.
-High Loki error counts from traefik are usually scanner bots, not real issues.
+The reverse proxy and identity provider are critical services.
+The media stack runs on a separate host and brief maintenance restarts are normal.
+Backups run nightly; any snapshot older than two days should be highlighted.
+Routine internet scanner traffic should not be promoted unless it bypasses controls.
 ```
 
-## Prompt injection defenses
+Do not include real domain names, internal hostnames, network addresses, account names, tokens, device identifiers, or unique topology details in public examples.
 
-Log messages, release notes, and all other untrusted external text pass through `_sanitize_for_llm()` before being embedded in prompts — strips injection trigger phrases and enforces length limits. LLM output is validated by `_validate_articles()` which enforces field types, length caps, and a section whitelist before anything is stored or rendered.
+## Prompt and output handling
 
-## Backfill
+Log messages, release notes, and other untrusted text pass through `_sanitize_for_llm()` before being embedded in prompts. The sanitizer removes common prompt-injection phrases and applies length limits. Generated articles pass through `_validate_articles()`, which enforces field types, length limits, and a section allowlist before data is stored or rendered.
 
-To populate the archive from historical Loki data:
+These controls reduce risk but do not make untrusted LLM input harmless. Keep the LLM endpoint and this application isolated from unnecessary management credentials.
 
-```bash
-# Backfill from a specific date to yesterday
-docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01
+## First run
 
-# Preview without writing anything
-docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01 --dry-run
-
-# Also regenerate weekly/monthly/yearly trend digests
-docker exec -it lab-monitor python /app/backfill.py --start 2026-01-01 --trends
-
-# Regenerate trends from existing archive without re-backfilling days
-docker exec -it lab-monitor python /app/backfill.py --trends-only
-```
-
-Backfill is safe to interrupt and resume — already-processed dates are skipped automatically.
-
-## Operations
-
-```bash
-# Restart a single worker without restarting the container
-docker exec lab-monitor supervisorctl restart today
-docker exec lab-monitor supervisorctl restart rolling
-docker exec lab-monitor supervisorctl restart updates
-
-# Check worker status
-docker exec lab-monitor supervisorctl status
-
-# View logs
-docker compose logs -f lab-monitor
-```
-
-## First-run setup
-
-The `/data` directory must be owned by uid `1001` on the host before starting:
+Create the persistent directory and make it writable by the container application user:
 
 ```bash
 mkdir -p homelab-news/data
 sudo chown -R 1001:1001 homelab-news/data
 ```
+
+Then build and start the service with your Compose configuration:
+
+```bash
+docker compose up -d --build lab-monitor
+```
+
+## Operations
+
+```bash
+# Worker state
+docker exec lab-monitor supervisorctl status
+
+# Restart one worker
+docker exec lab-monitor supervisorctl restart today
+docker exec lab-monitor supervisorctl restart rolling
+docker exec lab-monitor supervisorctl restart updates
+
+# Follow service logs
+docker compose logs -f lab-monitor
+
+# Health endpoint
+docker exec lab-monitor python -c \
+  'import urllib.request; print(urllib.request.urlopen("http://localhost:8080/health").read().decode())'
+```
+
+## Historical backfill
+
+`backfill.py` queries historical Loki data and can generate daily, weekly, and monthly reports. Historical daily records contain Loki-derived data only; container health, current bans, and live metrics cannot be reconstructed.
+
+```bash
+# Preview the requested range without LLM calls or writes
+docker exec -it lab-monitor python /app/backfill.py \
+  --start YYYY-MM-DD --end YYYY-MM-DD --dry-run
+
+# Generate daily reports for a range
+docker exec -it lab-monitor python /app/backfill.py \
+  --start YYYY-MM-DD --end YYYY-MM-DD
+
+# Build weekly and monthly trends from the legacy archive
+docker exec -it lab-monitor python /app/backfill.py --trends-only
+```
+
+The current backfill utility writes the legacy `archive.json` format. Restart the daily worker after a successful backfill so it migrates those entries into `archive/` and rebuilds the web index:
+
+```bash
+docker exec lab-monitor supervisorctl restart daily
+```
+
+Backfill skips dates already present in the legacy file and is safe to resume. Preserve a backup of `DATA_DIR` before a large backfill or migration.
+
+## Public-repository checklist
+
+Before committing documentation or configuration:
+
+- Replace real domains and hostnames with names below `example.invalid`.
+- Do not include network addresses, MAC addresses, tunnel IDs, account IDs, email addresses, usernames, or device serial numbers.
+- Do not commit `context.md`, generated JSON state, logs, registry authentication, SSH material, database exports, or environment files.
+- Use placeholders for all tokens and credentials; a redacted value should never resemble the real value.
+- Scan the staged diff and Git history with a secret scanner.
