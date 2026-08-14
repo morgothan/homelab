@@ -1,0 +1,38 @@
+#!/usr/bin/env python3
+"""
+kopia-maintenance — Force a full Kopia maintenance run.
+
+The kopia-webui container connects with an ephemeral container-ID hostname,
+which never matches the repository's registered maintenance owner
+(root@TRAEFIK, set back when a bare CLI on the host originally created the
+repo). Kopia only auto-triggers full maintenance for the owner identity, so
+it's silently never run since 2026-03-07, leaving thousands of uncompacted
+index blobs. --force bypasses the owner check.
+
+Usage:
+  kopia-maintenance
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _openbao import fetch_secrets
+
+secrets = fetch_secrets()
+repo_pw = secrets.get("KOPIA_REPO_PW")
+if not repo_pw:
+    print("Error: KOPIA_REPO_PW not found in OpenBao (kv/docker/misc)", file=sys.stderr)
+    sys.exit(1)
+
+result = subprocess.run(
+    [
+        "docker", "exec", "-e", f"KOPIA_PASSWORD={repo_pw}",
+        "kopia-webui", "kopia", "maintenance", "run", "--full", "--force",
+    ],
+    capture_output=True, text=True,
+)
+print(result.stdout, end="")
+print(result.stderr, end="", file=sys.stderr)
+sys.exit(result.returncode)
