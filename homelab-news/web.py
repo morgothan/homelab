@@ -92,6 +92,13 @@ def _status_bar(
     return '<div class="np-status">' + "".join(parts) + '</div>'
 
 
+def _built_at_text(record: dict) -> str:
+    built_at = record.get("built_at", "")
+    if built_at:
+        return built_at[0:16].replace("T", " ") + " UTC"
+    return "unknown time"
+
+
 @app.get("/")
 async def index():
     today = load_json(TODAY_FILE)
@@ -105,6 +112,7 @@ async def index():
         return Response(content=_init_page(), media_type="text/html; charset=utf-8")
 
     newspaper = today.get("newspaper")
+    stale = today.get("generation_status") == "stale" and bool(newspaper)
     docker_issues = today.get("docker_issues") or []
     loki_issues   = today.get("loki_issues") or []
 
@@ -132,7 +140,7 @@ async def index():
     n_issues = len(docker_issues) + len(loki_issues)
     status = _status_bar(n_running, unhealthy, update_hosts, n_issues, "log issues today")
     body = (
-        masthead_today()
+        masthead_today(_built_at_text(today), stale=stale)
         + nav_bar("front")
         + articles_html
         + status
@@ -158,8 +166,8 @@ async def current_events():
     loki_issues   = rolling.get("loki_issues") or []
     docker_analysis = rolling.get("docker_analysis")
     loki_analysis   = rolling.get("loki_analysis")
-    built_at = rolling.get("built_at", "")
-    now_str  = built_at[0:16].replace("T", " ") + " UTC" if built_at else datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    now_str = _built_at_text(rolling)
+    stale = rolling.get("generation_status") == "stale" and bool(newspaper)
 
     if newspaper:
         articles_html = render_articles_html(newspaper)
@@ -175,7 +183,7 @@ async def current_events():
         page_refresh = 30
 
     body = (
-        masthead_rolling(now_str)
+        masthead_rolling(now_str, stale=stale)
         + nav_bar("current")
         + articles_html
         + '<details class="np-section" open>'
