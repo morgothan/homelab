@@ -2388,11 +2388,16 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     if asn_suggestions:
         log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
 
-    # Phase 1: persist raw data immediately; keep the previous newspaper so the
-    # page stays readable while the LLM re-renders.
+    # Phase 1: persist raw data immediately; keep the previous newspaper and its
+    # successful build timestamp while the LLM re-renders.  built_at must only
+    # move when a new edition is successfully generated, otherwise the UI would
+    # present stale articles as fresh.
     existing = load_json(target_file) or {}
+    attempt_at = datetime.now(timezone.utc).isoformat()
     save_json(target_file, {
-        "built_at":        datetime.now(timezone.utc).isoformat(),
+        "built_at":        existing.get("built_at"),
+        "last_attempt_at": attempt_at,
+        "generation_status": "updating",
         "newspaper":       existing.get("newspaper"),
         "docker_issues":   docker_issues,
         "docker_analysis": existing.get("docker_analysis"),
@@ -2418,16 +2423,35 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
 
-    save_json(target_file, {
-        "built_at":        datetime.now(timezone.utc).isoformat(),
-        "newspaper":       newspaper or [],
+    if newspaper:
+        built_at = datetime.now(timezone.utc).isoformat()
+        articles = newspaper
+        generation_status = "ok"
+        generation_error = None
+    else:
+        # An unavailable LLM must not erase the last good edition.  The web UI
+        # uses generation_status to identify the retained articles as stale.
+        built_at = existing.get("built_at")
+        articles = existing.get("newspaper") or []
+        generation_status = "stale"
+        generation_error = "LLM generation unavailable"
+        log.warning("News generation unavailable; preserving previous edition in %s", target_file)
+
+    result = {
+        "built_at":        built_at,
+        "last_attempt_at": attempt_at,
+        "generation_status": generation_status,
+        "newspaper":       articles,
         "docker_issues":   docker_issues,
         "docker_analysis": docker_analysis,
         "loki_issues":     loki_issues,
         "loki_analysis":   loki_analysis,
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
-    })
+    }
+    if generation_error:
+        result["generation_error"] = generation_error
+    save_json(target_file, result)
 
 
 # ── Worker loop helper ───────────────────────────────────────────────────────
@@ -2992,18 +3016,25 @@ def _masthead(subtitle: str, meta: str) -> str:
     )
 
 
-def masthead_rolling(now_str: str) -> str:
+def _generation_notice(stale: bool) -> str:
+    if not stale:
+        return ""
+    return ' &nbsp;&middot;&nbsp; <span class="c-warn">&#9888; Update failed; showing last successful edition</span>'
+
+
+def masthead_rolling(now_str: str, stale: bool = False) -> str:
     return _masthead(
         "Homelab Intelligence Dispatch &mdash; Est. 2026",
-        f'Generated {_h(now_str)} &nbsp;&middot;&nbsp; Refresh {REFRESH_INTERVAL // 60}m &nbsp;&middot;&nbsp; Log window {LOG_HOURS}h',
+        f'Generated {_h(now_str)}{_generation_notice(stale)} &nbsp;&middot;&nbsp; Refresh {REFRESH_INTERVAL // 60}m &nbsp;&middot;&nbsp; Log window {LOG_HOURS}h',
     )
 
 
-def masthead_today() -> str:
+def masthead_today(now_str: str = "", stale: bool = False) -> str:
     today_str = datetime.now(_ET).strftime("%A, %B %-d, %Y")
+    generated = f" &nbsp;&middot;&nbsp; Generated {_h(now_str)}" if now_str else ""
     return _masthead(
         "Homelab Intelligence Dispatch &mdash; Est. 2026",
-        f"Today's Edition &mdash; {_h(today_str)} &nbsp;&middot;&nbsp; Updated hourly",
+        f"Today's Edition &mdash; {_h(today_str)}{generated}{_generation_notice(stale)} &nbsp;&middot;&nbsp; Updated hourly",
     )
 
 
