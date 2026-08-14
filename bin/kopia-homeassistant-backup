@@ -21,7 +21,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _openbao import fetch_secrets
 
-HA_HOST = "homeassistant.iot.hirschnet"
+secrets = fetch_secrets()
+HA_HOST = f"homeassistant.iot.{secrets.get('LOCAL', '')}"
 STAGING = Path("/home/nat/docker/kopia/sources/homeassistant")
 
 result = subprocess.run(
@@ -41,7 +42,6 @@ for f in STAGING.glob("Automatic_backup_*.tar"):
     if f.name != Path(latest).name:
         f.unlink()
 
-secrets = fetch_secrets()
 repo_pw = secrets.get("KOPIA_REPO_PW")
 if not repo_pw:
     print("Error: KOPIA_REPO_PW not found in OpenBao (kv/docker/misc)", file=sys.stderr)

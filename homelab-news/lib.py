@@ -57,6 +57,7 @@ def _compress_messages(messages: list[dict]) -> list[dict]:
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
+LOCAL            = os.getenv("LOCAL", "")
 LOKI_URL         = os.getenv("LOKI_URL", "http://loki:3100")
 REFRESH_INTERVAL = int(os.getenv("REFRESH_INTERVAL", "900"))
 UPDATE_INTERVAL  = int(os.getenv("UPDATE_INTERVAL", "3600"))
@@ -78,7 +79,7 @@ BESZEL_EMAIL     = os.getenv("BESZEL_EMAIL", "")
 BESZEL_PASS      = os.getenv("BESZEL_PASS", "")
 JELLYSTAT_URL    = os.getenv("JELLYSTAT_URL", "http://jellystat:3000")
 JELLYSTAT_KEY    = os.getenv("JELLYSTAT_KEY", "")
-JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "http://plex.iot.hirschnet:8096")
+JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "")
 JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
 
 # LLM request timeout — generous to survive a full queue at midnight
@@ -140,7 +141,7 @@ def _load_context() -> str:
         if VLLM_MODEL:
             ctx = (
                 "## Live Config (authoritative, overrides anything below)\n"
-                f"- Currently loaded vLLM model on spark.hirschnet: `{VLLM_MODEL}`\n\n"
+                f"- Currently loaded vLLM model on spark.{LOCAL}: `{VLLM_MODEL}`\n\n"
             ) + ctx
         return _sanitize_for_llm(ctx, max_len=12000)
     except FileNotFoundError:
@@ -3156,8 +3157,8 @@ def containers_card(unhealthy: list, starting: list, n_running: int) -> str:
 # Per-host mapping for Docker-based updates: label (as reported by _check_host) -> FQDN
 # running this repo's dc.sh wrapper. Hosts not listed here aren't managed by this repo.
 _DC_SH_HOSTS = {
-    "local": "traefik.hirschnet",
-    "spark": "spark.hirschnet",
+    "local": f"traefik.{LOCAL}",
+    "spark": f"spark.{LOCAL}",
 }
 
 # Non-Docker update sources (see updates.py check_* functions) -> how to actually apply them.
@@ -3171,11 +3172,11 @@ _SOURCE_HOWTO = {
     "TrueNAS Scale":   "TrueNAS UI → System → Update (reboots the NAS), or: midclt call update.update",
     "Home Assistant":  "HA UI → Settings → System → Updates → Update",
     "Beszel":          "SSH to the Beszel host: docker compose pull beszel && docker compose up -d beszel",
-    "vLLM":            "SSH to spark.hirschnet: ~/bin/update-vllm.sh <version> "
+    "vLLM":            f"SSH to spark.{LOCAL}: ~/bin/update-vllm.sh <version> "
                         "(builds a fresh ~/venvs/vllm-<version> venv, symlinks ~/venvs/vllm-active to it, "
                         "restarts vllm.service). Rollback: ln -sfn ~/venvs/<old-version> ~/venvs/vllm-active "
                         "&& systemctl --user restart vllm.",
-    "DGX Spark":       "SSH to spark.hirschnet: sudo apt update && sudo apt upgrade "
+    "DGX Spark":       f"SSH to spark.{LOCAL}: sudo apt update && sudo apt upgrade "
                         "(NVIDIA driver/CUDA packages — review before rebooting)",
     "Traefik Plugins": "Bump the version: field for the plugin in traefik/traefik.yml, "
                         "then: ./dc.sh restart traefik",
@@ -3193,7 +3194,7 @@ def update_howto(*, container: str = "", host: str = "", source_label: str = "")
     if fqdn:
         return f"On {fqdn}: ./dc.sh pull {container} && ./dc.sh up -d {container}"
     if host == "nntmux":
-        return ("No direct SSH to the nntmux LXC — via pve.hirschnet: sudo pct exec 106 -- "
+        return (f"No direct SSH to the nntmux LXC — via pve.{LOCAL}: sudo pct exec 106 -- "
                 f"bash -c 'cd ~/docker && ./dc.sh pull {container} && ./dc.sh up -d {container}'")
     return f"SSH to {host} and update via its own docker workflow — not part of this repo's compose stack."
 

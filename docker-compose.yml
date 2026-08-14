@@ -1243,6 +1243,7 @@ services:
       - ${USERDIR}/docker/traefik/monitor:/traefik/monitor:ro
       - ${USERDIR}/docker/traefik/traefik.yml:/traefik/traefik.yml:ro
     environment:
+      - LOCAL=${LOCAL}
       - LOKI_URL=${LOKI_URL}
       - VLLM_URL=${VLLM_URL}
       - VLLM_MODEL=${VLLM_MODEL}
@@ -1262,7 +1263,7 @@ services:
       - HERMES_SSH_HOST=${HERMES_SSH_HOST}
       - JELLYSTAT_URL=http://jellystat:3000
       - JELLYSTAT_KEY=${JELLYSTAT_KEY}
-      - JELLYFIN_URL=http://plex.iot.hirschnet:8096
+      - JELLYFIN_URL=http://plex.iot.${LOCAL}:8096
       - JELLYFIN_KEY=${JELLYFIN_KEY}
       - SITE_NAME=${SITE_NAME}
       - NODE_EXPORTER_INSTANCE=${NODE_EXPORTER_INSTANCE}

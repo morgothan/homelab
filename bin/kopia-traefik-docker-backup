@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-kopia-traefik-docker-backup — Snapshot the traefik.hirschnet /home/nat/docker
+kopia-traefik-docker-backup — Snapshot the traefik host's /home/nat/docker
 directory (compose stack config, dotfile secrets like .bao-unseal-key,
 .env.openbao, service DBs) via the kopia-webui container.
 
