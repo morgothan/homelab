@@ -24,7 +24,7 @@ every week.
 Required env vars (OpenBao kv/docker/library-dupe-scan):
   SONARR_URL SONARR_API_KEY JELLYFIN_URL JELLYFIN_API_KEY
 Optional:
-  JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: plex.iot.lan)
+  JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: plex.iot.<LOCAL>)
   GOTIFY_URL GOTIFY_TOKEN
 
 Usage:
@@ -57,13 +57,13 @@ SONARR_URL = cfg.get("SONARR_URL", "").rstrip("/")
 SONARR_KEY = cfg.get("SONARR_API_KEY", "")
 JELLYFIN_URL = cfg.get("JELLYFIN_URL", "").rstrip("/")
 JELLYFIN_KEY = cfg.get("JELLYFIN_API_KEY", "")
-JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", "plex.iot.lan")
+JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", f"plex.iot.{cfg.get('LOCAL', '')}")
 GOTIFY_URL = cfg.get("GOTIFY_URL", "")
 # GOTIFY_URL from OpenBao is the docker-internal hostname (http://gotify), only
 # reachable from containers on the proxy network. This script runs as a plain
 # host process, so use the LAN-routed Traefik hostname instead.
 if GOTIFY_URL == "http://gotify":
-    GOTIFY_URL = "http://gotify.lan"
+    GOTIFY_URL = f"http://gotify.{cfg.get('LOCAL', '')}"
 GOTIFY_TOKEN = cfg.get("GOTIFY_TOKEN", "")
 
 

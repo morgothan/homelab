@@ -23,6 +23,9 @@ import sys
 from pathlib import Path
 from typing import Optional
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _openbao import fetch_secrets
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 COMPOSE_FILES = [
@@ -33,14 +36,16 @@ COMPOSE_FILES = [
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+")
 _SEM_SIZE = 6  # concurrent skopeo requests
 
+LOCAL = fetch_secrets().get("LOCAL", "")
+
 # Remote hosts with their own ~/docker/dc.sh stack — updated via `--all`
-REMOTE_DC_HOSTS = ["beszel.lan", "whisper.lan", "spark.lan", "hermes.lan"]
+REMOTE_DC_HOSTS = [f"beszel.{LOCAL}", f"whisper.{LOCAL}", f"spark.{LOCAL}", f"hermes.{LOCAL}"]
 REMOTE_DC_CMD = "cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa"
-SKETCHY_NAS_HOST = "sketchy-nas.lan"
+SKETCHY_NAS_HOST = f"sketchy-nas.{LOCAL}"
 SKETCHY_NAS_CMD = "~/docker-update.sh"
 
-# nntmux LXC (CT 106) has no direct SSH — must go through pve.lan's pct exec.
-NNTMUX_HOST = "pve.lan"
+# nntmux LXC (CT 106) has no direct SSH — must go through pve's pct exec.
+NNTMUX_HOST = f"pve.{LOCAL}"
 NNTMUX_CMD = (
     "sudo -n /usr/sbin/pct exec 106 -- bash -c "
     "'cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa'"
@@ -459,9 +464,9 @@ def _update_remote_hosts() -> None:
     print(f"\n=== {SKETCHY_NAS_HOST} ===")
     if _run(["ssh", f"nat@{SKETCHY_NAS_HOST}", SKETCHY_NAS_CMD], check=False) != 0:
         failed.append(SKETCHY_NAS_HOST)
-    print("\n=== nntmux.lan (via pve pct exec) ===")
+    print(f"\n=== nntmux.{LOCAL} (via pve pct exec) ===")
     if _run(["ssh", NNTMUX_HOST, NNTMUX_CMD], check=False) != 0:
-        failed.append("nntmux.lan")
+        failed.append(f"nntmux.{LOCAL}")
     if failed:
         print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
 
@@ -522,7 +527,7 @@ def main() -> None:
         if total:
             print("Dry run — no changes made.")
         if args.all:
-            print(f"Dry run — would also update: {', '.join(REMOTE_DC_HOSTS + [SKETCHY_NAS_HOST, 'nntmux.lan'])}")
+            print(f"Dry run — would also update: {', '.join(REMOTE_DC_HOSTS + [SKETCHY_NAS_HOST, f'nntmux.{LOCAL}'])}")
         return
 
     if total == 0 and not args.all:

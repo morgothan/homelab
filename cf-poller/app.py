@@ -34,7 +34,7 @@ def _require(var: str) -> str:
     return val
 
 CF_ANALYTICS_TOKEN = _require("CF_ANALYTICS_TOKEN")
-LOKI_URL           = os.getenv("LOKI_URL", "http://logger.lan:3100")
+LOKI_URL           = _require("LOKI_URL")
 GRAFANA_URL        = os.getenv("GRAFANA_URL", "http://grafana:3000")
 GRAFANA_USER       = os.getenv("GF_SECURITY_ADMIN_USER", "admin")
 GRAFANA_PASS       = os.getenv("GF_SECURITY_ADMIN_PASSWORD", "")
