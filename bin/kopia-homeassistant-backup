@@ -1,0 +1,57 @@
+#!/usr/bin/env python3
+"""
+kopia-homeassistant-backup — Pull Home Assistant's latest automatic backup
+and snapshot it into the shared Kopia repo.
+
+HA's SSH addon (Alpine, ephemeral) can't reliably run kopia/rclone/cron, so
+rather than installing anything there, this pulls the newest
+Automatic_backup_*.tar from HA's own /backup (already produced daily by
+HA's built-in backup feature) into a staging dir mounted into kopia-webui,
+then snapshots it from the host side. HA only needs to retain its own last
+few days; long-term history lives in Kopia.
+
+Usage:
+  kopia-homeassistant-backup
+"""
+
+import subprocess
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from _openbao import fetch_secrets
+
+HA_HOST = "homeassistant.iot.lan"
+STAGING = Path("/home/nat/docker/kopia/sources/homeassistant")
+
+result = subprocess.run(
+    ["ssh", "-p", "22", f"nat@{HA_HOST}",
+     "ls -t /backup/Automatic_backup_*.tar | head -1"],
+    capture_output=True, text=True,
+)
+latest = result.stdout.strip()
+if not latest:
+    print(f"Error: no Automatic_backup_*.tar found on {HA_HOST}", file=sys.stderr)
+    sys.exit(1)
+
+STAGING.mkdir(parents=True, exist_ok=True)
+subprocess.run(["scp", "-O", "-P", "22", f"nat@{HA_HOST}:{latest}", str(STAGING)], check=True)
+
+for f in STAGING.glob("Automatic_backup_*.tar"):
+    if f.name != Path(latest).name:
+        f.unlink()
+
+secrets = fetch_secrets()
+repo_pw = secrets.get("KOPIA_REPO_PW")
+if not repo_pw:
+    print("Error: KOPIA_REPO_PW not found in OpenBao (kv/docker/misc)", file=sys.stderr)
+    sys.exit(1)
+
+snap = subprocess.run(
+    ["docker", "exec", "-e", f"KOPIA_PASSWORD={repo_pw}",
+     "kopia-webui", "kopia", "snapshot", "create", "/data/homeassistant"],
+    capture_output=True, text=True,
+)
+print(snap.stdout, end="")
+print(snap.stderr, end="", file=sys.stderr)
+sys.exit(snap.returncode)

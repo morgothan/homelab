@@ -136,6 +136,7 @@ data/
 # Kopia (config may contain rclone/repo credentials, cache is large)
 kopia/config/
 kopia/cache/
+kopia/sources/
 
 # Redis data
 redis/

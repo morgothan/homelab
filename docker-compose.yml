@@ -1138,6 +1138,8 @@ services:
     volumes:
       - ${DOCKERDIR}/kopia/config:/app/config
       - ${DOCKERDIR}/kopia/cache:/app/cache
+      - ${DOCKERDIR}/kopia/sources/homeassistant:/data/homeassistant:ro
+      - ${DOCKERDIR}:/data/traefik-docker:ro
       - /root/.config/rclone/rclone.conf:/app/rclone/rclone.conf:ro
     command:
       - server
