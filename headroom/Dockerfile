@@ -1,5 +1,5 @@
 FROM python:3.12-slim
-RUN pip install --no-cache-dir 'headroom-ai[proxy]'
+RUN pip install --no-cache-dir 'headroom-ai[proxy]==0.35.0'
 
 # ORT auto-detects all physical CPUs and tries to pin threads via sched_setaffinity.
 # In a Proxmox LXC with a restricted cpuset the masks are invalid (EINVAL flood).
