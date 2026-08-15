@@ -1440,6 +1440,32 @@ services:
     image: headroom:latest
     restart: unless-stopped
     logging: *logging
+    environment:
+      # Claude Code fires concurrent tool calls; under HTTP/2 those get multiplexed
+      # over one shared TLS connection to Anthropic, and cancelling one mid-flight
+      # corrupts that connection (SSLV3_ALERT_BAD_RECORD_MAC), which then serves
+      # empty/malformed bodies under a 200 to every request still on it. Root-caused
+      # and confirmed fixed upstream by forcing HTTP/1.1 (headroom-ai issues #1615,
+      # #1350 — every concurrent request gets its own connection instead of sharing
+      # one h2 stream). Forcing HTTP/1.1 avoids the shared-stream corruption.
+      HEADROOM_HTTP2: "false"
+      # TEMPORARY DEBUG — 2026-08-15: capturing real 400s from Anthropic to find
+      # which compression pass mangles a request. Stores full messages in an
+      # in-memory ring buffer (GET /transformations/feed, loopback-only), no
+      # disk writes. Revert once the 400 cause is found — full message bodies
+      # sitting in the proxy's memory is not something to leave on indefinitely.
+      HEADROOM_LOG_MESSAGES: "true"
+      # 2026-08-15: DO NOT set HEADROOM_MAX_KEEPALIVE=0 as a "belt and suspenders"
+      # fix for a recurrence of this symptom — tried that, made it worse. The
+      # headroom-ai maintainers' own load test (issue #1350) measured proxy-level
+      # upstream failures under concurrent burst load: max-keepalive=0 -> ~24%
+      # failures, max-keepalive=10 -> ~10.5%, default (100) -> 0%. Disabling
+      # keepalive reuse forces a fresh TLS handshake per request, which *increases*
+      # contention/corruption under concurrency instead of preventing it. Leave
+      # HEADROOM_MAX_KEEPALIVE unset (headroom's default of 100) — HTTP/1.1 alone
+      # is the confirmed fix; if "empty/malformed 200" recurs, suspect a headroom-ai
+      # version regression (check CHANGELOG for the streaming/connection-lifecycle
+      # area) before touching keepalive again.
     security_opt:
       - no-new-privileges:true
     cap_drop:
