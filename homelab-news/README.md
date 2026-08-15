@@ -155,6 +155,11 @@ Unset optional integrations are skipped or reported as unconfigured.
 | `GOTIFY_URL` | Optional Gotify server URL | Empty |
 | `GOTIFY_TOKEN` | Gotify application token | Empty |
 
+Seerr request events can be delivered directly to the newspaper at
+`http://lab-monitor:8080/api/events/seerr`. Enable Seerr's Webhook notification
+agent for the desired request and availability event types; events are retained
+in `/data/media_events.json` and included in the daily and rolling editions.
+
 Public IPs are enriched through a third-party geolocation API and cached for seven days. Consider the privacy and availability implications before enabling this feature.
 
 ### Trend retention

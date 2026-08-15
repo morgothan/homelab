@@ -101,6 +101,7 @@ UPDATES_FILE  = os.path.join(DATA_DIR, "updates.json")
 PERIODIC_FILE      = os.path.join(DATA_DIR, "periodic.json")
 HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
 LIBRARY_SCAN_FILE  = os.getenv("LIBRARY_SCAN_FILE", "/traefik/monitor/library-dupe-scan.json")
+MEDIA_EVENTS_FILE  = os.path.join(DATA_DIR, "media_events.json")
 
 PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
@@ -524,6 +525,60 @@ def save_json(path: str, data) -> None:
         os.replace(tmp, path)
     except Exception as e:
         log.warning("Failed to save %s: %s", path, e)
+
+
+def load_media_events(since: datetime) -> list[dict]:
+    """Return Seerr webhook events received within the requested news window."""
+    events = load_json(MEDIA_EVENTS_FILE) or []
+    since_utc = since.astimezone(timezone.utc)
+    recent: list[dict] = []
+    for event in events:
+        try:
+            received = datetime.fromisoformat(event["received_at"].replace("Z", "+00:00"))
+            if received.tzinfo is None:
+                received = received.replace(tzinfo=timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if received >= since_utc:
+            recent.append(event)
+    return recent
+
+
+def build_library_additions_article(media_events: list[dict]) -> Optional[dict]:
+    """Build one deterministic Arts & Entertainment story from availability events."""
+    titles: list[str] = []
+    seen: set[str] = set()
+    for event in media_events:
+        event_type = " ".join((
+            str(event.get("notification_type", "")),
+            str(event.get("event", "")),
+        )).lower()
+        if "available" not in event_type:
+            continue
+        title = str(event.get("subject", "")).strip()
+        if not title or title.casefold() in seen:
+            continue
+        seen.add(title.casefold())
+        titles.append(title)
+    if not titles:
+        return None
+
+    count = len(titles)
+    return {
+        "headline": f"{count} New Library Addition{'s' if count != 1 else ''}",
+        "blurb": "Now available: " + "; ".join(titles) + ".",
+        "section": "Arts & Entertainment",
+        "source": "seerr-library-additions",
+    }
+
+
+def merge_library_additions(articles: list[dict], media_events: list[dict]) -> list[dict]:
+    """Replace the prior generated additions card and append the current one."""
+    merged = [a for a in articles if a.get("source") != "seerr-library-additions"]
+    addition = build_library_additions_article(media_events)
+    if addition:
+        merged.append(addition)
+    return merged
 
 async def notify_gotify(title: str, message: str, priority: int = 5) -> None:
     if not GOTIFY_URL or not GOTIFY_TOKEN:
@@ -1919,6 +1974,7 @@ async def generate_newspaper(
     beszel: Optional[dict] = None,
     jellystat: Optional[dict] = None,
     asn_suggestions: Optional[list[dict]] = None,
+    media_events: Optional[list[dict]] = None,
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -2386,6 +2442,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     )
 
     asn_suggestions = _suggest_asn_blocks(bans)
+    media_events = load_media_events(since)
     if asn_suggestions:
         log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
 
@@ -2406,6 +2463,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "loki_analysis":   existing.get("loki_analysis"),
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
+        "media_events":    media_events,
     })
 
     unhealthy, _, _ = await get_container_status_async()
@@ -2419,21 +2477,21 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     loki_analysis   = await llm_analysis(loki_issues,   "network/syslog (from Loki)")
     newspaper = await generate_newspaper(
         docker_issues, loki_issues, update_hosts, unhealthy_names,
-        bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions,
+        bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions, media_events,
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
 
     if newspaper:
         built_at = datetime.now(timezone.utc).isoformat()
-        articles = newspaper
+        articles = merge_library_additions(newspaper, media_events)
         generation_status = "ok"
         generation_error = None
     else:
         # An unavailable LLM must not erase the last good edition.  The web UI
         # uses generation_status to identify the retained articles as stale.
         built_at = existing.get("built_at")
-        articles = existing.get("newspaper") or []
+        articles = merge_library_additions(existing.get("newspaper") or [], media_events)
         generation_status = "stale"
         generation_error = "LLM generation unavailable"
         log.warning("News generation unavailable; preserving previous edition in %s", target_file)
@@ -2449,6 +2507,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "loki_analysis":   loki_analysis,
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
+        "media_events":    media_events,
     }
     if generation_error:
         result["generation_error"] = generation_error
@@ -3647,18 +3706,25 @@ def render_articles_html(articles: list[dict]) -> str:
     if not articles:
         return '<div class="np-pending">No articles available for this edition.</div>'
 
-    lead, *rest = articles
-    lead_section = lead.get("section", "").strip()
-    if lead_section not in SECTION_ORDER:
-        lead_section = "City Hall"
-    html = (
-        '<div class="np-lead">'
-        '<div class="np-lead-kicker">Lead Story</div>'
-        f'<div class="np-lead-hl">{_h(lead["headline"])}</div>'
-        f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
-        f'<div class="np-lead-section">{_h(lead_section)}</div>'
-        '</div>'
-    )
+    lead_idx = next((i for i, a in enumerate(articles)
+                     if a.get("source") != "seerr-library-additions"), None)
+    if lead_idx is None:
+        html = ""
+        rest = articles
+    else:
+        lead = articles[lead_idx]
+        rest = articles[:lead_idx] + articles[lead_idx + 1:]
+        lead_section = lead.get("section", "").strip()
+        if lead_section not in SECTION_ORDER:
+            lead_section = "City Hall"
+        html = (
+            '<div class="np-lead">'
+            '<div class="np-lead-kicker">Lead Story</div>'
+            f'<div class="np-lead-hl">{_h(lead["headline"])}</div>'
+            f'<div class="np-lead-blurb">{_h(lead["blurb"])}</div>'
+            f'<div class="np-lead-section">{_h(lead_section)}</div>'
+            '</div>'
+        )
 
     # Group remaining articles by section, preserving within-section order.
     # The lead article's section may appear again if the LLM wrote more articles for it.

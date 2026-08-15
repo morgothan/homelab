@@ -8,15 +8,15 @@ from typing import Optional
 
 from html import escape as _h
 
-from fastapi import FastAPI, Response
+from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS, SITE_NAME,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
-    IP_INTEL_FILE, LIBRARY_SCAN_FILE,
+    IP_INTEL_FILE, LIBRARY_SCAN_FILE, MEDIA_EVENTS_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
+    load_json, save_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
@@ -29,6 +29,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 app = FastAPI()
+
+_MEDIA_EVENT_LIMIT = 500
 
 # Blotter cache — check_fail2ban_bans reads up to 60 MB of access log on every call.
 # Cache the result for BLOTTER_TTL seconds; bans change at most every few minutes.
@@ -97,6 +99,37 @@ def _built_at_text(record: dict) -> str:
     if built_at:
         return built_at[0:16].replace("T", " ") + " UTC"
     return "unknown time"
+
+
+@app.post("/api/events/seerr")
+async def receive_seerr_event(request: Request):
+    """Receive Seerr's generic webhook and retain a bounded event history."""
+    try:
+        payload = await request.json()
+    except Exception:
+        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    if not isinstance(payload, dict):
+        return JSONResponse({"error": "JSON object required"}, status_code=400)
+
+    event = str(payload.get("event") or payload.get("notification_type") or "").strip()
+    subject = str(payload.get("subject") or "").strip()
+    message = str(payload.get("message") or "").strip()
+    if not any((event, subject, message)):
+        return JSONResponse({"error": "event, subject, or message required"}, status_code=400)
+
+    record = {
+        "received_at": datetime.now(timezone.utc).isoformat(),
+        "notification_type": str(payload.get("notification_type") or "")[:120],
+        "event": event[:120],
+        "subject": subject[:300],
+        "message": message[:2000],
+    }
+    events = load_json(MEDIA_EVENTS_FILE) or []
+    if not isinstance(events, list):
+        events = []
+    events.append(record)
+    save_json(MEDIA_EVENTS_FILE, events[-_MEDIA_EVENT_LIMIT:])
+    return JSONResponse({"accepted": True}, status_code=202)
 
 
 @app.get("/")
