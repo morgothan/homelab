@@ -20,7 +20,7 @@ auth-default-access: "deny-all"
 #
 # After first OIDC login, grant admin role:
 #   docker exec ntfy ntfy user change-role <username> admin
-# Then create a publish token for service accounts (diun, tautulli, etc.):
+# Then create a publish token for any future service account that needs it:
 #   docker exec ntfy ntfy token add <username>
 auth-oauth2-providers:
   - name: "authelia"
