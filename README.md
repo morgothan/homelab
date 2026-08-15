@@ -249,8 +249,7 @@ docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
 | Open WebUI | Local LLM chat (backed by Ollama) |
 | Beszel | Infrastructure monitoring |
 | Kopia | Backups |
-| Gotify | Push notifications |
-| ntfy | Push notifications (disabled — pending OIDC validation) |
+| ntfy | Push notifications (disabled) |
 | ttyd | Browser terminal (two-container: shell + nginx router) |
 | NUT + peaNUT | UPS monitoring and web UI |
 | AdGuard Home | DNS + ad blocking (two instances: main + kids) |
