@@ -746,29 +746,6 @@ services:
 #      - traefik.http.routers.ntfy-http-local.service=ntfy
 
 
-########## Diun
-# Watches Docker image updates for its local event database. Homelab News handles reporting.
-  diun:
-    image: crazymax/diun:4.33.0
-    container_name: diun
-    command: serve
-    volumes:
-      - "${DOCKERDIR}/data:/data"
-      - "${USERDIR}/.docker/config.json:/root/.docker/config.json:ro"
-      - "/var/run/docker.sock:/var/run/docker.sock"
-    environment:
-      - "DIUN_WATCH_WORKERS=20"
-      - "DIUN_WATCH_SCHEDULE=0 */6 * * *"
-      - "DIUN_WATCH_JITTER=30s"
-      - "DIUN_PROVIDERS_DOCKER=true"
-      - "DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true"
-    labels:
-      - "diun.enable=true"
-    restart: unless-stopped
-    logging: *logging
-    networks:
-      - ${DOCKERNET}
-
 ########## NUT
 # Network UPS Tools daemon — monitors UPS and exposes data over TCP on :3493 to LAN
   nut:
