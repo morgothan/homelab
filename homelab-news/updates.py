@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 
 from lib import (
-    UPDATE_INTERVAL, UPDATES_FILE, HOMELAB_INTEL_FILE, NOTIFIED_UPDATES_FILE,
+    UPDATE_INTERVAL, UPDATES_FILE, HOMELAB_INTEL_FILE,
     REMOTE_HOSTS, SSH_KEY,
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
     JELLYFIN_URL, JELLYFIN_KEY,
@@ -19,7 +19,7 @@ from lib import (
     remote_digest, parse_image_ref,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
-    load_json, save_json, notify_gotify, run_loop,
+    load_json, save_json, run_loop,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -72,18 +72,6 @@ _GITHUB_URLS: dict[str, Optional[str]] = {
 
 def _known_github_url(name: str) -> Optional[str]:
     return _GITHUB_URLS.get(name.lower())
-
-
-_NOTIFY_TTL = 86400  # 24 h — re-alert if still pending after a day
-
-
-def _notify_key(category: str, name: str, version: str) -> str:
-    return f"{category}/{name}/{version}"
-
-
-def _is_new_finding(notified: dict, key: str, now: float) -> bool:
-    ts = notified.get(key)
-    return ts is None or (now - ts) > _NOTIFY_TTL
 
 
 async def _cached_digest(image_ref: str, sem: asyncio.Semaphore):
@@ -660,46 +648,6 @@ async def run() -> None:
                 u["changelog_analysis"] = raw.strip()
             log.info("Changelog %s/%s: %s", key, name,
                      (u.get("changelog_analysis") or "")[:80])
-
-    # Gotify notification for critical/breaking changelog findings
-    _CRITICAL_KW = re.compile(
-        r'\b(breaking|CVE-\d{4}-\d+|critical|security|migration required)\b', re.IGNORECASE
-    )
-    _now = time.time()
-    _notified = load_json(NOTIFIED_UPDATES_FILE) or {}
-    new_keys: list[str] = []
-    critical_items: list[str] = []
-    notable_items: list[str] = []
-    for label, host in hosts.items():
-        for r in host.get("results", []):
-            analysis = r.get("changelog_analysis", "")
-            if not _CRITICAL_KW.search(analysis):
-                continue
-            nk = _notify_key("docker", f"{label}/{r['container']}", r.get("new_version", r.get("image", "")))
-            if _is_new_finding(_notified, nk, _now):
-                critical_items.append(f"[{label}] {r['container']}: {analysis[:120]}")
-                new_keys.append(nk)
-    for src_key, src in sources.items():
-        for u in src.get("updates", []):
-            analysis = u.get("changelog_analysis", "")
-            if not _CRITICAL_KW.search(analysis):
-                continue
-            name = u.get("app") or u.get("package", src_key)
-            nk = _notify_key("source", name, u.get("new_version", ""))
-            if _is_new_finding(_notified, nk, _now):
-                notable_items.append(f"{name}: {analysis[:120]}")
-                new_keys.append(nk)
-    if new_keys:
-        priority = 7 if critical_items else 5
-        await notify_gotify(
-            title="Lab Monitor: Critical update findings",
-            message="\n\n".join(critical_items + notable_items),
-            priority=priority,
-        )
-        for nk in new_keys:
-            _notified[nk] = _now
-        _notified = {k: v for k, v in _notified.items() if (_now - v) < 172800}
-        save_json(NOTIFIED_UPDATES_FILE, _notified)
 
     # Save Docker-only results (for sidebar updates_card on /current)
     save_json(UPDATES_FILE, {"checked_at": now_ts, "hosts": hosts})

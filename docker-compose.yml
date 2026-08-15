@@ -719,11 +719,7 @@ services:
       - traefik.http.routers.termix.tls.domains[0].sans=*.${DOMAIN}
       - traefik.http.services.termix.loadbalancer.server.port=8080
 
-# TODO: migrate from Gotify to ntfy — OIDC integration needs more research
-#       ntfy OIDC config requires server.yml (env vars don't work for oauth2-providers)
-#       and ntfy's login/OIDC flow needs to be validated before cutover
-########## ntfy (disabled — see TODO above)
-# Push notification server — pending OIDC configuration before cutover from Gotify
+########## ntfy (disabled)
 #  ntfy:
 #    image: binwiederhier/ntfy:latest
 #    restart: unless-stopped
@@ -750,60 +746,8 @@ services:
 #      - traefik.http.routers.ntfy-http-local.service=ntfy
 
 
-########## Gotify
-# Push notification server — receives Docker image update alerts from Diun
-  gotify:
-    image: gotify/server:3.0.0
-    restart: unless-stopped
-    logging: *logging
-    container_name: gotify
-    healthcheck:
-      test: ["CMD-SHELL", "curl -sf http://localhost/health || exit 1"]
-      interval: 30s
-      timeout: 5s
-      retries: 3
-    networks:
-      - ${DOCKERNET}
-      #    ports:
-      #      - 80:80
-    environment:
-      - GOTIFY_DEFAULTUSER_PASS=${GOTIFY_DEFAULTUSER_PASS}
-    volumes:
-      - /etc/localtime:/etc/localtime:ro
-      - /etc/timezone:/etc/timezone:ro
-      - ${DOCKERDIR}/gotify:/app/data
-    labels:
-      - traefik.enable=true
-      # Main router: strip cached browser Basic-auth creds before Authelia sees them (prevents banning)
-      - traefik.http.routers.gotify-http.entrypoints=https
-      - traefik.http.routers.gotify-http.rule=Host(`gotify.${DOMAIN}`)
-      - traefik.http.routers.gotify-http.middlewares=strip-auth-header@file,chain-authelia-nowaf@file,gotify-strip-wwwauth
-      - traefik.http.routers.gotify-http.service=gotify
-      - traefik.http.routers.gotify-http.tls.certresolver=letsencrypt
-      - traefik.http.routers.gotify-http.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.gotify-http.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.gotify.loadbalancer.server.port=80
-      # Login router (higher priority): /client is Gotify's own login endpoint — needs Basic auth
-      # to reach Gotify, so skip strip-auth-header. No Authelia needed; Gotify validates credentials.
-      - traefik.http.routers.gotify-login.entrypoints=https
-      - traefik.http.routers.gotify-login.rule=Host(`gotify.${DOMAIN}`) && Path(`/client`)
-      - traefik.http.routers.gotify-login.priority=100
-      - traefik.http.routers.gotify-login.middlewares=chain-no-auth@file,gotify-strip-wwwauth
-      - traefik.http.routers.gotify-login.service=gotify
-      - traefik.http.routers.gotify-login.tls.certresolver=letsencrypt
-      - traefik.http.routers.gotify-login.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.gotify-login.tls.domains[0].sans=*.${DOMAIN}
-      # Strip WWW-Authenticate from all Gotify responses — prevents browser from caching
-      # Gotify credentials as Basic auth and replaying them to Authelia (causing bans)
-      - traefik.http.middlewares.gotify-strip-wwwauth.headers.customresponseheaders.WWW-Authenticate=""
-        #local access
-      - traefik.http.routers.gotify-http-local.entrypoints=http
-      - traefik.http.routers.gotify-http-local.rule=Host(`gotify.${LOCAL}`)
-      - traefik.http.routers.gotify-http-local.service=gotify
-
-
 ########## Diun
-# Watches for Docker image updates and sends alerts to Gotify
+# Watches Docker image updates for its local event database. Homelab News handles reporting.
   diun:
     image: crazymax/diun:4.33.0
     container_name: diun
@@ -818,10 +762,6 @@ services:
       - "DIUN_WATCH_JITTER=30s"
       - "DIUN_PROVIDERS_DOCKER=true"
       - "DIUN_PROVIDERS_DOCKER_WATCHBYDEFAULT=true"
-      - "DIUN_NOTIF_GOTIFY_ENDPOINT=http://gotify"
-      - "DIUN_NOTIF_GOTIFY_TOKEN=${DIUN_GOTIFY_TOKEN}"
-      - "DIUN_NOTIF_GOTIFY_PRIORITY=1"
-      - "DIUN_NOTIF_GOTIFY_TIMEOUT=10s"
     labels:
       - "diun.enable=true"
     restart: unless-stopped
@@ -1275,8 +1215,6 @@ services:
       - CROWDSEC_KEY=${CROWDSEC_KEY}         # optional: enables CrowdSec CTI on police blotter
       - CROWDSEC_LAPI_URL=http://crowdsec:8080
       - CROWDSEC_LAPI_KEY=${CROWDSEC_LAPI_KEY} # bouncer key for reading active decisions
-      - GOTIFY_URL=${GOTIFY_URL}        # optional: push notifications for critical update findings
-      - GOTIFY_TOKEN=${GOTIFY_TOKEN}    # optional: Gotify app token
       - HOMEASSISTANT_URL=${HOMEASSISTANT_URL}
       - HOMEASSISTANT_TOKEN=${HOMEASSISTANT_TOKEN}
       - TZ=America/New_York

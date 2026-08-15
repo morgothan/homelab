@@ -125,12 +125,8 @@ ABUSEIPDB_KEY  = os.getenv("ABUSEIPDB_KEY", "")
 CROWDSEC_KEY      = os.getenv("CROWDSEC_KEY", "")
 CROWDSEC_LAPI_URL = os.getenv("CROWDSEC_LAPI_URL", "http://crowdsec:8080")
 CROWDSEC_LAPI_KEY = os.getenv("CROWDSEC_LAPI_KEY", "")
-GOTIFY_URL     = os.getenv("GOTIFY_URL", "")
-GOTIFY_TOKEN   = os.getenv("GOTIFY_TOKEN", "")
-
 ARCHIVE_DIR   = os.path.join(DATA_DIR, "archive")
 ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
-NOTIFIED_UPDATES_FILE = os.path.join(DATA_DIR, "notified_updates.json")
 
 
 def _load_context() -> str:
@@ -579,20 +575,6 @@ def merge_library_additions(articles: list[dict], media_events: list[dict]) -> l
     if addition:
         merged.append(addition)
     return merged
-
-async def notify_gotify(title: str, message: str, priority: int = 5) -> None:
-    if not GOTIFY_URL or not GOTIFY_TOKEN:
-        return
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            await client.post(
-                f"{GOTIFY_URL}/message",
-                headers={"X-Gotify-Key": GOTIFY_TOKEN},
-                json={"title": title, "message": message, "priority": priority},
-            )
-    except Exception as e:
-        log.warning("Gotify notification failed: %s", e)
-
 
 # ── Log filtering ─────────────────────────────────────────────────────────────
 

@@ -17,19 +17,16 @@ Two checks:
      full-library run take minutes instead of hours.
 
 Nothing is deleted or re-grabbed automatically. Findings are written to a
-report file; only NEW findings (vs. the last run) trigger a Gotify
-notification, so a fix already awaiting manual review doesn't re-alert
-every week.
+report file consumed by the Homelab News entertainment page.
 
 Required env vars (OpenBao kv/docker/library-dupe-scan):
   SONARR_URL SONARR_API_KEY JELLYFIN_URL JELLYFIN_API_KEY
 Optional:
   JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: plex.iot.<LOCAL>)
-  GOTIFY_URL GOTIFY_TOKEN
 
 Usage:
-  library-dupe-scan             # full scan, write report + state, notify on new findings
-  library-dupe-scan --dry-run   # print report, skip state update and notification
+  library-dupe-scan             # full scan and write the text + JSON reports
+  library-dupe-scan --dry-run   # print report without updating report files
 """
 import json
 import os
@@ -47,7 +44,6 @@ from _openbao import fetch_secrets
 DRY_RUN = "--dry-run" in sys.argv
 
 BIN_DIR = Path(__file__).resolve().parent
-STATE_FILE = BIN_DIR / ".library-dupe-scan-state.json"
 REPORT_FILE = Path.home() / "logs" / "library-dupe-scan-report.txt"
 JSON_REPORT_FILE = Path("/home/nat/docker/traefik/monitor/library-dupe-scan.json")
 TRICKPLAY_HELPER = BIN_DIR / "_trickplay_hash.py"
@@ -58,13 +54,6 @@ SONARR_KEY = cfg.get("SONARR_API_KEY", "")
 JELLYFIN_URL = cfg.get("JELLYFIN_URL", "").rstrip("/")
 JELLYFIN_KEY = cfg.get("JELLYFIN_API_KEY", "")
 JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", f"plex.iot.{cfg.get('LOCAL', '')}")
-GOTIFY_URL = cfg.get("GOTIFY_URL", "")
-# GOTIFY_URL from OpenBao is the docker-internal hostname (http://gotify), only
-# reachable from containers on the proxy network. This script runs as a plain
-# host process, so use the LAN-routed Traefik hostname instead.
-if GOTIFY_URL == "http://gotify":
-    GOTIFY_URL = f"http://gotify.{cfg.get('LOCAL', '')}"
-GOTIFY_TOKEN = cfg.get("GOTIFY_TOKEN", "")
 
 
 def log(msg):
@@ -296,32 +285,6 @@ def confirm_duplicates(dupe_candidates, suffix_map):
     return confirmed
 
 
-# ── Notification / state diffing ─────────────────────────────────────────
-
-def lang_signature(f):
-    return f"lang:{f['series']}:S{f['season']:02d}E{f['episode']:02d}"
-
-
-def dupe_signature(d):
-    eps = sorted(f"S{e['seasonNumber']:02d}E{e['episodeNumber']:02d}" for e, ef in d["episodes"])
-    return f"dupe:{d['series']}:{'|'.join(eps)}"
-
-
-def notify_gotify(title, message, priority=5):
-    if not GOTIFY_URL or not GOTIFY_TOKEN:
-        log("(Gotify not configured — skipping notification)")
-        return
-    body = json.dumps({"title": title, "message": message, "priority": priority}).encode()
-    req = urllib.request.Request(
-        f"{GOTIFY_URL}/message", data=body, method="POST",
-        headers={"X-Gotify-Key": GOTIFY_TOKEN, "Content-Type": "application/json"},
-    )
-    try:
-        urllib.request.urlopen(req, timeout=10)
-    except Exception as e:
-        log(f"WARNING: Gotify notification failed: {e}")
-
-
 def main():
     if not all([SONARR_URL, SONARR_KEY, JELLYFIN_URL, JELLYFIN_KEY]):
         die("missing SONARR_URL / SONARR_API_KEY / JELLYFIN_URL / JELLYFIN_API_KEY "
@@ -373,21 +336,6 @@ def main():
         ],
         "lang_flags": lang_flags,
     }, indent=2))
-
-    prev_state = set()
-    if STATE_FILE.exists():
-        prev_state = set(json.loads(STATE_FILE.read_text()))
-
-    cur_state = {dupe_signature(d) for d in confirmed_dupes} | {lang_signature(f) for f in lang_flags}
-    new_findings = cur_state - prev_state
-    STATE_FILE.write_text(json.dumps(sorted(cur_state)))
-
-    if new_findings:
-        msg = f"{len(new_findings)} new finding(s) — see {REPORT_FILE}\n\n" + "\n".join(sorted(new_findings)[:20])
-        notify_gotify("library-dupe-scan: new findings", msg)
-    else:
-        log("No new findings since last run.")
-
 
 if __name__ == "__main__":
     main()
