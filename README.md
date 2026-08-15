@@ -13,11 +13,11 @@ A self-hosted homelab running on a Proxmox LXC. All services are exposed through
 | Raspberry Pi (primary DNS) | Primary DNS | AdGuard Home + Unbound + Chrony NTP |
 | Raspberry Pi (kids DNS) | Kids DNS | AdGuard Home with child-safety filters |
 | Raspberry Pi (monitoring) | Monitoring hub | Beszel — independent of Proxmox |
-| Intel NUC | Media server | Plex as systemd service, Intel Arc iGPU for HW transcoding |
+| Intel NUC | Media server | Jellyfin as systemd service, Intel Arc iGPU for HW transcoding |
 | TrueNAS | Primary NAS | Xeon Silver, 251 GB RAM, 218 TB pool |
 | Synology | Legacy NAS | Still online, not primary |
 | HA Yellow | Home automation | IoT VLAN; voice pipeline, B&O speakers, 3D printer |
-| Ollama LXC | Local LLM inference | CPU-only; serves HA voice + homelab news |
+| DGX Spark | Local LLM inference | vLLM serves Open WebUI, Hermes, Home Assistant, and Homelab News |
 
 ---
 
@@ -226,14 +226,13 @@ docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
 
 | Service | Purpose |
 |---------|---------|
-| Plex | Media server (NUC, systemd — not Docker) |
-| Jellyfin | Secondary media server |
+| Jellyfin | Media server (NUC, systemd — not Docker) |
 | Sonarr | TV automation |
 | Radarr | Movie automation |
 | NZBGet | Usenet downloader |
 | Tdarr | Video transcoding |
-| Overseerr | Media requests |
-| Tautulli | Plex stats |
+| Seerr (container name `overseerr`) | Media requests; availability webhooks feed Homelab News |
+| Jellystat | Jellyfin watch history and statistics |
 | ErsatzTV | Virtual TV channels (IoT VLAN LXC) |
 
 ### Services
@@ -246,14 +245,14 @@ docker run authelia/authelia:latest authelia crypto hash generate pbkdf2 \
 | Outline | Wiki / knowledge base |
 | Mealie | Recipe manager |
 | Immich | Photo management |
-| Open WebUI | Local LLM chat (backed by Ollama) |
+| Open WebUI | Local LLM chat (backed by vLLM on DGX Spark) |
 | Beszel | Infrastructure monitoring |
 | Kopia | Backups |
 | ntfy | Push notifications (disabled) |
 | ttyd | Browser terminal (two-container: shell + nginx router) |
 | NUT + peaNUT | UPS monitoring and web UI |
 | AdGuard Home | DNS + ad blocking (two instances: main + kids) |
-| Homelab News | Self-hosted daily digest; LLM-generated newspaper from Docker/Loki logs |
+| Homelab News | Authoritative operations/update digest; checks local and remote services and publishes Seerr library additions in Arts & Entertainment |
 
 ### Public Services
 

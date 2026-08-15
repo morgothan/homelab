@@ -12,7 +12,7 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Current Events** | Rolling operational report and detailed source cards | Generated every 15 minutes |
 | **Wire Reports** | Container-image and application update intelligence with LLM summaries | Generated hourly |
 | **Police Blotter** | Active edge and CrowdSec decisions with optional geo, ASN, and abuse intelligence | Live API-backed view |
-| **Arts & Entertainment** | Results from an optional media-library scan | On page load |
+| **Arts & Entertainment** | One consolidated **New Library Additions** story from Seerr availability events, plus optional media-library scan results | On page load |
 | **Archive** | One snapshot per day, grouped by month | Daily |
 | **Trends** | Weekly, monthly, and yearly synthesized reports | Scheduled |
 
@@ -28,7 +28,7 @@ A single container runs a FastAPI web server and five background workers under S
 | `today` | Builds the current-day front page | `UPDATE_INTERVAL` |
 | `rolling` | Builds the rolling Current Events report | `REFRESH_INTERVAL` |
 | `daily` | Copies the last successful edition into the archive | Daily at 00:01 local time |
-| `updates` | Checks container images and supported applications, summarizes release information, and optionally notifies | `UPDATE_INTERVAL` |
+| `updates` | Checks container images and supported applications and summarizes release information | `UPDATE_INTERVAL` |
 | `periodic` | Builds weekly, monthly, and yearly reports and recovers missed schedules after downtime | Scheduled at 00:01 local time |
 
 The news workers collect and persist raw observations before calling the LLM. During generation, the existing articles and successful-generation timestamp remain in place. A successful response replaces the edition; a failed response preserves it with `generation_status: stale`.
@@ -58,7 +58,7 @@ data/
   periodic.json           # weekly, monthly, and yearly reports
   context.md              # optional operator-supplied LLM context
   ip_intel.json           # cached IP intelligence
-  notified_updates.json   # notification de-duplication state
+  media_events.json       # retained Seerr request and availability events
   archive/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day
@@ -143,7 +143,7 @@ environment:
 
 Unset optional integrations are skipped or reported as unconfigured.
 
-### Security intelligence and notifications
+### Security intelligence and media events
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -152,10 +152,13 @@ Unset optional integrations are skipped or reported as unconfigured.
 | `CROWDSEC_KEY` | Optional CrowdSec CTI API key | Empty |
 | `CROWDSEC_LAPI_URL` | CrowdSec local API URL | `http://crowdsec:8080` |
 | `CROWDSEC_LAPI_KEY` | CrowdSec local API key | Empty |
-Seerr request events can be delivered directly to the newspaper at
+Seerr events can be delivered directly to the newspaper at
 `http://lab-monitor:8080/api/events/seerr`. Enable Seerr's Webhook notification
-agent for the desired request and availability event types; events are retained
-in `/data/media_events.json` and included in the daily and rolling editions.
+agent for request and availability event types. Events are retained in
+`/data/media_events.json` and remain available to the daily and rolling editions.
+Movie-available and episode-available events are also grouped into one
+deterministic **New Library Additions** story in Arts & Entertainment; the card
+lists all newly available items instead of generating a separate story per item.
 
 Public IPs are enriched through a third-party geolocation API and cached for seven days. Consider the privacy and availability implications before enabling this feature.
 
@@ -201,7 +204,7 @@ sudo chown -R 1001:1001 homelab-news/data
 Then build and start the service with your Compose configuration:
 
 ```bash
-docker compose up -d --build lab-monitor
+./dc.sh up -d --build lab-monitor
 ```
 
 ## Operations
@@ -216,7 +219,7 @@ docker exec lab-monitor supervisorctl restart rolling
 docker exec lab-monitor supervisorctl restart updates
 
 # Follow service logs
-docker compose logs -f lab-monitor
+./dc.sh logs -f lab-monitor
 
 # Health endpoint
 docker exec lab-monitor python -c \
