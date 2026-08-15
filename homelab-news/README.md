@@ -152,9 +152,6 @@ Unset optional integrations are skipped or reported as unconfigured.
 | `CROWDSEC_KEY` | Optional CrowdSec CTI API key | Empty |
 | `CROWDSEC_LAPI_URL` | CrowdSec local API URL | `http://crowdsec:8080` |
 | `CROWDSEC_LAPI_KEY` | CrowdSec local API key | Empty |
-| `GOTIFY_URL` | Optional Gotify server URL | Empty |
-| `GOTIFY_TOKEN` | Gotify application token | Empty |
-
 Seerr request events can be delivered directly to the newspaper at
 `http://lab-monitor:8080/api/events/seerr`. Enable Seerr's Webhook notification
 agent for the desired request and availability event types; events are retained
