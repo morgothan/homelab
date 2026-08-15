@@ -314,6 +314,12 @@ services:
       - GF_PUBLIC_DASHBOARDS_ENABLED=false
       - GF_FEATURE_TOGGLES_PUBLIC_DASHBOARDS=true
       - GF_LOG_LEVEL=warn
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=smtp-relay.brevo.com:587
+      - GF_SMTP_USER=${GRAFANA_SMTP_USER}
+      - GF_SMTP_PASSWORD=${GRAFANA_SMTP_PASSWORD}
+      - GF_SMTP_FROM_ADDRESS=grafana@${DOMAIN}
+      - GF_SMTP_FROM_NAME=Grafana
     labels:
       - traefik.enable=true
         #external access  
