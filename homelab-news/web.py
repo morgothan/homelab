@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from html import escape as _h
@@ -16,11 +16,11 @@ from lib import (
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     IP_INTEL_FILE, LIBRARY_SCAN_FILE, MEDIA_EVENTS_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, save_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
+    load_json, save_json, load_media_events, resolve_jellyfin_links, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
-    render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html,
+    render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html, render_recent_media_html,
     _render_ban_row,
     log_card, containers_card, updates_card, update_howto,
 )
@@ -124,6 +124,12 @@ async def receive_seerr_event(request: Request):
         "subject": subject[:300],
         "message": message[:2000],
     }
+    media = payload.get("media")
+    if isinstance(media, dict):
+        record["media"] = {
+            key: media[key] for key in ("mediaType", "tmdbId", "tvdbId")
+            if key in media and isinstance(media[key], (str, int))
+        }
     events = load_json(MEDIA_EVENTS_FILE) or []
     if not isinstance(events, list):
         events = []
@@ -396,8 +402,15 @@ async def api_cs_bans(offset: int = 0):
 @app.get("/entertainment")
 async def entertainment():
     data = load_json(LIBRARY_SCAN_FILE)
+    media_events = load_media_events(datetime.now(timezone.utc) - timedelta(days=7))
+    media_links = await resolve_jellyfin_links(media_events)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    body = masthead_rolling(now_str) + nav_bar("entertainment") + render_library_scan_html(data)
+    body = (
+        masthead_rolling(now_str)
+        + nav_bar("entertainment")
+        + render_recent_media_html(media_events, media_links)
+        + render_library_scan_html(data)
+    )
     return Response(content=page_wrap(body), media_type="text/html; charset=utf-8")
 
 
