@@ -138,6 +138,7 @@ environment:
 | `BESZEL_PASS` | Beszel login password |
 | `JELLYFIN_URL` | Jellyfin API URL |
 | `JELLYFIN_KEY` | Jellyfin API key |
+| `JELLYFIN_WEB_URL` | Public Jellyfin base URL used for media detail links |
 | `JELLYSTAT_URL` | Jellystat API URL |
 | `JELLYSTAT_KEY` | Jellystat API key |
 
@@ -155,10 +156,13 @@ Unset optional integrations are skipped or reported as unconfigured.
 Seerr events can be delivered directly to the newspaper at
 `http://lab-monitor:8080/api/events/seerr`. Enable Seerr's Webhook notification
 agent for request and availability event types. Events are retained in
-`/data/media_events.json` and remain available to the daily and rolling editions.
+`/data/media_events.json` and remain visible in the daily and rolling editions for
+seven days, independently of those editions' shorter operational-log windows.
 Movie-available and episode-available events are also grouped into one
 deterministic **New Library Additions** story in Arts & Entertainment; the card
-lists all newly available items instead of generating a separate story per item.
+appears first in that section and lists all newly available items instead of
+generating a separate story per item. The dedicated `/entertainment` page also
+shows the same seven-day list above its media-library scan report.
 
 Public IPs are enriched through a third-party geolocation API and cached for seven days. Consider the privacy and availability implications before enabling this feature.
 

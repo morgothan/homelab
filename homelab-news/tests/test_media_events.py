@@ -77,6 +77,56 @@ class MediaEventTests(unittest.TestCase):
         self.assertIn("1 New Library Addition", html)
         self.assertNotIn("Lead Story", html)
 
+    def test_library_card_is_first_in_arts_and_entertainment(self):
+        articles = [
+            {"headline": "City", "blurb": "Status", "section": "City Hall"},
+            {"headline": "Review", "blurb": "A review", "section": "Arts & Entertainment"},
+            {"headline": "Feature", "blurb": "A feature", "section": "Arts & Entertainment"},
+        ]
+        events = [{
+            "notification_type": "MEDIA_AVAILABLE",
+            "subject": "Example Movie (2026)",
+        }]
+
+        merged = lib.merge_library_additions(articles, events)
+
+        arts = [a for a in merged if a["section"] == "Arts & Entertainment"]
+        self.assertEqual(arts[0]["source"], "seerr-library-additions")
+        self.assertEqual(arts[1]["headline"], "Review")
+
+    def test_entertainment_page_starts_with_seven_day_media_list(self):
+        now = datetime.now(timezone.utc)
+        events = [
+            {"received_at": (now - timedelta(days=1)).isoformat(),
+             "notification_type": "MEDIA_AVAILABLE", "subject": "Recent Movie (2026)"},
+            {"received_at": (now - timedelta(days=8)).isoformat(),
+             "notification_type": "MEDIA_AVAILABLE", "subject": "Old Movie (2025)"},
+        ]
+        with tempfile.TemporaryDirectory() as tmp:
+            events_path = os.path.join(tmp, "media_events.json")
+            scan_path = os.path.join(tmp, "library_scan.json")
+            with open(events_path, "w") as f:
+                json.dump(events, f)
+            with patch.object(lib, "MEDIA_EVENTS_FILE", events_path), \
+                 patch.object(web, "LIBRARY_SCAN_FILE", scan_path):
+                response = TestClient(web.app).get("/entertainment")
+
+        self.assertEqual(response.status_code, 200)
+        html = response.text
+        self.assertIn("Recent Movie (2026)", html)
+        self.assertNotIn("Old Movie (2025)", html)
+        self.assertLess(html.index("New Media &mdash; Past 7 Days"),
+                        html.index("Media Library Report"))
+
+    def test_recent_media_title_links_to_jellyfin_when_resolved(self):
+        events = [{"notification_type": "MEDIA_AVAILABLE", "subject": "A & B (2026)"}]
+        url = "https://jellyfin.example/web/#/details?id=item&serverId=server"
+
+        html = lib.render_recent_media_html(events, {"A & B (2026)": url})
+
+        self.assertIn('href="https://jellyfin.example/web/#/details?id=item&amp;serverId=server"', html)
+        self.assertIn("A &amp; B (2026)</a>", html)
+
 
 if __name__ == "__main__":
     unittest.main()

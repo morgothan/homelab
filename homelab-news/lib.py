@@ -81,6 +81,7 @@ JELLYSTAT_URL    = os.getenv("JELLYSTAT_URL", "http://jellystat:3000")
 JELLYSTAT_KEY    = os.getenv("JELLYSTAT_KEY", "")
 JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "")
 JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
+JELLYFIN_WEB_URL = os.getenv("JELLYFIN_WEB_URL", "").rstrip("/")
 
 # LLM request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -102,6 +103,7 @@ PERIODIC_FILE      = os.path.join(DATA_DIR, "periodic.json")
 HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
 LIBRARY_SCAN_FILE  = os.getenv("LIBRARY_SCAN_FILE", "/traefik/monitor/library-dupe-scan.json")
 MEDIA_EVENTS_FILE  = os.path.join(DATA_DIR, "media_events.json")
+MEDIA_LINKS_FILE   = os.path.join(DATA_DIR, "media_links.json")
 
 PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
@@ -542,6 +544,21 @@ def load_media_events(since: datetime) -> list[dict]:
 
 def build_library_additions_article(media_events: list[dict]) -> Optional[dict]:
     """Build one deterministic Arts & Entertainment story from availability events."""
+    titles = library_addition_titles(media_events)
+    if not titles:
+        return None
+
+    count = len(titles)
+    return {
+        "headline": f"{count} New Library Addition{'s' if count != 1 else ''}",
+        "blurb": "Now available: " + "; ".join(titles) + ".",
+        "section": "Arts & Entertainment",
+        "source": "seerr-library-additions",
+    }
+
+
+def library_addition_titles(media_events: list[dict]) -> list[str]:
+    """Return unique titles from Seerr availability events, in arrival order."""
     titles: list[str] = []
     seen: set[str] = set()
     for event in media_events:
@@ -556,24 +573,98 @@ def build_library_additions_article(media_events: list[dict]) -> Optional[dict]:
             continue
         seen.add(title.casefold())
         titles.append(title)
-    if not titles:
-        return None
+    return titles
 
-    count = len(titles)
-    return {
-        "headline": f"{count} New Library Addition{'s' if count != 1 else ''}",
-        "blurb": "Now available: " + "; ".join(titles) + ".",
-        "section": "Arts & Entertainment",
-        "source": "seerr-library-additions",
-    }
+
+async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
+    """Resolve availability-event titles to cached Jellyfin web detail URLs."""
+    titles = library_addition_titles(media_events)
+    if not titles or not JELLYFIN_URL or not JELLYFIN_KEY or not JELLYFIN_WEB_URL:
+        return {}
+
+    cache = load_json(MEDIA_LINKS_FILE) or {}
+    if not isinstance(cache, dict):
+        cache = {}
+    links: dict[str, str] = {}
+    unresolved: list[str] = []
+    for title in titles:
+        cached = cache.get(title.casefold())
+        if isinstance(cached, dict) and cached.get("item_id") and cached.get("server_id"):
+            links[title] = (
+                f'{JELLYFIN_WEB_URL}/web/#/details?id={cached["item_id"]}'
+                f'&serverId={cached["server_id"]}'
+            )
+        else:
+            unresolved.append(title)
+    if not unresolved:
+        return links
+
+    headers = {"X-Emby-Token": JELLYFIN_KEY}
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            info_response = await client.get(f"{JELLYFIN_URL}/System/Info", headers=headers)
+            info_response.raise_for_status()
+            server_id = str(info_response.json().get("Id") or "")
+            if not server_id:
+                return links
+
+            for subject in unresolved:
+                match = re.fullmatch(r"(.+?)\s*\((\d{4})\)", subject.strip())
+                search_title = match.group(1).strip() if match else subject.strip()
+                expected_year = int(match.group(2)) if match else None
+                response = await client.get(
+                    f"{JELLYFIN_URL}/Items",
+                    headers=headers,
+                    params={
+                        "SearchTerm": search_title,
+                        "Recursive": "true",
+                        "IncludeItemTypes": "Movie,Series,Episode",
+                        "Fields": "ProductionYear",
+                        "Limit": "25",
+                    },
+                )
+                response.raise_for_status()
+                candidates = [
+                    item for item in response.json().get("Items", [])
+                    if str(item.get("Name") or "").strip().casefold() == search_title.casefold()
+                ]
+                if expected_year is not None:
+                    year_matches = [item for item in candidates
+                                    if item.get("ProductionYear") == expected_year]
+                    if year_matches:
+                        candidates = year_matches
+                if len(candidates) != 1 or not candidates[0].get("Id"):
+                    log.info("Jellyfin link unresolved or ambiguous for %r (%d matches)",
+                             subject, len(candidates))
+                    continue
+                item_id = str(candidates[0]["Id"])
+                cache[subject.casefold()] = {
+                    "item_id": item_id,
+                    "server_id": server_id,
+                    "resolved_at": datetime.now(timezone.utc).isoformat(),
+                }
+                links[subject] = (
+                    f"{JELLYFIN_WEB_URL}/web/#/details?id={item_id}&serverId={server_id}"
+                )
+    except Exception as e:
+        log.warning("Jellyfin link resolution failed: %s", e)
+        return links
+
+    save_json(MEDIA_LINKS_FILE, cache)
+    return links
 
 
 def merge_library_additions(articles: list[dict], media_events: list[dict]) -> list[dict]:
-    """Replace the prior generated additions card and append the current one."""
+    """Replace the prior additions card and put the current one first in Arts."""
     merged = [a for a in articles if a.get("source") != "seerr-library-additions"]
     addition = build_library_additions_article(media_events)
     if addition:
-        merged.append(addition)
+        insert_at = next(
+            (i for i, article in enumerate(merged)
+             if article.get("section", "").strip() == "Arts & Entertainment"),
+            len(merged),
+        )
+        merged.insert(insert_at, addition)
     return merged
 
 # ── Log filtering ─────────────────────────────────────────────────────────────
@@ -2424,7 +2515,9 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     )
 
     asn_suggestions = _suggest_asn_blocks(bans)
-    media_events = load_media_events(since)
+    # Library additions are a seven-day feature, independent of the shorter
+    # daily/rolling operational-log window used by the rest of the edition.
+    media_events = load_media_events(datetime.now(timezone.utc) - timedelta(days=7))
     if asn_suggestions:
         log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
 
@@ -2869,6 +2962,7 @@ body {
 .np-blotter-ip { font-size: 0.85rem; font-weight: bold; font-family: "Courier New", monospace; }
 .np-blotter-cat { font-size: 0.85rem; font-weight: bold; }
 .np-blotter-meta { font-size: 0.78rem; color: #888888; }
+.np-blotter-cat a { color: inherit; text-decoration-color: var(--gold); text-underline-offset: 2px; }
 .np-blotter-offense { font-size: 0.78rem; }
 .np-blotter-offense.abuse-med { color: var(--gold2); font-weight: bold; }
 .np-blotter-offense.abuse-hi  { color: #e05c5c; font-weight: bold; }
@@ -3612,6 +3706,37 @@ def render_library_scan_html(data: Optional[dict]) -> str:
         f'<div class="np-blotter-section-head">Wrong Audio-Language Episodes &mdash; {len(langs)} file{"s" if len(langs) != 1 else ""}</div>'
         + langs_html +
         '</div>'
+    )
+
+
+def render_recent_media_html(media_events: list[dict], links: Optional[dict[str, str]] = None) -> str:
+    """Render Seerr availability events as the Entertainment page's top list."""
+    titles = library_addition_titles(media_events)
+    count = len(titles)
+    count_text = f'{count} addition{"s" if count != 1 else ""}'
+    if titles:
+        links = links or {}
+        items = "".join(
+            '<div class="np-blotter-item">'
+            '<span class="np-blotter-cat c-gold">'
+            + (f'<a href="{_h(links[title])}">{_h(title)}</a>' if title in links else _h(title))
+            + '</span>'
+            '</div>'
+            for title in titles
+        )
+    else:
+        items = (
+            '<div class="np-blotter-empty">'
+            '<span class="np-pending">No new media added in the past 7 days.</span>'
+            '</div>'
+        )
+    return (
+        '<div class="np-blotter-page">'
+        '<div class="np-blotter-page-head">New Media &mdash; Past 7 Days'
+        f'<span class="np-blotter-meta" style="margin-left:14px">{count_text}</span>'
+        '</div>'
+        + items
+        + '</div>'
     )
 
 
