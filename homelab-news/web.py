@@ -22,7 +22,7 @@ from lib import (
     render_articles_html, render_blotter_html, render_blotter_skeleton,
     render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html, render_recent_media_html,
     _render_ban_row,
-    log_card, containers_card, updates_card, update_howto,
+    log_card, containers_card, updates_card, update_howto, alerts_card,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -59,6 +59,7 @@ def _status_bar(
     update_hosts: dict,
     n_issues: int,
     issues_label: str,
+    alerts: Optional[list] = None,
 ) -> str:
     hosts = {k: v for k, v in update_hosts.items() if k != "_checked_at"}
     pending: list[str] = []
@@ -78,8 +79,12 @@ def _status_bar(
     def _dot(cls: str, text: str) -> str:
         return f'<span class="{cls}">{text}</span>'
 
-    parts = [_dot("c-ok" if not n_unhealthy else "c-err",
-                  f"{'✓' if not n_unhealthy else '✗'} {n_running} containers")]
+    parts: list[str] = []
+    if alerts:
+        tip = _h("\n".join(f"{a['label']}: {a['detail']}" for a in alerts))
+        parts.append(f'<span class="c-err has-tip" data-tip="{tip}">&#x26a0; {len(alerts)} service(s) down</span>')
+    parts.append(_dot("c-ok" if not n_unhealthy else "c-err",
+                  f"{'✓' if not n_unhealthy else '✗'} {n_running} containers"))
     if n_unhealthy:
         parts.append(_dot("c-err", f"⚠ {n_unhealthy} unhealthy"))
     if n_updates:
@@ -177,7 +182,8 @@ async def index():
         page_refresh = 30
 
     n_issues = len(docker_issues) + len(loki_issues)
-    status = _status_bar(n_running, unhealthy, update_hosts, n_issues, "log issues today")
+    status = _status_bar(n_running, unhealthy, update_hosts, n_issues, "log issues today",
+                          alerts=updates_raw.get("alerts"))
     body = (
         masthead_today(_built_at_text(today), stale=stale)
         + nav_bar("front")
@@ -228,6 +234,7 @@ async def current_events():
         + '<details class="np-section" open>'
         + '<summary class="np-dispatch-head">Field Dispatches</summary>'
         + '<div class="grid" style="margin-top:16px">'
+        + alerts_card(updates_raw.get("alerts") or [])
         + containers_card(unhealthy, starting, n_running)
         + updates_card(update_hosts)
         + log_card("Docker Container Logs", f"Last {ROLLING_HOURS}h", docker_issues, docker_analysis)
