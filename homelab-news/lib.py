@@ -2699,6 +2699,93 @@ async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str], O
     return None, None, None
 
 
+def _semver_sort_key(tag: str) -> tuple:
+    try:
+        return tuple(int(x) for x in tag.lstrip("v").split("."))
+    except ValueError:
+        return (0,)
+
+
+def _semver_tag_pattern(tag: str) -> Optional[re.Pattern]:
+    """Regex matching tags with the same format (component count, v-prefix) as tag."""
+    clean = tag.lstrip("v")
+    parts = clean.split(".")
+    prefix = "v" if tag.startswith("v") else ""
+    n = r"\d+"
+    if len(parts) == 3:
+        pat = rf"^{prefix}{n}\.{n}\.{n}$"
+    elif len(parts) == 2:
+        pat = rf"^{prefix}{n}\.{n}$"
+    else:
+        return None
+    return re.compile(pat)
+
+
+async def _skopeo_list_tags(image: str) -> list[str]:
+    has_auth = os.path.exists(DOCKER_AUTH)
+    attempts = [["--authfile", DOCKER_AUTH]] if has_auth else []
+    attempts.append(["--no-creds"])
+    for auth_args in attempts:
+        proc = None
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "skopeo", "list-tags", *auth_args, f"docker://{image}",
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            )
+            out, _ = await asyncio.wait_for(proc.communicate(), timeout=SKOPEO_TIMEOUT)
+            if proc.returncode == 0:
+                try:
+                    return json.loads(out).get("Tags") or []
+                except json.JSONDecodeError:
+                    return []
+        except Exception:
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.communicate()
+                except Exception:
+                    pass
+    return []
+
+
+async def latest_semver_tag(name: str, current: str) -> Optional[str]:
+    """Return the newest published tag for `name` if it's a real version bump over
+    `current`, else None.
+
+    Lists actual published tags via skopeo (same method as bin/update-images) rather
+    than comparing against :latest's digest/version-label — that heuristic is unreliable
+    since many images don't set org.opencontainers.image.version on :latest, or set it
+    to something unrelated to the app's own version scheme (see remote_digest docstring).
+    """
+    pat = _semver_tag_pattern(current)
+    if not pat:
+        return None
+    tags = await _skopeo_list_tags(name)
+    matching = [t for t in tags if pat.match(t)]
+    if not matching:
+        return None
+    # Guard against date-stamped nightly build tags outranking conventional semver tags.
+    if _semver_sort_key(current)[0] < 10_000:
+        matching = [t for t in matching if _semver_sort_key(t)[0] < 10_000]
+    if not matching:
+        return None
+    best = max(matching, key=_semver_sort_key)
+    if _semver_sort_key(best) <= _semver_sort_key(current):
+        return None
+    # Confirm the tag has a valid, pullable manifest before reporting it as an update.
+    digest, _, _ = await remote_digest(f"{name}:{best}")
+    if digest is None:
+        return None
+    return best
+
+
+def _repo_digest_set(repo_digests: list[str]) -> set[str]:
+    """An image can accumulate multiple RepoDigests entries when Docker Hub
+    re-signs or re-pushes a manifest without changing the image content.
+    Comparing only index 0 causes false-positive stale detection."""
+    return {d.split("@")[1] for d in repo_digests if "@" in d}
+
+
 def get_containers_local() -> list[dict]:
     dc = docker.from_env()
     out = []
@@ -2706,11 +2793,10 @@ def get_containers_local() -> list[dict]:
         ref = parse_image_ref(c.attrs["Config"]["Image"])
         try:
             img = dc.images.get(c.attrs["Image"])
-            digests = img.attrs.get("RepoDigests", [])
-            local_digest = digests[0].split("@")[1] if digests else None
+            local_digests = _repo_digest_set(img.attrs.get("RepoDigests", []))
         except Exception:
-            local_digest = None
-        out.append({"name": c.name, "image": ref, "local_digest": local_digest})
+            local_digests = set()
+        out.append({"name": c.name, "image": ref, "local_digests": local_digests})
     return out
 
 
@@ -2722,11 +2808,10 @@ def get_containers_tcp(url: str) -> list[dict]:
             ref = parse_image_ref(c.attrs["Config"]["Image"])
             try:
                 img = dc.images.get(c.attrs["Image"])
-                digests = img.attrs.get("RepoDigests", [])
-                local_digest = digests[0].split("@")[1] if digests else None
+                local_digests = _repo_digest_set(img.attrs.get("RepoDigests", []))
             except Exception:
-                local_digest = None
-            out.append({"name": c.name, "image": ref, "local_digest": local_digest})
+                local_digests = set()
+            out.append({"name": c.name, "image": ref, "local_digests": local_digests})
     finally:
         dc.close()
     return out
@@ -2752,11 +2837,10 @@ def _parse_container_ls(out: bytes) -> list[dict]:
         name, image, digests_json = parts
         name = name.lstrip("/")
         try:
-            digests = json.loads(digests_json)
-            local_digest = digests[0].split("@")[1] if digests else None
+            local_digests = _repo_digest_set(json.loads(digests_json))
         except Exception:
-            local_digest = None
-        containers.append({"name": name, "image": parse_image_ref(image), "local_digest": local_digest})
+            local_digests = set()
+        containers.append({"name": name, "image": parse_image_ref(image), "local_digests": local_digests})
     return containers
 
 
@@ -3263,6 +3347,24 @@ def render_bans_card(bans: list[dict]) -> str:
         '</summary>'
         f'<div class="card-body">{rows}</div>'
         '</details></div>'
+    )
+
+
+def alerts_card(alerts: list) -> str:
+    """Deterministic, code-rendered outage list — not routed through the LLM article
+    writer, so a down service can't get silently dropped from a summarization prompt."""
+    if not alerts:
+        return ""
+    rows = [
+        '<div class="ctr"><span class="c-err">&#x2717;</span>'
+        f'<span>{_h(a["label"])}</span><span class="c-warn">{_h(a["detail"])}</span></div>'
+        for a in alerts
+    ]
+    return (
+        '<div class="card"><div class="card-head">'
+        '<span class="card-title">Service Alerts</span>'
+        f'<span class="card-meta c-err">{len(alerts)} down</span>'
+        f'</div><div class="card-body">{"".join(rows)}</div></div>'
     )
 
 
