@@ -2,9 +2,9 @@
 """Build and push the RainSoft Grafana dashboard."""
 import json, os, sys, urllib.request, urllib.error
 
-GRAFANA_URL = "http://grafana:3000"
-USER = os.environ["GF_SECURITY_ADMIN_USER"]
-PASS = os.environ["GF_SECURITY_ADMIN_PASSWORD"]
+GRAFANA_URL = os.getenv("GRAFANA_URL", "http://grafana:3000")
+USER = os.getenv("GF_SECURITY_ADMIN_USER") or os.environ["GRAFANA_USERNAME"]
+PASS = os.getenv("GF_SECURITY_ADMIN_PASSWORD") or os.environ["GRAFANA_PASSWORD"]
 
 def api(path):
     req = urllib.request.Request(f"{GRAFANA_URL}{path}")
@@ -14,13 +14,15 @@ def api(path):
         return json.load(r)
 
 import base64
-datasources = api("/api/datasources")
-prom = next((d for d in datasources if d["type"] == "prometheus" and d["isDefault"]), None) \
-       or next((d for d in datasources if d["type"] == "prometheus"), None)
-if not prom:
-    print("No Prometheus datasource found", file=sys.stderr)
-    sys.exit(1)
-DS_UID = prom["uid"]
+DS_UID = os.getenv("GRAFANA_DATASOURCE_UID")
+if not DS_UID:
+    datasources = api("/api/datasources")
+    prom = next((d for d in datasources if d["type"] == "prometheus" and d["isDefault"]), None) \
+           or next((d for d in datasources if d["type"] == "prometheus"), None)
+    if not prom:
+        print("No Prometheus datasource found", file=sys.stderr)
+        sys.exit(1)
+    DS_UID = prom["uid"]
 
 def ds(expr, instant=False, legend=""):
     return {
@@ -110,9 +112,9 @@ def row_panel(id_, title, y):
         "collapsed": False, "panels": [],
     }
 
-def table_info(id_, x, y, w, h):
+def info_table(id_, title, metric, fields, x, y, w, h):
     return {
-        "id": id_, "type": "table", "title": "System Information",
+        "id": id_, "type": "table", "title": title,
         "gridPos": {"x": x, "y": y, "w": w, "h": h},
         "datasource": {"type": "prometheus", "uid": DS_UID},
         "options": {"footer": {"show": False}, "showHeader": True, "cellHeight": "sm"},
@@ -125,9 +127,28 @@ def table_info(id_, x, y, w, h):
         },
         "transformations": [
             {"id": "labelsToFields", "options": {"mode": "columns"}},
-            {"id": "filterFieldsByName", "options": {"include": {"names": ["model","firmware","serial","install_date","hardness","iron_level","unit_size","starting_cap","max_salt_lbs"]}}},
+            {"id": "filterFieldsByName", "options": {"include": {"names": fields}}},
         ],
-        "targets": [ds("rainsoft_system_info", instant=True)],
+        "targets": [ds(metric, instant=True)],
+    }
+
+def event_table(id_, x, y, w, h):
+    return {
+        "id": id_, "type": "table", "title": "Device Event History (codes are undocumented)",
+        "gridPos": {"x": x, "y": y, "w": w, "h": h},
+        "datasource": {"type": "prometheus", "uid": DS_UID},
+        "options": {"footer": {"show": False}, "showHeader": True, "cellHeight": "sm"},
+        "fieldConfig": {
+            "defaults": {"unit": "dateTimeAsLocal"},
+            "overrides": [
+                {"matcher": {"id": "byName", "options": "code"}, "properties": [{"id": "unit", "value": "string"}]},
+            ],
+        },
+        "transformations": [
+            {"id": "labelsToFields", "options": {"mode": "columns"}},
+            {"id": "filterFieldsByName", "options": {"include": {"names": ["code", "Value"]}}},
+        ],
+        "targets": [ds("rainsoft_last_event_timestamp_seconds * 1000", instant=True)],
     }
 
 panels = [
@@ -200,9 +221,9 @@ panels = [
           ]}),
 
     stat(14, "Salt Remaining",         "rainsoft_salt_level_lbs",    8, 10, 4, 4, unit="lbs"),
-    stat(15, "28-Day Salt Used",       "rainsoft_salt_28day_lbs",    12, 10, 4, 4, unit="lbs"),
-    stat(16, "28-Day Regens",          "rainsoft_regens_28day_total",16, 10, 4, 4),
-    stat(17, "Capacity at Cycle Start","rainsoft_capacity_at_start_percent", 20, 10, 4, 4, unit="percent"),
+    stat(15, "Average Weekly Salt",     "rainsoft_average_weekly_salt_lbs", 12, 10, 4, 4, unit="lbs"),
+    stat(16, "Regens — Last 28 Days",   "rainsoft_regens_28day_count",16, 10, 4, 4),
+    stat(17, "Capacity Before Last Regen","rainsoft_capacity_at_start_percent", 20, 10, 4, 4, unit="percent"),
 
     # Salt trend fills the right side of the health row (gauge occupies x=0-8, h=8)
     timeseries(19, "Salt Remaining Trend", [
@@ -212,37 +233,40 @@ panels = [
     # ── Row 4: Filter Service Intervals ────────────────────────────────────
     row_panel(28, "Filter Service Intervals", 18),
 
-    stat(29, "System 1 — Remain Interval",
-         'rainsoft_additional_system_remain_interval{number="1"}',
+    stat(29, "Drinking Water System — Service Due",
+         'rainsoft_additional_system_remaining_months{number="1"}',
          0, 19, 8, 5,
+         unit="suffix: months",
          graph_mode="area",
          thresholds={"mode": "absolute", "steps": [
              {"color": "red",    "value": None},
-             {"color": "orange", "value": 8},
-             {"color": "yellow", "value": 15},
-             {"color": "green",  "value": 30},
+             {"color": "orange", "value": 1},
+             {"color": "yellow", "value": 3},
+             {"color": "green",  "value": 6},
          ]}),
 
-    stat(30, "System 2 — Remain Interval",
-         'rainsoft_additional_system_remain_interval{number="2"}',
+    stat(30, "Filter System — Service Due",
+         'rainsoft_additional_system_remaining_months{number="2"}',
          8, 19, 8, 5,
+         unit="suffix: months",
          graph_mode="area",
          thresholds={"mode": "absolute", "steps": [
              {"color": "red",    "value": None},
-             {"color": "orange", "value": 8},
-             {"color": "yellow", "value": 15},
-             {"color": "green",  "value": 30},
+             {"color": "orange", "value": 1},
+             {"color": "yellow", "value": 3},
+             {"color": "green",  "value": 6},
          ]}),
 
-    stat(31, "System 3 — Remain Interval",
-         'rainsoft_additional_system_remain_interval{number="3"}',
+    stat(31, "Airmaster System — Service Due",
+         'rainsoft_additional_system_remaining_months{number="3"}',
          16, 19, 8, 5,
+         unit="suffix: months",
          graph_mode="area",
          thresholds={"mode": "absolute", "steps": [
              {"color": "red",    "value": None},
-             {"color": "orange", "value": 8},
-             {"color": "yellow", "value": 15},
-             {"color": "green",  "value": 30},
+             {"color": "orange", "value": 1},
+             {"color": "yellow", "value": 3},
+             {"color": "green",  "value": 6},
          ]}),
 
     # ── Row 5: History ─────────────────────────────────────────────────────
@@ -267,14 +291,36 @@ panels = [
 
     # ── Row 6: System Info ─────────────────────────────────────────────────
     row_panel(25, "System Info", 39),
-    table_info(26, 0, 40, 24, 5),
+    info_table(26, "System Information", "rainsoft_system_info",
+               ["model","firmware","serial","install_date","hardness_gpg","iron_ppm",
+                "unit_size_code","starting_capacity_setting","max_salt_setting",
+                "resin_type_code","injector_code","psi_code","drain_flow_gpm"],
+               0, 40, 24, 5),
+
+    row_panel(38, "Configuration and Events", 45),
+    stat(39, "Low-Salt Alarm", "rainsoft_salt_alarm_enabled", 0, 46, 4, 4,
+         mappings=[{"type": "value", "options": {
+             "0": {"text": "Off", "color": "yellow", "index": 0},
+             "1": {"text": "On", "color": "green", "index": 1},
+         }}]),
+    stat(40, "Vacation Duration", "rainsoft_vacation_days", 4, 46, 4, 4, unit="d"),
+    stat(41, "Last Salt Adjustment", "rainsoft_last_salt_adjustment_timestamp_seconds * 1000",
+         8, 46, 8, 4, unit="dateTimeAsLocal",
+         thresholds={"mode": "absolute", "steps": [{"color": "text", "value": None}]}),
+    info_table(42, "Customer Settings", "rainsoft_customer_settings_info",
+               ["regeneration_time","low_salt_alarm_time","salt_type","salt_form","salt_type_code","salt_form_code"],
+               16, 46, 8, 4),
+    info_table(43, "Additional System Definitions", "rainsoft_additional_system_info",
+               ["number","category_code","type_code","install_date","interval_unit","service_interval"],
+               0, 50, 16, 6),
+    event_table(44, 16, 50, 8, 6),
 ]
 
 dashboard = {
     "dashboard": {
         "id": None,
         "uid": "rainsoft-ec5",
-        "title": "RainSoft EC5 Water Softener",
+        "title": "RainSoft EC5 Water Softener - Prometheus",
         "tags": ["rainsoft", "water", "homelab"],
         "timezone": "browser",
         "schemaVersion": 38,
@@ -288,6 +334,11 @@ dashboard = {
 }
 
 payload = json.dumps(dashboard).encode()
+if output_path := os.getenv("DASHBOARD_OUTPUT"):
+    with open(output_path, "wb") as output:
+        output.write(payload)
+    print(f"Dashboard JSON written to {output_path}")
+    sys.exit(0)
 req = urllib.request.Request(
     f"{GRAFANA_URL}/api/dashboards/db",
     data=payload,
