@@ -36,7 +36,8 @@ COMPOSE_FILES = [
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+")
 _SEM_SIZE = 6  # concurrent skopeo requests
 
-LOCAL = fetch_secrets().get("LOCAL", "")
+_SECRETS = fetch_secrets()
+LOCAL = _SECRETS.get("LOCAL", "")
 
 # Remote hosts with their own ~/docker/dc.sh stack — updated via `--all`
 REMOTE_DC_HOSTS = [f"beszel.{LOCAL}", f"whisper.{LOCAL}", f"spark.{LOCAL}", f"hermes.{LOCAL}"]
@@ -278,7 +279,11 @@ def _parse_compose(path: Path) -> dict:
         if cur_build is not None:
             continue
 
-        # Skip unresolved variable substitutions (e.g. image: registry/name:${TAG})
+        # Resolve ${VAR} substitutions against OpenBao secrets (dc.sh injects these
+        # the same way at deploy time — see e.g. POLLER_TAG for unpoller).
+        if "$" in ref:
+            ref = re.sub(r"\$\{(\w+)\}", lambda m: _SECRETS.get(m.group(1), m.group(0)), ref)
+        # Skip anything still unresolved
         if "$" in ref:
             continue
 

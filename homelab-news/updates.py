@@ -16,7 +16,7 @@ from lib import (
     PVE_SSH_HOST, TRUENAS_SSH_HOST, ADGUARD_URLS,
     JELLYFIN_URL, JELLYFIN_KEY,
     HOMEASSISTANT_URL, HOMEASSISTANT_TOKEN, BESZEL_SSH_HOST, SPARK_SSH_HOST, HERMES_SSH_HOST,
-    remote_digest, parse_image_ref,
+    remote_digest, parse_image_ref, latest_semver_tag,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
     load_json, save_json, run_loop,
@@ -107,27 +107,30 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
 
     async def _check_one(c: dict) -> dict:
         image_ref = c["image"]
-        # For semver-pinned tags (e.g. traefik:v3.7.1), check :latest so we detect
-        # newer releases even though the pinned tag digest never changes.
-        check_ref = _latest_ref(image_ref) or image_ref
-        digest, source, version = await _cached_digest(check_ref, sem)
-        if digest is None and check_ref != image_ref:
-            # :latest unavailable — fall back to the pinned tag (will always report current)
-            log.debug("No :latest for %s, falling back to pinned tag", image_ref)
-            digest, source, version = await _cached_digest(image_ref, sem)
+        if _latest_ref(image_ref):
+            # Semver-pinned tag (e.g. traefik:v3.7.1) — check whether a newer tag has
+            # actually been published, instead of comparing against :latest's digest
+            # (see latest_semver_tag docstring for why that's unreliable).
+            name, current_tag = image_ref.rsplit(":", 1)
+            new_tag = await latest_semver_tag(name, current_tag)
+            digest, source, _ = await _cached_digest(image_ref, sem)
+            if digest is None:
+                status = "check_failed"
+            else:
+                status = "update_available" if new_tag else "current"
+            r = {"container": c["name"], "image": image_ref, "status": status}
+            if status == "update_available":
+                r["new_version"] = new_tag
+                if source:
+                    r["_source"] = source
+            return r
+
+        digest, source, _ = await _cached_digest(image_ref, sem)
         if digest is None:
             return {"container": c["name"], "image": image_ref, "status": "check_failed"}
-        if c["local_digest"] is None:
+        if not c["local_digests"]:
             return {"container": c["name"], "image": image_ref, "status": "unknown"}
-        status = "update_available" if c["local_digest"] != digest else "current"
-        if status == "update_available" and check_ref != image_ref and version:
-            # Registries (esp. Docker Hub) mutate manifest-list digests after publish
-            # (build attestations/SBOMs attached post-push), so a digest mismatch alone
-            # is unreliable here. Trust the :latest image's own version label instead:
-            # if it matches our pinned tag, we're already current.
-            pinned_version = image_ref.rsplit(":", 1)[-1]
-            if version.lstrip("v") == pinned_version.lstrip("v"):
-                status = "current"
+        status = "update_available" if digest not in c["local_digests"] else "current"
         r = {"container": c["name"], "image": image_ref, "status": status}
         if status == "update_available" and source:
             r["_source"] = source
@@ -195,6 +198,42 @@ async def check_proxmox_apt() -> dict:
         })
     log.info("Proxmox: %d package updates available", len(updates))
     return {"label": label, "status": "done", "ts": ts, "updates": updates}
+
+
+async def check_pve_lxc_status() -> dict:
+    """Flag any Proxmox LXC configured to auto-start (onboot=1) that isn't running.
+
+    Catches the class of failure where a host reboot (e.g. a kernel update) leaves a
+    container's onboot start silently failed — Proxmox doesn't retry or alert on this.
+    """
+    label = "Proxmox LXCs"
+    ts = datetime.now(timezone.utc).isoformat()
+    if not PVE_SSH_HOST:
+        return {"label": label, "status": "skipped", "ts": ts, "down": []}
+    ok, out = await _ssh_run(
+        PVE_SSH_HOST,
+        "for id in $(sudo -n pct list | tail -n +2 | awk '{print $1}'); do "
+        "cfg=$(sudo -n pct config $id); "
+        "onboot=$(grep -oP 'onboot: \\K\\d+' <<<\"$cfg\"); "
+        "name=$(grep -oP 'hostname: \\K\\S+' <<<\"$cfg\"); "
+        "status=$(sudo -n pct status $id | awk '{print $2}'); "
+        "echo \"$id|$name|${onboot:-0}|$status\"; "
+        "done",
+        timeout=60,
+    )
+    if not ok:
+        return {"label": label, "status": "error", "ts": ts, "error": out, "down": []}
+
+    down = []
+    for line in out.strip().splitlines():
+        parts = line.strip().split("|")
+        if len(parts) != 4:
+            continue
+        ctid, name, onboot, status = parts
+        if onboot == "1" and status != "running":
+            down.append({"ctid": ctid, "name": name, "status": status})
+    log.info("Proxmox LXCs: %d onboot container(s) not running", len(down))
+    return {"label": label, "status": "done", "ts": ts, "down": down}
 
 
 async def check_adguard_update(url: str, label: str) -> dict:
@@ -548,6 +587,7 @@ async def run_homelab_checks() -> dict:
     adguard_coros = [check_adguard_update(url, label) for url, label in ADGUARD_URLS]
     all_results = await asyncio.gather(
         check_proxmox_apt(),
+        check_pve_lxc_status(),
         *adguard_coros,
         check_jellyfin_update(),
         check_truenas_apps(),
@@ -563,7 +603,7 @@ async def run_homelab_checks() -> dict:
         return re.sub(r'\W+', '_', label.lower()).strip('_')
 
     keys = (
-        ["proxmox"]
+        ["proxmox", "proxmox_lxc"]
         + [_key(label) for _, label in ADGUARD_URLS]
         + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel",
            "vllm", "dgx_spark", "traefik_plugins"]
@@ -649,8 +689,26 @@ async def run() -> None:
             log.info("Changelog %s/%s: %s", key, name,
                      (u.get("changelog_analysis") or "")[:80])
 
+    # Deterministic, code-generated outage list — not LLM-dependent, so a down
+    # service is never at the mercy of the article writer's discretion.
+    alerts: list[dict] = []
+    for label, host in hosts.items():
+        for r in host.get("results", []):
+            if r["status"] == "check_failed" and r["container"] == "—":
+                alerts.append({"label": label, "detail": r["image"]})
+    for key, src in sources.items():
+        if src.get("status") == "error":
+            alerts.append({"label": src.get("label", key), "detail": src.get("error", "check failed")})
+        for d in src.get("down", []):
+            alerts.append({
+                "label": f"{src.get('label', key)}: {d['name']}",
+                "detail": f"CT{d['ctid']} {d['status']} (expected running)",
+            })
+    if alerts:
+        log.warning("Outage alerts: %d", len(alerts))
+
     # Save Docker-only results (for sidebar updates_card on /current)
-    save_json(UPDATES_FILE, {"checked_at": now_ts, "hosts": hosts})
+    save_json(UPDATES_FILE, {"checked_at": now_ts, "hosts": hosts, "alerts": alerts})
 
     # Generate LLM articles covering all updates
     articles = await generate_homelab_intel(hosts, sources)
