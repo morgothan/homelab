@@ -49,7 +49,7 @@ services:
   # This stable listener owns the host ports. It is not replaced during a
   # Traefik promotion and health-checks whichever color is running.
   edge-gateway:
-    image: haproxy:3.2.5-alpine # update-images: ignore; update separately during maintenance
+    image: haproxy:3.4.3-alpine # update-images: ignore; opt in with --edge-gateway
     container_name: edge-gateway
     restart: unless-stopped
     logging: *logging
