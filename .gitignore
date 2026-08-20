@@ -202,6 +202,8 @@ prometheus/etc/prometheus.yml
 # Promtail (contains LAN Loki endpoint and runtime state)
 promtail/promtail-config.yml
 promtail/positions.yaml
+# Stale atomic-write temp files (TMPDIR=/etc/promtail workaround, see docker-compose.yml)
+promtail/.positions.yaml*
 
 # Smokeping-prober (contains LAN hostnames to ping)
 smoke/config.yml
@@ -226,6 +228,20 @@ docker-compose.override.yml
 .DS_Store
 *.swp
 *.swo
+
+# Python bytecode cache
+__pycache__/
+*.pyc
+
+# Claude Code local project settings
+.claude/
+
+# Timestamped config backups (manual pre-change snapshots)
+*.bak-*
+
+# Termix pre-upgrade backups
+termix/backups/
+termix/.database-layer-preupgrade-backup.json
 
 
 # claude.md file
