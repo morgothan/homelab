@@ -11,7 +11,7 @@ Two checks:
      Sonarr's 1-second-precision runtime field (adjacent episodes in the
      same season sharing an exact runtime); confirmed via Jellyfin's
      pre-generated trickplay thumbnails — a dHash of the 50%-duration tile,
-     then a 3-point (20/50/80%) byte-size fingerprint for any hash match.
+     then a 3-point (20/50/80%) content-hash fingerprint for any hash match.
      ffmpeg only ever decodes small trickplay JPEGs on the Jellyfin host
      itself; the source video files are never read. This is what makes a
      full-library run take minutes instead of hours.
@@ -222,7 +222,7 @@ def run_trickplay(mode, items):
 
 
 def confirm_duplicates(dupe_candidates, suffix_map):
-    """Two-pass trickplay confirmation: dHash first, byte-fingerprint on any match."""
+    """Two-pass trickplay confirmation: dHash first, content-hash fingerprint on any match."""
     path_by_label = {}
     hash_items = []
     for cand in dupe_candidates:
@@ -265,7 +265,7 @@ def confirm_duplicates(dupe_candidates, suffix_map):
             if jid:
                 fp_items.append([jid, path])
 
-    log(f"Byte-fingerprint verification for {len(fp_items)} files...")
+    log(f"Content-hash fingerprint verification for {len(fp_items)} files...")
     fingerprints = run_trickplay("fingerprint", fp_items)
 
     confirmed = []
