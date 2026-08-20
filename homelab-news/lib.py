@@ -2628,15 +2628,34 @@ async def fetch_github_release_notes(source_url: str) -> Optional[tuple[str, str
 
 # ── Container status ──────────────────────────────────────────────────────────
 
+# Blue/green Traefik+cloudflared edge (docker-compose.edge.yml, see bin/deploy-traefik):
+# only one member of each group is ever running by design — the rest are intentional
+# standbys (instant-rollback candidate, or the permanent legacy fallback pair). A
+# stopped member only means real trouble if every member of its group is stopped.
+_EDGE_STANDBY_GROUPS = [
+    {"traefik", "traefik-blue", "traefik-green"},
+    {"cf_tunnel", "cf-tunnel-blue", "cf-tunnel-green"},
+]
+
+
 def get_container_status() -> tuple[list, list, int]:
     try:
         dc = docker.from_env()
         all_c = dc.containers.list(all=True)
         running = dc.containers.list()
+        running_names = {c.name for c in running}
+
+        def is_expected_edge_standby(c) -> bool:
+            for group in _EDGE_STANDBY_GROUPS:
+                if c.name in group:
+                    return bool(running_names & group)
+            return False
+
         unhealthy = [
             c for c in all_c
-            if c.status != "running"
-            or c.attrs.get("State", {}).get("Health", {}).get("Status") == "unhealthy"
+            if (c.status != "running" and not is_expected_edge_standby(c))
+            or (c.status == "running"
+                and c.attrs.get("State", {}).get("Health", {}).get("Status") == "unhealthy")
         ]
         starting = [
             c for c in all_c
