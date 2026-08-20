@@ -59,6 +59,7 @@ services:
       - 8082:8082
       - 3493:3493
       - 6379:6379
+      - 60123:60123
     volumes:
       - ./traefik/edge/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
