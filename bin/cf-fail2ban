@@ -412,6 +412,21 @@ def _ban_metadata_from_log(ip):
 
 # ── Docker log parsing ────────────────────────────────────────────────────────
 
+def _active_traefik_container():
+    """Traefik moved to a blue/green pair (docker-compose.edge.yml) — only one
+    of traefik-blue/traefik-green is running at a time. Read the active color
+    from traefik/edge/active; fall back to the legacy `traefik` container name
+    if the state file is missing (pre-migration / manual recovery)."""
+    active_file = DOCKER_DIR / "traefik" / "edge" / "active"
+    try:
+        color = active_file.read_text().strip()
+        if color in ("blue", "green"):
+            return f"traefik-{color}"
+    except OSError:
+        pass
+    return "traefik"
+
+
 def docker_logs_since(since_unix):
     """
     Fetch traefik container stdout+stderr since the given Unix timestamp.
@@ -420,7 +435,7 @@ def docker_logs_since(since_unix):
     since_rfc = ts_str(since_unix)
     try:
         result = subprocess.run(
-            ["docker", "logs", "traefik", "--since", since_rfc],
+            ["docker", "logs", _active_traefik_container(), "--since", since_rfc],
             capture_output=True,
             text=True,
             timeout=30,
