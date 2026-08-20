@@ -88,9 +88,9 @@ scrape_configs:
   static_configs:
     - targets: ['dns.yourlocalname:9167']
 
-- job_name: "cloudflared"
-  static_configs:
-    - targets: ["tunnel:60123"]
+# cloudflared runs on per-color isolated edge networks. Scrape its metrics from
+# an explicitly attached monitoring sidecar if desired; do not join Prometheus
+# to those networks or the tunnel would no longer be isolated to Traefik.
 
 - job_name: 'postgres'
   static_configs:

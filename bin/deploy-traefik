@@ -1,0 +1,171 @@
+#!/usr/bin/env bash
+# Blue/green promotion for the Traefik + cloudflared edge pair.
+# Secrets are injected only by dc.sh from OpenBao; this script never writes them.
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")" && pwd)"
+REPO_ROOT="$(dirname "${SCRIPT_DIR}")"
+EDGE_COMPOSE="${REPO_ROOT}/docker-compose.edge.yml"
+EDGE_STATE="${REPO_ROOT}/traefik/edge/active"
+EDGE_LOCK="${REPO_ROOT}/traefik/edge/deploy.lock"
+LEGACY_ACME="${REPO_ROOT}/traefik/acme.json/acme.json"
+STABILIZE_SECONDS="${TRAEFIK_STABILIZE_SECONDS:-15}"
+
+cd "${REPO_ROOT}"
+mkdir -p "${REPO_ROOT}/traefik/edge"
+exec 9>"${EDGE_LOCK}"
+if ! flock -n 9; then
+    echo "Another edge deployment is already running." >&2
+    exit 1
+fi
+
+edge() {
+    "${REPO_ROOT}/dc.sh" -f "${EDGE_COMPOSE}" "$@"
+}
+
+is_running() {
+    [[ "$(docker inspect -f '{{.State.Running}}' "$1" 2>/dev/null || true)" == "true" ]]
+}
+
+wait_healthy() {
+    local container="$1"
+    local status
+    for _ in $(seq 1 36); do
+        status="$(docker inspect -f '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "${container}" 2>/dev/null || true)"
+        case "${status}" in
+            healthy) return 0 ;;
+            unhealthy|exited|dead)
+                docker logs --tail 80 "${container}" >&2 || true
+                return 1
+                ;;
+        esac
+        sleep 5
+    done
+    docker logs --tail 80 "${container}" >&2 || true
+    return 1
+}
+
+wait_running() {
+    local container="$1"
+    for _ in $(seq 1 12); do
+        is_running "${container}" && return 0
+        sleep 5
+    done
+    docker logs --tail 80 "${container}" >&2 || true
+    return 1
+}
+
+active=""
+if [[ -f "${EDGE_STATE}" ]]; then
+    active="$(tr -d '[:space:]' < "${EDGE_STATE}")"
+fi
+if [[ "${active}" != "blue" && "${active}" != "green" ]]; then
+    if is_running cf-tunnel-blue; then
+        active="blue"
+    elif is_running cf-tunnel-green; then
+        active="green"
+    elif is_running cf_tunnel || is_running traefik; then
+        active="legacy"
+    else
+        active="none"
+    fi
+fi
+
+if [[ "${active}" == "blue" ]]; then
+    candidate="green"
+else
+    candidate="blue"
+fi
+
+candidate_traefik="traefik-${candidate}"
+candidate_tunnel="cf-tunnel-${candidate}"
+candidate_dir="${REPO_ROOT}/traefik/edge/${candidate}"
+
+echo "Edge promotion: ${active} -> ${candidate}"
+
+mkdir -p "${candidate_dir}/plugins"
+acme_source=""
+if [[ "${active}" == "blue" || "${active}" == "green" ]]; then
+    acme_source="${REPO_ROOT}/traefik/edge/${active}/acme.json"
+elif [[ -f "${LEGACY_ACME}" ]]; then
+    acme_source="${LEGACY_ACME}"
+fi
+if [[ -n "${acme_source}" && -s "${acme_source}" ]]; then
+    cp "${acme_source}" "${candidate_dir}/acme.json"
+else
+    install -m 600 /dev/null "${candidate_dir}/acme.json"
+fi
+chmod 600 "${candidate_dir}/acme.json"
+
+legacy_stopped=false
+rollback_candidate() {
+    echo "Candidate failed; keeping ${active} active." >&2
+    edge --profile "${candidate}" stop "tunnel-${candidate}" "traefik-${candidate}" >/dev/null 2>&1 || true
+    if [[ "${legacy_stopped}" == "true" ]]; then
+        edge stop edge-gateway >/dev/null 2>&1 || true
+        docker start traefik cf_tunnel >/dev/null 2>&1 || true
+    fi
+}
+trap rollback_candidate ERR
+
+# dc.sh performs the OpenBao authentication and injects all Compose variables.
+edge config --quiet
+# Ensure the stable host-port listener is locally available before a first-time
+# legacy migration; no image pull should occur after the old listener stops.
+edge pull edge-gateway
+edge --profile "${candidate}" up -d --no-deps "traefik-${candidate}"
+wait_healthy "${candidate_traefik}"
+
+# Confirm the configured ping entry point is reachable before exposing the color.
+candidate_ip="$(docker inspect -f '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{"\n"}}{{end}}' "${candidate_traefik}" | sed -n '1p')"
+curl --fail --silent --show-error --max-time 5 "http://${candidate_ip}:8082/ping" >/dev/null
+
+edge --profile "${candidate}" up -d --no-deps "tunnel-${candidate}"
+wait_running "${candidate_tunnel}"
+sleep "${STABILIZE_SECONDS}"
+is_running "${candidate_tunnel}"
+
+# This confirms Cloudflare still has a healthy connector during the overlap.
+# Cloudflare chooses the connector, so candidate-specific readiness is enforced
+# separately by the direct /ping check above.
+external_host="$(docker inspect -f '{{index .Config.Labels "traefik.http.routers.traefik-https.rule"}}' "${candidate_traefik}" \
+    | sed -n 's/.*Host(`\([^`]*\)`).*/\1/p')"
+if [[ -n "${external_host}" ]]; then
+    remote_code="$(curl --silent --show-error --output /dev/null --max-time 15 \
+        --write-out '%{http_code}' "https://${external_host}/api/overview")"
+    if [[ "${remote_code}" == "000" || "${remote_code}" -ge 500 ]]; then
+        echo "External edge smoke test failed with HTTP ${remote_code}." >&2
+        exit 1
+    fi
+fi
+
+if [[ "${active}" == "legacy" ]]; then
+    # The new tunnel is already connected, so remote traffic survives this
+    # one-time migration while host-port ownership moves to edge-gateway.
+    docker stop cf_tunnel >/dev/null
+    docker stop traefik >/dev/null
+    legacy_stopped=true
+    if ! edge up -d edge-gateway; then
+        docker start traefik cf_tunnel >/dev/null 2>&1 || true
+        legacy_stopped=false
+        exit 1
+    fi
+elif [[ "${active}" == "blue" || "${active}" == "green" ]]; then
+    edge up -d edge-gateway
+else
+    edge up -d edge-gateway
+fi
+
+wait_healthy edge-gateway
+curl --fail --silent --show-error --max-time 5 http://127.0.0.1:8082/ping >/dev/null
+
+if [[ "${active}" == "blue" || "${active}" == "green" ]]; then
+    edge --profile "${active}" stop "tunnel-${active}" "traefik-${active}"
+fi
+
+printf '%s\n' "${candidate}" > "${EDGE_STATE}"
+chmod 600 "${EDGE_STATE}"
+trap - ERR
+
+echo "Traefik promotion complete; ${candidate} is active."

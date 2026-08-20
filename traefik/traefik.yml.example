@@ -1,6 +1,9 @@
 api:
   dashboard: true
 
+ping:
+  entryPoint: metrics
+
 entryPoints:
   tcp_nut:
     address: ":3493"

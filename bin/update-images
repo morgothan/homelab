@@ -30,8 +30,10 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 
 COMPOSE_FILES = [
     REPO_ROOT / "docker-compose.yml",
+    REPO_ROOT / "docker-compose.edge.yml",
     REPO_ROOT / "docker-compose.openbao.yml",
 ]
+EDGE_COMPOSE = REPO_ROOT / "docker-compose.edge.yml"
 
 _SEMVER_RE = re.compile(r"^v?\d+\.\d+")
 _SEM_SIZE = 6  # concurrent skopeo requests
@@ -270,6 +272,8 @@ def _parse_compose(path: Path) -> dict:
             continue
 
         # image: <ref>
+        if "update-images: ignore" in line:
+            continue
         img_m = re.match(r'^    image:\s+"?([^"#\s]+)"?', line)
         if not img_m:
             continue
@@ -334,9 +338,13 @@ async def _check_all() -> dict:
             continue
         p = _parse_compose(cf)
         for ref, name, tag in p["semver"]:
-            all_semver.append((cf, ref, name, tag))
+            item = (cf, ref, name, tag)
+            if item not in all_semver:
+                all_semver.append(item)
         for svc, ref in p["rolling"]:
-            all_rolling.append((cf, svc, ref))
+            # Blue and green deliberately use the same image. Check/pull it once.
+            if not any(old_cf == cf and old_ref == ref for old_cf, _, old_ref in all_rolling):
+                all_rolling.append((cf, svc, ref))
         for svc, ctx in p["builds"]:
             all_builds.append((cf, svc, ctx))
 
@@ -558,6 +566,12 @@ def main() -> None:
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
     openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
+    edge_items = list(semver_by_file.get(EDGE_COMPOSE, []))
+    edge_changed = (
+        bool(edge_items)
+        or any(cf == EDGE_COMPOSE for cf, _, _ in rolling_stale)
+        or any(cf == EDGE_COMPOSE for cf, _, _ in build_stale)
+    )
 
     # ── 1. write semver tag changes into compose files ─────────────────────────
     if semver_by_file:
@@ -597,6 +611,19 @@ def main() -> None:
     # ── 4. redeploy ────────────────────────────────────────────────────────────
     # dc.sh handles OpenBao auto-start + secret injection for the main stack.
     _run([str(REPO_ROOT / "dc.sh"), "up", "-d"])
+
+    # Traefik/cloudflared are deliberately absent from the main Compose project.
+    # Promote the complete edge pair through the healthy inactive color instead
+    # of letting Compose replace the only reverse proxy in place.
+    if edge_changed:
+        if _run([str(REPO_ROOT / "bin" / "deploy-traefik")], check=False) != 0:
+            if edge_items:
+                _revert_semver([
+                    (EDGE_COMPOSE, full_ref, name, old_tag, new_tag)
+                    for full_ref, name, old_tag, new_tag in edge_items
+                ])
+            print("[!] Edge promotion failed; compose image tags were reverted.", file=sys.stderr)
+            sys.exit(1)
 
     # Redeploy OpenBao stack separately if any of its images changed.
     openbao_changed = (

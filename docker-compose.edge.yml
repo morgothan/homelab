@@ -1,0 +1,162 @@
+name: edge
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: 10m
+    max-file: "5"
+    tag: "{{.Name}}"
+
+x-traefik-common: &traefik-common
+  restart: unless-stopped
+  logging: *logging
+  read_only: true
+  security_opt:
+    - no-new-privileges=true
+  environment:
+    CF_API_EMAIL: ${CF_API_EMAIL}
+    CF_DNS_API_TOKEN: ${CF_DNS_API_TOKEN}
+  command:
+    - --serverstransport.insecureskipverify=true
+    - --ping=true
+    - --ping.entrypoint=metrics
+  volumes:
+    - /var/run/docker.sock:/var/run/docker.sock:ro
+    - ${DOCKERDIR}/traefik/traefik.yml:/traefik.yml:ro
+    - ${DOCKERDIR}/traefik/ban.html:/ban.html:ro
+    - ${DOCKERDIR}/traefik/configs:/configs:ro
+    - ${DOCKERDIR}/traefik/logs:/logs:rw
+    - /etc/localtime:/etc/localtime:ro
+    - /etc/timezone:/etc/timezone:ro
+  healthcheck:
+    test: ["CMD", "traefik", "healthcheck", "--ping"]
+    interval: 5s
+    timeout: 3s
+    retries: 12
+    start_period: 15s
+
+x-tunnel-common: &tunnel-common
+  restart: unless-stopped
+  logging: *logging
+  command: tunnel run
+  environment:
+    TUNNEL_TOKEN: ${CLOUDFLARED_TOKEN}
+    TUNNEL_LOGLEVEL: warn
+    TUNNEL_METRICS: 0.0.0.0:60123
+    TUNNEL_TRANSPORT_PROTOCOL: http2
+
+services:
+  # This stable listener owns the host ports. It is not replaced during a
+  # Traefik promotion and health-checks whichever color is running.
+  edge-gateway:
+    image: haproxy:3.2.5-alpine # update-images: ignore; update separately during maintenance
+    container_name: edge-gateway
+    restart: unless-stopped
+    logging: *logging
+    ports:
+      - 80:80
+      - 443:443
+      - 8082:8082
+      - 3493:3493
+      - 6379:6379
+    volumes:
+      - ./traefik/edge/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    networks:
+      - edge-blue
+      - edge-green
+    healthcheck:
+      test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  traefik-blue:
+    <<: *traefik-common
+    image: traefik:v3.7.11
+    container_name: traefik-blue
+    profiles: [blue]
+    networks:
+      proxy:
+      dmz:
+      edge-blue:
+        aliases: [traefik]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKERDIR}/traefik/traefik.yml:/traefik.yml:ro
+      - ${DOCKERDIR}/traefik/ban.html:/ban.html:ro
+      - ${DOCKERDIR}/traefik/configs:/configs:ro
+      - ${DOCKERDIR}/traefik/logs:/logs:rw
+      - ${DOCKERDIR}/traefik/edge/blue/plugins:/plugins-storage:rw
+      - ${DOCKERDIR}/traefik/edge/blue/acme.json:/acme.json:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    labels: &traefik-labels
+      traefik.enable: "true"
+      traefik.http.routers.traefik-http-local.entrypoints: http
+      traefik.http.routers.traefik-http-local.rule: Host(`traefik.${LOCAL}`)
+      traefik.http.routers.traefik-http-local.service: api@internal
+      traefik.http.routers.traefik-https.entrypoints: https
+      traefik.http.routers.traefik-https.rule: Host(`traefik.${DOMAIN}`)
+      traefik.http.routers.traefik-https.middlewares: chain-authelia-nowaf@file
+      traefik.http.routers.traefik-https.service: api@internal
+      traefik.http.routers.traefik-https.tls.certresolver: letsencrypt
+      traefik.http.routers.traefik-https.tls.domains[0].main: ${DOMAIN}
+      traefik.http.routers.traefik-https.tls.domains[0].sans: '*.${DOMAIN}'
+      traefik.http.routers.traefik-https.tls.domains[1].main: ${PUBLIC}
+      traefik.http.routers.traefik-https.tls.domains[1].sans: '*.${PUBLIC}'
+      traefik.http.routers.traefik-https.tls.domains[2].main: ${HEYSHUTUP}
+      traefik.http.routers.traefik-https.tls.domains[2].sans: '*.${HEYSHUTUP}'
+
+  tunnel-blue:
+    <<: *tunnel-common
+    image: cloudflare/cloudflared:2026.8.2
+    container_name: cf-tunnel-blue
+    profiles: [blue]
+    depends_on:
+      traefik-blue:
+        condition: service_healthy
+    networks:
+      - edge-blue
+
+  traefik-green:
+    <<: *traefik-common
+    image: traefik:v3.7.11
+    container_name: traefik-green
+    profiles: [green]
+    networks:
+      proxy:
+      dmz:
+      edge-green:
+        aliases: [traefik]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${DOCKERDIR}/traefik/traefik.yml:/traefik.yml:ro
+      - ${DOCKERDIR}/traefik/ban.html:/ban.html:ro
+      - ${DOCKERDIR}/traefik/configs:/configs:ro
+      - ${DOCKERDIR}/traefik/logs:/logs:rw
+      - ${DOCKERDIR}/traefik/edge/green/plugins:/plugins-storage:rw
+      - ${DOCKERDIR}/traefik/edge/green/acme.json:/acme.json:rw
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+    labels: *traefik-labels
+
+  tunnel-green:
+    <<: *tunnel-common
+    image: cloudflare/cloudflared:2026.8.2
+    container_name: cf-tunnel-green
+    profiles: [green]
+    depends_on:
+      traefik-green:
+        condition: service_healthy
+    networks:
+      - edge-green
+
+networks:
+  proxy:
+    external: true
+    name: ${DOCKERNET}
+  dmz:
+    external: true
+    name: ${DMZNET}
+  edge-blue:
+  edge-green:
