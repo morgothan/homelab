@@ -88,9 +88,14 @@ scrape_configs:
   static_configs:
     - targets: ['dns.yourlocalname:9167']
 
-# cloudflared runs on per-color isolated edge networks. Scrape its metrics from
-# an explicitly attached monitoring sidecar if desired; do not join Prometheus
-# to those networks or the tunnel would no longer be isolated to Traefik.
+# cloudflared runs on per-color isolated edge networks that Prometheus does not
+# join (do not attach Prometheus to edge-blue/edge-green — the tunnel would no
+# longer be isolated to Traefik). Instead, edge-gateway (HAProxy) relays
+# cloudflared's own metrics port through to whichever color is active, same as
+# it does for Traefik's :8082 above. See traefik/edge/haproxy.cfg.
+- job_name: "cloudflared"
+  static_configs:
+    - targets: ["traefik:60123"]
 
 - job_name: 'postgres'
   static_configs:
