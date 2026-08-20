@@ -27,18 +27,18 @@ STAGING = Path("/home/nat/docker/kopia/sources/homeassistant")
 
 result = subprocess.run(
     ["ssh", "-p", "22", f"nat@{HA_HOST}",
-     "ls -t /backup/Automatic_backup_*.tar | head -1"],
+     "ls -t /backup/[Aa]utomatic_backup_*.tar | head -1"],
     capture_output=True, text=True,
 )
 latest = result.stdout.strip()
 if not latest:
-    print(f"Error: no Automatic_backup_*.tar found on {HA_HOST}", file=sys.stderr)
+    print(f"Error: no [Aa]utomatic_backup_*.tar found on {HA_HOST}", file=sys.stderr)
     sys.exit(1)
 
 STAGING.mkdir(parents=True, exist_ok=True)
 subprocess.run(["scp", "-O", "-P", "22", f"nat@{HA_HOST}:{latest}", str(STAGING)], check=True)
 
-for f in STAGING.glob("Automatic_backup_*.tar"):
+for f in list(STAGING.glob("Automatic_backup_*.tar")) + list(STAGING.glob("automatic_backup_*.tar")):
     if f.name != Path(latest).name:
         f.unlink()
 
