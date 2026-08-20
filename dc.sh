@@ -35,6 +35,7 @@ source "${ENV_FILE}"
 BAO_KV_PREFIX="${BAO_KV_PREFIX:-docker}"
 
 BAO_COMPOSE="${SCRIPT_DIR}/docker-compose.openbao.yml"
+EDGE_COMPOSE="${SCRIPT_DIR}/docker-compose.edge.yml"
 
 # ── Strip --full flag (handle both stacks) ───────────────────────────────────
 FULL=false
@@ -129,8 +130,21 @@ while IFS= read -r service; do
 done <<< "${PATHS}"
 
 if [[ "${FULL}" == "true" && "${1:-}" == "down" ]]; then
+    if [[ -f "${EDGE_COMPOSE}" ]]; then
+        docker compose -f "${EDGE_COMPOSE}" --profile blue --profile green down
+    fi
     docker compose "$@"
     docker compose -f "${BAO_COMPOSE}" down
+elif [[ "${FULL}" == "true" && "${1:-}" == "up" ]]; then
+    docker compose "$@"
+    edge_state="${SCRIPT_DIR}/traefik/edge/active"
+    edge_color="$(tr -d '[:space:]' < "${edge_state}" 2>/dev/null || true)"
+    if [[ "${edge_color}" != "blue" && "${edge_color}" != "green" ]]; then
+        echo "Edge active-color state is missing; run bin/deploy-traefik." >&2
+        exit 1
+    fi
+    docker compose -f "${EDGE_COMPOSE}" --profile "${edge_color}" up -d \
+        edge-gateway "traefik-${edge_color}" "tunnel-${edge_color}"
 elif [[ "${1:-}" == "pull" ]]; then
     docker compose "$@"
     if [[ -f "${BAO_COMPOSE}" ]]; then

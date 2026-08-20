@@ -26,7 +26,7 @@ A self-hosted homelab running on a Proxmox LXC. All services are exposed through
 ### Traffic Flow
 
 ```
-Internet → Cloudflare → cloudflared ─(cftunnel-transport)─► Traefik
+Internet → Cloudflare → cloudflared ─(isolated color network)─► Traefik
                                                                 │
                                       ┌─────────────────────────┤
                                    (proxy)                   (dmz)
@@ -43,7 +43,7 @@ All external HTTPS traffic arrives via Cloudflare Tunnel — no ports are expose
 |---------|---------|---------|
 | `proxy` | `${DOCKERNET}` | All authenticated services |
 | `dmz` | `${DMZNET}` | Public-facing unauthenticated containers |
-| `cftunnel-transport` | — | Cloudflare Tunnel ↔ Traefik only |
+| `edge_edge-blue/green` | — | Each Cloudflare connector ↔ matching Traefik color only |
 
 ### Domains
 
@@ -121,11 +121,14 @@ All service secrets are stored in **OpenBao** (open-source Vault fork, MPL-2.0).
 # Pull latest image and restart
 ./dc.sh pull <service> && ./dc.sh up -d <service>
 
+# Blue/green Traefik promotion (also used automatically by update-images)
+bin/deploy-traefik
+
 # Bounce main stack only (OpenBao stays up)
 ./dc.sh down && ./dc.sh up -d
 
-# Bounce everything (main stack + OpenBao)
-./dc.sh down --full && ./dc.sh up -d
+# Bounce everything (edge + main stack + OpenBao)
+./dc.sh down --full && ./dc.sh up -d --full
 
 # Check container health
 docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v healthy
@@ -133,6 +136,21 @@ docker ps --format "table {{.Names}}\t{{.Status}}" | grep -v healthy
 # View logs
 ./dc.sh logs -f <service>
 ```
+
+### Zero-downtime Traefik updates
+
+Traefik and cloudflared are defined in `docker-compose.edge.yml`, separately
+from the application stack. `bin/deploy-traefik` starts and health-checks the
+inactive color, connects its Cloudflare Tunnel connector, and only then stops
+the previous color. A stable HAProxy TCP listener retains the host ports used
+by LAN HTTP/HTTPS, metrics, NUT, and Redis during later promotions.
+
+`bin/update-images --all --yes` detects image changes in the edge Compose file
+and calls this promotion automatically. Do not run `docker compose up` directly
+against both edge profiles; use `bin/deploy-traefik` so ACME state is copied and
+the health gates and rollback path are applied. Edge runtime state, per-color
+ACME files, plugin caches, OpenBao credentials, and tunnel credentials are all
+gitignored. `dc.sh` remains the only Compose entry point that injects secrets.
 
 ### Adding a New Docker Service
 
