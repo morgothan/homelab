@@ -11,6 +11,7 @@ Usage:
   bin/update-images --dry-run    # check only, no changes
   bin/update-images --yes        # skip confirmation prompt
   bin/update-images --all        # also update beszel/whisper/spark/hermes/sketchy-nas/nntmux over SSH
+  bin/update-images --edge-gateway  # include HAProxy (brief direct-LAN interruption)
 """
 
 import argparse
@@ -58,24 +59,24 @@ NNTMUX_CMD = (
 # ── sort / pattern helpers ─────────────────────────────────────────────────────
 
 def _sort_key(tag: str) -> tuple:
-    try:
-        return tuple(int(x) for x in tag.lstrip("v").split("."))
-    except ValueError:
+    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", tag)
+    if not match:
         return (0,)
+    return tuple(int(x) for x in match.groups() if x is not None)
 
 
 def _tag_pattern(tag: str) -> Optional[re.Pattern]:
     """Regex matching tags with the same format (component count, v-prefix) as tag."""
-    clean = tag.lstrip("v")
-    parts = clean.split(".")
-    prefix = "v" if tag.startswith("v") else ""
-    n = r"\d+"
-    if len(parts) == 3:
-        pat = rf"^{prefix}{n}\.{n}\.{n}$"
-    elif len(parts) == 2:
-        pat = rf"^{prefix}{n}\.{n}$"
-    else:
+    match = re.match(r"^(v?)(\d+)\.(\d+)(?:\.(\d+))?(.*)$", tag)
+    if not match:
         return None
+    prefix, _, _, patch, suffix = match.groups()
+    n = r"\d+"
+    escaped_suffix = re.escape(suffix)
+    if patch is not None:
+        pat = rf"^{prefix}{n}\.{n}\.{n}{escaped_suffix}$"
+    else:
+        pat = rf"^{prefix}{n}\.{n}{escaped_suffix}$"
     return re.compile(pat)
 
 
@@ -217,7 +218,7 @@ async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) ->
 
 # ── compose parsing ────────────────────────────────────────────────────────────
 
-def _parse_compose(path: Path) -> dict:
+def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
     """
     Parse one compose file into three categories:
       semver:  [(full_ref, image_name, tag), ...]
@@ -272,7 +273,10 @@ def _parse_compose(path: Path) -> dict:
             continue
 
         # image: <ref>
-        if "update-images: ignore" in line:
+        if (
+            "update-images: ignore" in line
+            and not (include_edge_gateway and path == EDGE_COMPOSE and cur_svc == "edge-gateway")
+        ):
             continue
         img_m = re.match(r'^    image:\s+"?([^"#\s]+)"?', line)
         if not img_m:
@@ -326,7 +330,7 @@ def _dockerfile_bases(context_str: str) -> list[str]:
 
 # ── check everything ───────────────────────────────────────────────────────────
 
-async def _check_all() -> dict:
+async def _check_all(include_edge_gateway: bool = False) -> dict:
     sem = asyncio.Semaphore(_SEM_SIZE)
 
     all_semver:  list = []  # (cf, full_ref, name, tag)
@@ -336,7 +340,7 @@ async def _check_all() -> dict:
     for cf in COMPOSE_FILES:
         if not cf.exists():
             continue
-        p = _parse_compose(cf)
+        p = _parse_compose(cf, include_edge_gateway=include_edge_gateway)
         for ref, name, tag in p["semver"]:
             item = (cf, ref, name, tag)
             if item not in all_semver:
@@ -496,9 +500,11 @@ def main() -> None:
                         help="skip confirmation prompt")
     parser.add_argument("--all", "-a", action="store_true",
                         help="also update beszel/whisper/spark/hermes/sketchy-nas/nntmux over SSH")
+    parser.add_argument("--edge-gateway", action="store_true",
+                        help="also check/update HAProxy; briefly interrupts direct LAN/host-port traffic")
     args = parser.parse_args()
 
-    results        = asyncio.run(_check_all())
+    results        = asyncio.run(_check_all(include_edge_gateway=args.edge_gateway))
     semver_by_file = results["semver_by_file"]
     rolling_stale  = results["rolling_stale"]
     build_stale    = results["build_stale"]
@@ -535,6 +541,8 @@ def main() -> None:
         f"{n_rolling} rolling-tag pull(s), "
         f"{n_builds} local rebuild(s)."
     )
+    if args.edge_gateway:
+        print("Edge gateway updates enabled (Cloudflare stays up; direct LAN ports briefly restart).")
 
     if args.dry_run:
         if total:
