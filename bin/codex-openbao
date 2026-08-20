@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Launch Codex with the Outline MCP bearer token fetched from OpenBao.
+
+set -euo pipefail
+
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+ENV_FILE="${REPO_DIR}/.env.openbao"
+
+if [[ ! -f "${ENV_FILE}" ]]; then
+  echo "Error: ${ENV_FILE} not found." >&2
+  exit 1
+fi
+
+# shellcheck source=../.env.openbao
+source "${ENV_FILE}"
+
+: "${BAO_ADDR:?Missing BAO_ADDR in ${ENV_FILE}}"
+: "${BAO_ROLE_ID:?Missing BAO_ROLE_ID in ${ENV_FILE}}"
+: "${BAO_SECRET_ID:?Missing BAO_SECRET_ID in ${ENV_FILE}}"
+BAO_KV_PREFIX="${BAO_KV_PREFIX:-docker}"
+
+BAO_TOKEN=$(jq -cn \
+  --arg role_id "${BAO_ROLE_ID}" \
+  --arg secret_id "${BAO_SECRET_ID}" \
+  '{role_id: $role_id, secret_id: $secret_id}' \
+  | curl -fsS --max-time 5 \
+      -H "Content-Type: application/json" \
+      -d @- \
+      "${BAO_ADDR}/v1/auth/approle/login" \
+  | jq -er '.auth.client_token') \
+  || { echo "Error: Failed to authenticate with OpenBao AppRole." >&2; exit 1; }
+
+OUTLINE_API_KEY=$(curl -fsS --max-time 5 \
+  -H "X-Vault-Token: ${BAO_TOKEN}" \
+  "${BAO_ADDR}/v1/kv/data/${BAO_KV_PREFIX}/outline" \
+  | jq -er '.data.data.OUTLINE_API_KEY') \
+  || { echo "Error: Failed to fetch OUTLINE_API_KEY from OpenBao." >&2; exit 1; }
+
+export OUTLINE_API_KEY
+unset BAO_TOKEN
+
+exec /home/nat/.codex/packages/standalone/current/bin/codex "$@"

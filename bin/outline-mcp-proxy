@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+LOG_FILE="${TMPDIR:-/tmp}/outline-mcp-proxy.log"
+REPO_DIR="$(cd "$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")/.." && pwd)"
+ENV_FILE="${REPO_DIR}/.env.openbao"
+
+source "${ENV_FILE}"
+
+: "${BAO_ADDR:?Missing BAO_ADDR in ${ENV_FILE}}"
+: "${BAO_ROLE_ID:?Missing BAO_ROLE_ID in ${ENV_FILE}}"
+: "${BAO_SECRET_ID:?Missing BAO_SECRET_ID in ${ENV_FILE}}"
+BAO_KV_PREFIX="${BAO_KV_PREFIX:-docker}"
+
+BAO_TOKEN=$(jq -cn \
+  --arg role_id "${BAO_ROLE_ID}" \
+  --arg secret_id "${BAO_SECRET_ID}" \
+  '{role_id: $role_id, secret_id: $secret_id}' \
+  | curl -fsS --max-time 5 \
+      -H 'Content-Type: application/json' \
+      -d @- \
+      "${BAO_ADDR}/v1/auth/approle/login" \
+  | jq -er '.auth.client_token')
+
+OUTLINE_API_KEY=$(curl -fsS --max-time 5 \
+  -H "X-Vault-Token: ${BAO_TOKEN}" \
+  "${BAO_ADDR}/v1/kv/data/${BAO_KV_PREFIX}/outline" \
+  | jq -er '.data.data.OUTLINE_API_KEY')
+
+DOMAIN=$(curl -fsS --max-time 5 \
+  -H "X-Vault-Token: ${BAO_TOKEN}" \
+  "${BAO_ADDR}/v1/kv/data/${BAO_KV_PREFIX}/misc" \
+  | jq -er '.data.data.DOMAIN')
+
+export OUTLINE_API_KEY
+unset BAO_TOKEN
+printf '%s credentials loaded from OpenBao\n' "$(date -Is)" >"${LOG_FILE}"
+
+exec npx -y mcp-remote \
+  "https://outline.${DOMAIN}/mcp" \
+  --header 'Authorization: Bearer ${OUTLINE_API_KEY}' \
+  2>>"${LOG_FILE}"
