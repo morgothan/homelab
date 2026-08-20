@@ -152,6 +152,14 @@ the health gates and rollback path are applied. Edge runtime state, per-color
 ACME files, plugin caches, OpenBao credentials, and tunnel credentials are all
 gitignored. `dc.sh` remains the only Compose entry point that injects secrets.
 
+HAProxy is excluded by default because recreating `edge-gateway` briefly
+interrupts direct LAN/host-port connections (Cloudflare traffic bypasses it).
+Opt in during a maintenance window with:
+
+```bash
+bin/update-images --all --yes --edge-gateway
+```
+
 ### Adding a New Docker Service
 
 Add to `docker-compose.yml` with Traefik labels:
