@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 _trickplay_hash — runs on the Jellyfin host. Given a JSON payload on stdin,
-computes a dHash (mode "hash") or a 3-point byte-size fingerprint (mode
+computes a dHash (mode "hash") or a 3-point content fingerprint (mode
 "fingerprint") for each item's pre-generated trickplay thumbnail(s), using
 the local ffmpeg install to decode the sprite-sheet JPEG and crop out one
 tile. Never touches the source video file directly.
@@ -11,7 +11,7 @@ stdin payload: {"token": "...", "base": "http://localhost:8096",
 argv[1]: "hash" (default) or "fingerprint"
 stdout: {label: dhash_int_or_null, ...} or {label: [fp1, fp2, fp3], ...}
 """
-import json, shutil, subprocess, sys, urllib.request
+import hashlib, json, shutil, subprocess, sys, urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 FFMPEG = shutil.which("ffmpeg") or "/usr/lib/jellyfin-ffmpeg/ffmpeg"
@@ -49,7 +49,11 @@ def tile_coords(jget, user_id, item_id, pct):
     tile_w, tile_h = info["TileWidth"], info["TileHeight"]
     per_sheet = tile_w * tile_h
     thumb_count = info["ThumbnailCount"]
-    if not thumb_count:
+    if thumb_count < 30:
+        # ponytail: <30 tiles means trickplay generation was truncated (e.g.
+        # only the first ~20s got indexed) — 20/50/80% would all sample the
+        # same few seconds of intro instead of spreading across the episode,
+        # producing false duplicate-content matches. Bail rather than confirm.
         return None
     thumb_w, thumb_h = info["Width"], info["Height"]
     thumb_idx = min(int(thumb_count * pct), thumb_count - 1)
@@ -74,8 +78,8 @@ def crop_tile(jget, jget_bytes, user_id, item_id, pct, output_args):
 
 def process(jget, jget_bytes, user_id, item_id, mode):
     if mode == "fingerprint":
-        return [len(crop_tile(jget, jget_bytes, user_id, item_id, pct,
-                               (",", ["-q:v", "3", "-f", "image2"])) or b"")
+        return [hashlib.sha1(crop_tile(jget, jget_bytes, user_id, item_id, pct,
+                                        (",", ["-q:v", "3", "-f", "image2"])) or b"").hexdigest()
                 for pct in (0.2, 0.5, 0.8)]
     raw = crop_tile(jget, jget_bytes, user_id, item_id, 0.5,
                      (",scale=9:8,format=gray", ["-f", "rawvideo"]))
