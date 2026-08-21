@@ -5,3 +5,4 @@ httpx
 supervisor
 tzdata
 headroom-ai
+tiktoken
