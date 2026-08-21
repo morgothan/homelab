@@ -19,8 +19,24 @@ _ET = ZoneInfo("America/New_York")
 
 import docker
 import httpx
+import tiktoken
 
 log = logging.getLogger(__name__)
+
+_CL100K_ENCODING = tiktoken.get_encoding("cl100k_base")
+
+# Hindsight's /recall endpoint rejects queries over HINDSIGHT_API_RECALL_MAX_QUERY_TOKENS
+# cl100k tokens (server default 500) with a 400. Stay comfortably under that rather
+# than relying on a character count, which is only a rough proxy for token count.
+HINDSIGHT_RECALL_MAX_QUERY_TOKENS = 480
+
+
+def _truncate_to_token_limit(text: str, max_tokens: int) -> str:
+    tokens = _CL100K_ENCODING.encode(text)
+    if len(tokens) <= max_tokens:
+        return text
+    return _CL100K_ENCODING.decode(tokens[:max_tokens])
+
 
 try:
     from headroom import compress as _headroom_compress, CompressConfig as _HeadroomConfig
@@ -167,7 +183,9 @@ async def hindsight_recall(query: str, max_tokens: int = 600) -> str:
             resp = await client.post(
                 f"{HINDSIGHT_URL}/v1/default/banks/{HINDSIGHT_BANK}/memories/recall",
                 json={
-                    "query": _sanitize_for_llm(query, max_len=1400),
+                    "query": _truncate_to_token_limit(
+                        _sanitize_for_llm(query, max_len=6000), HINDSIGHT_RECALL_MAX_QUERY_TOKENS
+                    ),
                     "budget": "low",
                     "max_tokens": max_tokens,
                 },
