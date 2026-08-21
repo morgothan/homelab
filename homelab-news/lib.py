@@ -25,6 +25,10 @@ log = logging.getLogger(__name__)
 try:
     from headroom import compress as _headroom_compress, CompressConfig as _HeadroomConfig
     _HEADROOM_AVAILABLE = True
+    # onnxruntime isn't installed (kompress_model="disabled" below means we never need
+    # the ML tier), so headroom's native core warns on every call before falling back
+    # to its unidiff tier. That fallback is what we want; the warning is just noise.
+    logging.getLogger("headroom_core.transforms.detection").setLevel(logging.ERROR)
 except ImportError:
     _HEADROOM_AVAILABLE = False
 
