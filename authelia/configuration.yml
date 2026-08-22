@@ -111,8 +111,8 @@ session:
   name: authelia_session
   same_site: lax
   expiration: 7d
-  inactivity: 2d
-  remember_me: 1M
+  inactivity: 0
+  remember_me: 1y
   cookies:
     - domain: '{{ env "DOMAIN" }}'
       authelia_url: 'https://authelia.{{ env "DOMAIN" }}'
