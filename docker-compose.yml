@@ -97,7 +97,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:v2.0.0
+    image: ghcr.io/gethomepage/homepage:v2.1.2
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -1080,6 +1080,7 @@ services:
       - ${USERDIR}/.docker/config.json:/home/appuser/.docker/config.json:ro
       - ${USERDIR}/.ssh:/root/.ssh:ro
       - ${USERDIR}/docker/homelab-news/data:/data
+      - ${USERDIR}/docker/jellyseerr/settings.json:/seerr/settings.json:ro
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
       - ${USERDIR}/docker/traefik/monitor:/traefik/monitor:ro
       - ${USERDIR}/docker/traefik/traefik.yml:/traefik/traefik.yml:ro
@@ -1107,6 +1108,7 @@ services:
       - JELLYFIN_URL=http://plex.iot.${LOCAL}:8096
       - JELLYFIN_KEY=${JELLYFIN_KEY}
       - JELLYFIN_WEB_URL=https://jellyfin.${DOMAIN}
+      - SEERR_SETTINGS_FILE=/seerr/settings.json
       - SITE_NAME=${SITE_NAME}
       - NODE_EXPORTER_INSTANCE=${NODE_EXPORTER_INSTANCE}
       - PVE_SSH_HOST=${PVE_SSH_HOST}
