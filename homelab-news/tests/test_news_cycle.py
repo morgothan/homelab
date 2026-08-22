@@ -24,6 +24,7 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             "check_kopia": AsyncMock(return_value={}),
             "check_beszel": AsyncMock(return_value={}),
             "check_jellystat": AsyncMock(return_value={}),
+            "fetch_recent_media": AsyncMock(return_value=[]),
             "get_container_status_async": AsyncMock(return_value=([], [], 0)),
             "llm_analysis": AsyncMock(return_value=None),
             "generate_newspaper": AsyncMock(return_value=generated_articles),

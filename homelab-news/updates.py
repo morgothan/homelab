@@ -631,9 +631,10 @@ async def run() -> None:
         host_specs.append(("spark", f"ssh://{SPARK_SSH_HOST}"))
     if HERMES_SSH_HOST:
         host_specs.append(("hermes", f"ssh://{HERMES_SSH_HOST}"))
-    if PVE_SSH_HOST:
-        # nntmux LXC (CT 106) has no direct SSH — relayed via pve pct exec, see get_containers_pct.
-        host_specs.append(("nntmux", f"pct://{PVE_SSH_HOST}/106"))
+    # nntmux LXC (CT 106) was decommissioned 2026-08-21. Keep the container,
+    # but do not poll it for Docker image updates while it is offline.
+    # if PVE_SSH_HOST:
+    #     host_specs.append(("nntmux", f"pct://{PVE_SSH_HOST}/106"))
 
     # Docker image checks and homelab checks run concurrently
     docker_coros = [_check_host(label, url, sem) for label, url in host_specs]

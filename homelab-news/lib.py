@@ -102,6 +102,11 @@ JELLYSTAT_KEY    = os.getenv("JELLYSTAT_KEY", "")
 JELLYFIN_URL     = os.getenv("JELLYFIN_URL",  "")
 JELLYFIN_KEY     = os.getenv("JELLYFIN_KEY",  "")
 JELLYFIN_WEB_URL = os.getenv("JELLYFIN_WEB_URL", "").rstrip("/")
+RADARR_URL       = os.getenv("RADARR_URL", "").rstrip("/")
+RADARR_API_KEY   = os.getenv("RADARR_API_KEY", "")
+SONARR_URL       = os.getenv("SONARR_URL", "").rstrip("/")
+SONARR_API_KEY   = os.getenv("SONARR_API_KEY", "")
+SEERR_SETTINGS_FILE = os.getenv("SEERR_SETTINGS_FILE", "")
 
 # LLM request timeout — generous to survive a full queue at midnight
 # (3 scripts × 3 LLM calls × ~5 min each = up to 45 min worst case)
@@ -564,6 +569,212 @@ def load_media_events(since: datetime) -> list[dict]:
     return recent
 
 
+def _jellyfin_item_subject(item: dict) -> str:
+    """Return a human-readable title for a Jellyfin movie or episode."""
+    name = str(item.get("Name") or "Untitled").strip()
+    if item.get("Type") == "Episode":
+        series = str(item.get("SeriesName") or "Unknown series").strip()
+        season = item.get("ParentIndexNumber")
+        episode = item.get("IndexNumber")
+        number = ""
+        if isinstance(season, int) and isinstance(episode, int):
+            number = f" S{season:02d}E{episode:02d}"
+        return f"{series}{number} — {name}"
+    year = item.get("ProductionYear")
+    return f"{name} ({year})" if isinstance(year, int) else name
+
+
+async def _fetch_recent_jellyfin_media(since: datetime) -> list[dict]:
+    """Query Jellyfin by DateCreated as a fallback media source.
+
+    Seerr availability notifications do not cover new episodes, direct imports,
+    or items Seerr already considered available. Jellyfin's DateCreated is the
+    authoritative timestamp for when an item entered the library.
+    """
+    if not JELLYFIN_URL or not JELLYFIN_KEY:
+        return load_media_events(since)
+
+    since_utc = since.astimezone(timezone.utc)
+    headers = {"X-Emby-Token": JELLYFIN_KEY}
+    params = {
+        "Recursive": "true",
+        "IncludeItemTypes": "Movie,Episode",
+        "Fields": "DateCreated,ProductionYear,SeriesName,ParentIndexNumber,IndexNumber",
+        "SortBy": "DateCreated",
+        "SortOrder": "Descending",
+        "StartIndex": 0,
+        "Limit": 500,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=20) as client:
+            info = await client.get(f"{JELLYFIN_URL}/System/Info", headers=headers)
+            info.raise_for_status()
+            server_id = str(info.json().get("Id") or "")
+            response = await client.get(
+                f"{JELLYFIN_URL}/Items", headers=headers, params=params,
+            )
+            response.raise_for_status()
+            items = response.json().get("Items", [])
+    except Exception as e:
+        log.warning("Recent Jellyfin media query failed; using Seerr events: %s", e)
+        return load_media_events(since)
+
+    recent: list[dict] = []
+    for item in items:
+        try:
+            created = datetime.fromisoformat(
+                str(item["DateCreated"]).replace("Z", "+00:00")
+            )
+            if created.tzinfo is None:
+                created = created.replace(tzinfo=timezone.utc)
+        except (KeyError, TypeError, ValueError):
+            continue
+        if created < since_utc:
+            continue
+        recent.append({
+            "received_at": created.astimezone(timezone.utc).isoformat(),
+            "notification_type": "MEDIA_AVAILABLE",
+            "event": "Jellyfin Library Item Added",
+            "subject": _jellyfin_item_subject(item),
+            "item_id": str(item.get("Id") or ""),
+            "server_id": server_id,
+            "media": {"mediaType": str(item.get("Type") or "").lower()},
+        })
+    return recent
+
+
+async def _fetch_arr_history(
+    base_url: str, api_key: str, since: datetime, kind: str,
+) -> list[dict]:
+    """Return non-upgrade import records from one Radarr/Sonarr history."""
+    since_utc = since.astimezone(timezone.utc)
+    records: list[dict] = []
+    page = 1
+    async with httpx.AsyncClient(timeout=30) as client:
+        while True:
+            params = {
+                "page": page,
+                "pageSize": 500,
+                "sortKey": "date",
+                "sortDirection": "descending",
+            }
+            if kind == "movie":
+                params["includeMovie"] = "true"
+            else:
+                params["includeSeries"] = "true"
+                params["includeEpisode"] = "true"
+            response = await client.get(
+                f"{base_url}/api/v3/history",
+                headers={"X-Api-Key": api_key},
+                params=params,
+            )
+            response.raise_for_status()
+            batch = response.json().get("records", [])
+            if not batch:
+                break
+            reached_window_start = False
+            for record in batch:
+                try:
+                    event_date = datetime.fromisoformat(
+                        str(record["date"]).replace("Z", "+00:00")
+                    )
+                    if event_date.tzinfo is None:
+                        event_date = event_date.replace(tzinfo=timezone.utc)
+                except (KeyError, TypeError, ValueError):
+                    continue
+                if event_date < since_utc:
+                    reached_window_start = True
+                    continue
+                records.append(record)
+            if reached_window_start or len(batch) < 500:
+                break
+            page += 1
+
+    id_key = "movieId" if kind == "movie" else "episodeId"
+    delete_type = "movieFileDeleted" if kind == "movie" else "episodeFileDeleted"
+    upgrades = {
+        (record.get(id_key), record.get("date"))
+        for record in records
+        if record.get("eventType") == delete_type
+        and str((record.get("data") or {}).get("reason", "")).lower() == "upgrade"
+    }
+
+    # History is newest first. Replacing a value as we iterate leaves the first
+    # genuine import in the window when duplicate/redownload events exist.
+    additions: dict[object, dict] = {}
+    for record in records:
+        if record.get("eventType") != "downloadFolderImported":
+            continue
+        identity = record.get(id_key)
+        if not identity or (identity, record.get("date")) in upgrades:
+            continue
+        if kind == "movie":
+            movie = record.get("movie") or {}
+            title = str(movie.get("title") or record.get("sourceTitle") or "Untitled").strip()
+            year = movie.get("year")
+            subject = f"{title} ({year})" if isinstance(year, int) else title
+            lookup_title = title
+        else:
+            series = record.get("series") or {}
+            episode = record.get("episode") or {}
+            series_title = str(series.get("title") or "Unknown series").strip()
+            episode_title = str(episode.get("title") or record.get("sourceTitle") or "Untitled").strip()
+            season = episode.get("seasonNumber")
+            number = episode.get("episodeNumber")
+            code = f" S{season:02d}E{number:02d}" if isinstance(season, int) and isinstance(number, int) else ""
+            subject = f"{series_title}{code} — {episode_title}"
+            lookup_title = series_title
+        additions[identity] = {
+            "received_at": record.get("date"),
+            "notification_type": "MEDIA_AVAILABLE",
+            "event": f"{kind.title()} Download Imported",
+            "subject": subject,
+            "lookup_title": lookup_title,
+            "media": {"mediaType": kind},
+        }
+    return list(additions.values())
+
+
+async def fetch_recent_media(since: datetime) -> list[dict]:
+    """Return genuinely new Radarr/Sonarr imports, with safe fallbacks."""
+    radarr_url, radarr_key = RADARR_URL, RADARR_API_KEY
+    sonarr_url, sonarr_key = SONARR_URL, SONARR_API_KEY
+    if SEERR_SETTINGS_FILE and (not radarr_key or not sonarr_key):
+        settings = load_json(SEERR_SETTINGS_FILE) or {}
+        for kind in ("radarr", "sonarr"):
+            entries = settings.get(kind) or []
+            if not entries or not isinstance(entries[0], dict):
+                continue
+            config = entries[0]
+            scheme = "https" if config.get("useSsl") else "http"
+            base = str(config.get("baseUrl") or "").strip("/")
+            url = f'{scheme}://{config.get("hostname")}:{config.get("port")}'
+            if base:
+                url += f"/{base}"
+            if kind == "radarr" and not radarr_key:
+                radarr_url, radarr_key = url, str(config.get("apiKey") or "")
+            elif kind == "sonarr" and not sonarr_key:
+                sonarr_url, sonarr_key = url, str(config.get("apiKey") or "")
+    sources = []
+    if radarr_url and radarr_key:
+        sources.append(_fetch_arr_history(radarr_url, radarr_key, since, "movie"))
+    if sonarr_url and sonarr_key:
+        sources.append(_fetch_arr_history(sonarr_url, sonarr_key, since, "episode"))
+    if not sources:
+        return await _fetch_recent_jellyfin_media(since)
+
+    results = await asyncio.gather(*sources, return_exceptions=True)
+    events: list[dict] = []
+    for result in results:
+        if isinstance(result, Exception):
+            log.warning("Radarr/Sonarr history query failed: %s", result)
+        else:
+            events.extend(result)
+    if not events and all(isinstance(result, Exception) for result in results):
+        return await _fetch_recent_jellyfin_media(since)
+    return sorted(events, key=lambda event: str(event.get("received_at") or ""), reverse=True)
+
+
 def build_library_additions_article(media_events: list[dict]) -> Optional[dict]:
     """Build one deterministic Arts & Entertainment story from availability events."""
     titles = library_addition_titles(media_events)
@@ -571,9 +782,11 @@ def build_library_additions_article(media_events: list[dict]) -> Optional[dict]:
         return None
 
     count = len(titles)
+    summaries = library_addition_summaries(media_events)
     return {
         "headline": f"{count} New Library Addition{'s' if count != 1 else ''}",
-        "blurb": "Now available: " + "; ".join(titles) + ".",
+        "blurb": "Now available: " + "; ".join(summaries) + ".",
+        "media_additions": summaries,
         "section": "Arts & Entertainment",
         "source": "seerr-library-additions",
     }
@@ -588,7 +801,7 @@ def library_addition_titles(media_events: list[dict]) -> list[str]:
             str(event.get("notification_type", "")),
             str(event.get("event", "")),
         )).lower()
-        if "available" not in event_type:
+        if "available" not in event_type and "imported" not in event_type:
             continue
         title = str(event.get("subject", "")).strip()
         if not title or title.casefold() in seen:
@@ -596,6 +809,48 @@ def library_addition_titles(media_events: list[dict]) -> list[str]:
         seen.add(title.casefold())
         titles.append(title)
     return titles
+
+
+def library_addition_summaries(media_events: list[dict]) -> list[str]:
+    """Compact multiple episode additions from one series for bulletin cards."""
+    entries: list[tuple[str, str, bool]] = []
+    seen: set[str] = set()
+    for event in media_events:
+        event_type = " ".join((
+            str(event.get("notification_type", "")),
+            str(event.get("event", "")),
+        )).lower()
+        if "available" not in event_type and "imported" not in event_type:
+            continue
+        title = str(event.get("subject") or "").strip()
+        if not title or title.casefold() in seen:
+            continue
+        seen.add(title.casefold())
+        media_type = str((event.get("media") or {}).get("mediaType") or "").lower()
+        series = str(event.get("lookup_title") or "").strip()
+        entries.append((title, series, media_type == "episode" and bool(series)))
+
+    episode_counts: dict[str, int] = defaultdict(int)
+    for _, series, is_episode in entries:
+        if is_episode:
+            key = series.casefold()
+            episode_counts[key] += 1
+
+    summaries: list[str] = []
+    emitted_series: set[str] = set()
+    for title, series, is_episode in entries:
+        if not is_episode:
+            summaries.append(title)
+            continue
+        key = series.casefold()
+        if key in emitted_series:
+            continue
+        emitted_series.add(key)
+        count = episode_counts[key]
+        summaries.append(
+            f"{count} new episodes of {series}" if count > 1 else title
+        )
+    return summaries
 
 
 async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
@@ -609,7 +864,17 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
         cache = {}
     links: dict[str, str] = {}
     unresolved: list[str] = []
+    events_by_title = {
+        str(event.get("subject") or "").strip(): event for event in media_events
+    }
     for title in titles:
+        event = events_by_title.get(title, {})
+        if event.get("item_id") and event.get("server_id"):
+            links[title] = (
+                f'{JELLYFIN_WEB_URL}/web/#/details?id={event["item_id"]}'
+                f'&serverId={event["server_id"]}'
+            )
+            continue
         cached = cache.get(title.casefold())
         if isinstance(cached, dict) and cached.get("item_id") and cached.get("server_id"):
             links[title] = (
@@ -631,8 +896,10 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
                 return links
 
             for subject in unresolved:
-                match = re.fullmatch(r"(.+?)\s*\((\d{4})\)", subject.strip())
-                search_title = match.group(1).strip() if match else subject.strip()
+                event = events_by_title.get(subject, {})
+                lookup_title = str(event.get("lookup_title") or subject).strip()
+                match = re.fullmatch(r"(.+?)\s*\((\d{4})\)", lookup_title)
+                search_title = match.group(1).strip() if match else lookup_title
                 expected_year = int(match.group(2)) if match else None
                 response = await client.get(
                     f"{JELLYFIN_URL}/Items",
@@ -2539,7 +2806,9 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     asn_suggestions = _suggest_asn_blocks(bans)
     # Library additions are a seven-day feature, independent of the shorter
     # daily/rolling operational-log window used by the rest of the edition.
-    media_events = load_media_events(datetime.now(timezone.utc) - timedelta(days=7))
+    media_events = await fetch_recent_media(
+        datetime.now(timezone.utc) - timedelta(days=7)
+    )
     if asn_suggestions:
         log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
 
@@ -2917,8 +3186,7 @@ async def get_containers_ssh(url: str) -> list[dict]:
 
 async def get_containers_pct(host: str, ctid: str) -> list[dict]:
     """Like get_containers_ssh, but for an LXC with no direct SSH access — relays
-    through the Proxmox host's `pct exec` (same pattern as bin/update-images'
-    NNTMUX_CMD). shlex.quote handles the nested-quoting since _DETECT_CONTAINERS_CMD
+    through the Proxmox host's `pct exec`. shlex.quote handles the nested-quoting since _DETECT_CONTAINERS_CMD
     itself contains single quotes."""
     relay_cmd = f"sudo -n /usr/sbin/pct exec {ctid} -- bash -c {shlex.quote(_DETECT_CONTAINERS_CMD)}"
     argv = [
@@ -3068,6 +3336,9 @@ body {
 }
 .np-hl { font-size: 1.05rem; font-weight: bold; line-height: 1.2; color: var(--text); margin-bottom: 8px; padding-bottom: 7px; border-bottom: 1px solid var(--bdr); }
 .np-blurb { font-size: 0.82rem; line-height: 1.7; color: #999999; }
+.np-media-additions { margin: 6px 0 0; padding-left: 18px; }
+.np-media-additions li { margin: 3px 0; padding-left: 2px; }
+.np-media-additions li::marker { color: var(--gold2); }
 .np-briefs { border-top: 1px solid var(--bdr); padding: 14px 0 0; margin-top: 0; }
 .np-briefs-head {
   font-size: 0.62rem; letter-spacing: 0.22em; text-transform: uppercase;
@@ -3471,9 +3742,6 @@ def update_howto(*, container: str = "", host: str = "", source_label: str = "")
     fqdn = _DC_SH_HOSTS.get(host)
     if fqdn:
         return f"On {fqdn}: ./dc.sh pull {container} && ./dc.sh up -d {container}"
-    if host == "nntmux":
-        return (f"No direct SSH to the nntmux LXC — via pve.{LOCAL}: sudo pct exec 106 -- "
-                f"bash -c 'cd ~/docker && ./dc.sh pull {container} && ./dc.sh up -d {container}'")
     return f"SSH to {host} and update via its own docker workflow — not part of this repo's compose stack."
 
 
@@ -3995,6 +4263,21 @@ def render_articles_html(articles: list[dict]) -> str:
     }
     default_kickers = ["Report", "Update", "Bulletin", "Notice"]
 
+    def _card_blurb(article: dict) -> str:
+        additions = article.get("media_additions")
+        if article.get("source") == "seerr-library-additions" and not isinstance(additions, list):
+            legacy_blurb = str(article.get("blurb") or "")
+            prefix = "Now available: "
+            if legacy_blurb.startswith(prefix):
+                additions = legacy_blurb.removeprefix(prefix).removesuffix(".").split("; ")
+        if article.get("source") == "seerr-library-additions" and isinstance(additions, list):
+            items = "".join(f"<li>{_h(item)}</li>" for item in additions if item)
+            return (
+                '<div class="np-blurb">Now available:'
+                f'<ul class="np-media-additions">{items}</ul></div>'
+            )
+        return f'<div class="np-blurb">{_h(article["blurb"])}</div>'
+
     for section in SECTION_ORDER:
         arts = by_section.get(section)
         if not arts:
@@ -4007,7 +4290,7 @@ def render_articles_html(articles: list[dict]) -> str:
             '<div class="np-article">'
             f'<div class="np-article-kicker">{kickers[idx % len(kickers)]}</div>'
             f'<div class="np-hl">{_h(a["headline"])}</div>'
-            f'<div class="np-blurb">{_h(a["blurb"])}</div></div>'
+            f'{_card_blurb(a)}</div>'
             for idx, a in enumerate(cols)
         )
         brief_html = ""
