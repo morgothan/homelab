@@ -139,6 +139,11 @@ environment:
 | `JELLYFIN_URL` | Jellyfin API URL |
 | `JELLYFIN_KEY` | Jellyfin API key |
 | `JELLYFIN_WEB_URL` | Public Jellyfin base URL used for media detail links |
+| `RADARR_URL` | Radarr API URL used for net-new movie imports |
+| `RADARR_API_KEY` | Radarr API key |
+| `SONARR_URL` | Sonarr API URL used for net-new episode imports |
+| `SONARR_API_KEY` | Sonarr API key |
+| `SEERR_SETTINGS_FILE` | Optional read-only Seerr settings fallback for Arr connection details |
 | `JELLYSTAT_URL` | Jellystat API URL |
 | `JELLYSTAT_KEY` | Jellystat API key |
 
@@ -153,12 +158,15 @@ Unset optional integrations are skipped or reported as unconfigured.
 | `CROWDSEC_KEY` | Optional CrowdSec CTI API key | Empty |
 | `CROWDSEC_LAPI_URL` | CrowdSec local API URL | `http://crowdsec:8080` |
 | `CROWDSEC_LAPI_KEY` | CrowdSec local API key | Empty |
-Seerr events can be delivered directly to the newspaper at
+Recent library additions come from Radarr and Sonarr import history. Imports
+paired with an upgrade deletion are excluded, and repeated imports are
+deduplicated by movie or episode. Jellyfin is used as a fallback. Seerr events can
+also be delivered directly to the newspaper at
 `http://lab-monitor:8080/api/events/seerr`. Enable Seerr's Webhook notification
 agent for request and availability event types. Events are retained in
 `/data/media_events.json` and remain visible in the daily and rolling editions for
-seven days, independently of those editions' shorter operational-log windows.
-Movie-available and episode-available events are also grouped into one
+seven days as a fallback when Jellyfin is unavailable, independently of those
+editions' shorter operational-log windows. Recent movies and episodes are grouped into one
 deterministic **New Library Additions** story in Arts & Entertainment; the card
 appears first in that section and lists all newly available items instead of
 generating a separate story per item. The dedicated `/entertainment` page also

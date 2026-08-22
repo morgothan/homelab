@@ -16,7 +16,7 @@ from lib import (
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
     IP_INTEL_FILE, LIBRARY_SCAN_FILE, MEDIA_EVENTS_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, save_json, load_media_events, resolve_jellyfin_links, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
+    load_json, save_json, fetch_recent_media, resolve_jellyfin_links, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
@@ -409,7 +409,7 @@ async def api_cs_bans(offset: int = 0):
 @app.get("/entertainment")
 async def entertainment():
     data = load_json(LIBRARY_SCAN_FILE)
-    media_events = load_media_events(datetime.now(timezone.utc) - timedelta(days=7))
+    media_events = await fetch_recent_media(datetime.now(timezone.utc) - timedelta(days=7))
     media_links = await resolve_jellyfin_links(media_events)
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     body = (
