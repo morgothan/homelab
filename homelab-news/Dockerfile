@@ -10,7 +10,7 @@ RUN apt-get update \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY *.py supervisord.conf .
+COPY *.py supervisord.conf ./
 # supervisord doesn't reset HOME when switching to user=appuser, so it stays
 # /root (root's own HOME) for those workers — headroom's cache then tries to
 # write to /root/.headroom and gets Permission Denied. Point it somewhere

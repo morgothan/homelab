@@ -156,6 +156,11 @@ CROWDSEC_LAPI_KEY = os.getenv("CROWDSEC_LAPI_KEY", "")
 ARCHIVE_DIR   = os.path.join(DATA_DIR, "archive")
 ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
 
+# Keep this module as a compatibility facade while configuration lives in one
+# focused, independently testable module.  Existing workers may continue to
+# import these names from ``lib`` during the migration.
+from config import *  # noqa: E402,F403
+
 
 def _load_context() -> str:
     """Load optional homelab context file from /data/context.md.
@@ -515,17 +520,10 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _parse_remote_hosts() -> list[tuple[str, str]]:
-    raw = os.getenv("REMOTE_DOCKER_HOSTS", "")
-    hosts = []
-    for entry in raw.split(","):
-        entry = entry.strip()
-        if not entry:
-            continue
-        url = entry if "://" in entry else f"tcp://{entry}"
-        host_part = url.split("://", 1)[1].split("@")[-1]
-        label = host_part.split(":")[0].split(".")[0]
-        hosts.append((label, url))
-    return hosts
+    """Compatibility wrapper for :func:`config.parse_remote_hosts`."""
+    from config import parse_remote_hosts
+
+    return parse_remote_hosts()
 
 REMOTE_HOSTS: list[tuple[str, str]] = _parse_remote_hosts()
 
@@ -551,6 +549,11 @@ def save_json(path: str, data) -> None:
         os.replace(tmp, path)
     except Exception as e:
         log.warning("Failed to save %s: %s", path, e)
+
+
+# Persistence now has a single implementation.  Re-export both names so callers
+# and existing tests retain the original public surface.
+from storage import load_json, save_json  # noqa: E402,F811
 
 
 def load_media_events(since: datetime) -> list[dict]:
@@ -2478,21 +2481,9 @@ def _validate_articles(raw: list, max_count: int = 16) -> list[dict]:
     Enforces field-length limits so oversized injected content cannot be stored
     or displayed. Unknown section values are normalised to City Hall.
     """
-    valid = []
-    for a in raw:
-        if not isinstance(a, dict):
-            continue
-        if "headline" not in a or "blurb" not in a:
-            continue
-        headline = str(a["headline"])[:200]
-        blurb    = str(a["blurb"])[:600]
-        section  = str(a.get("section", "City Hall"))[:50]
-        if section not in SECTION_ORDER:
-            section = "City Hall"
-        valid.append({"headline": headline, "blurb": blurb, "section": section})
-        if len(valid) == max_count:
-            break
-    return valid
+    from articles import validate_articles
+
+    return validate_articles(raw, max_count)
 
 
 def _ban_summary(bans: list[dict]) -> list[str]:
@@ -2611,31 +2602,9 @@ async def generate_periodic_summary(
 
 def _parse_llm_json(content: str) -> list:
     """Parse LLM output as a JSON array using three progressively looser strategies."""
-    content = re.sub(r"^```(?:json)?\n?", "", content)
-    content = re.sub(r"\n?```$", "", content.strip())
-    try:
-        result = json.loads(content)
-        if isinstance(result, list):
-            return result
-    except json.JSONDecodeError:
-        pass
-    m = re.search(r'\[[\s\S]*\]', content)
-    if m:
-        try:
-            result = json.loads(m.group(0))
-            if isinstance(result, list):
-                return result
-        except json.JSONDecodeError:
-            pass
-    articles = []
-    for m in re.finditer(r'\{[^{}]+\}', content, re.DOTALL):
-        try:
-            obj = json.loads(m.group(0))
-            if "headline" in obj and "blurb" in obj:
-                articles.append(obj)
-        except json.JSONDecodeError:
-            pass
-    return articles
+    from articles import parse_llm_json
+
+    return parse_llm_json(content)
 
 
 async def llm_changelog_analysis(container: str, image: str, tag: str, notes: str) -> Optional[str]:
@@ -2884,16 +2853,9 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
 # ── Worker loop helper ───────────────────────────────────────────────────────
 
 async def run_loop(fn, interval: int, log=None) -> None:
-    if log is None:
-        log = logging.getLogger("lab-monitor")
-    while True:
-        try:
-            await fn()
-        except Exception as e:
-            log.error("Run failed: %s", e)
-        wait = interval - (time.time() % interval)
-        log.info("Next run in %ds", int(wait))
-        await asyncio.sleep(wait)
+    from runtime import run_loop as run_worker_loop
+
+    await run_worker_loop(fn, interval, log)
 
 
 # ── GitHub release notes ──────────────────────────────────────────────────────

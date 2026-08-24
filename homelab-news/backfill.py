@@ -30,13 +30,13 @@ from datetime import date, datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(__file__))
 
+from config import ARCHIVE_FILE, MAX_MONTHLY, MAX_WEEKLY, PERIODIC_FILE
+from storage import load_json, save_json
+
 from lib import (
-    ARCHIVE_FILE, PERIODIC_FILE,
-    MAX_WEEKLY, MAX_MONTHLY,
     check_loki,
     generate_newspaper, generate_periodic_summary,
     llm_analysis, _ban_summary,
-    load_json, save_json,
 )
 
 logging.basicConfig(

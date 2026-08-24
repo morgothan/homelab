@@ -33,6 +33,23 @@ A single container runs a FastAPI web server and five background workers under S
 
 The news workers collect and persist raw observations before calling the LLM. During generation, the existing articles and successful-generation timestamp remain in place. A successful response replaces the edition; a failed response preserves it with `generation_status: stale`.
 
+### Source organization
+
+The application uses focused foundation modules beneath stable worker entry
+points:
+
+| Module | Responsibility |
+|--------|----------------|
+| `config.py` | Environment parsing, schedules, integration settings, and data paths |
+| `storage.py` | UTF-8 JSON loading and atomic persistence |
+| `articles.py` | Typed article contract and validation of untrusted LLM output |
+| `runtime.py` | Failure-isolated, interval-aligned worker scheduling |
+| `lib.py` | Compatibility facade for collectors, inference, security, and rendering |
+
+The facade keeps existing imports and Supervisor commands compatible while
+allowing cohesive areas to evolve independently. Development conventions and
+the container-based validation workflow are documented in `DEVELOPMENT.md`.
+
 ## Requirements
 
 - Docker Engine and Docker Compose
