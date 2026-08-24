@@ -75,6 +75,8 @@ data/
   homelab_intel.json      # generated update intelligence
   periodic.json           # weekly, monthly, and yearly reports
   trend_intelligence.json # cached Hindsight reflection and deterministic window measurements
+  events.json             # normalized 90-day operational event ledger used for correlation
+  container_state.json    # last observed image identities for real deployment transitions
   context.md              # optional operator-supplied LLM context
   ip_intel.json           # cached IP intelligence
   media_events.json       # retained Seerr request and availability events
@@ -83,6 +85,15 @@ data/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day
 ```
+
+The daily and rolling workers normalize log errors, security bans, and pending
+container-image updates into the shared event ledger. The update worker separately
+tracks actual running-image changes, so pending updates are never described as
+deployments. Events for the same service within a ten-minute window are supplied to
+the editor as timing correlations; the prompt explicitly treats these as context,
+not proof that one event caused another.
+Hindsight recall is also scoped to the highest-signal services in the current cycle
+(for example, Traefik changes and earlier Traefik incidents) and cached for six hours.
 
 `archive.json` is a legacy format. The daily worker migrates it to per-day files at startup and renames the old file with a `.migrated` suffix.
 

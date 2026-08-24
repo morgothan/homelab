@@ -12,7 +12,8 @@ import httpx
 
 from config import (
     ADGUARD_URLS, BESZEL_SSH_HOST, HERMES_SSH_HOST,
-    HOMEASSISTANT_TOKEN, HOMEASSISTANT_URL, HOMELAB_INTEL_FILE,
+    CONTAINER_STATE_FILE, EVENT_LEDGER_FILE, HOMEASSISTANT_TOKEN, HOMEASSISTANT_URL,
+    HOMELAB_INTEL_FILE,
     JELLYFIN_KEY, JELLYFIN_URL, PVE_SSH_HOST, REMOTE_HOSTS, SPARK_SSH_HOST,
     SSH_KEY, TRUENAS_SSH_HOST, UPDATE_INTERVAL, UPDATES_FILE,
 )
@@ -109,6 +110,10 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
         ]}
 
     async def _check_one(c: dict) -> dict:
+        def observed(result: dict) -> dict:
+            result["_local_digests"] = sorted(str(item) for item in c.get("local_digests", []) if item)
+            return result
+
         image_ref = c["image"]
         if _latest_ref(image_ref):
             # Semver-pinned tag (e.g. traefik:v3.7.1) — check whether a newer tag has
@@ -126,18 +131,18 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
                 r["new_version"] = new_tag
                 if source:
                     r["_source"] = source
-            return r
+            return observed(r)
 
         digest, source, _ = await _cached_digest(image_ref, sem)
         if digest is None:
-            return {"container": c["name"], "image": image_ref, "status": "check_failed"}
+            return observed({"container": c["name"], "image": image_ref, "status": "check_failed"})
         if not c["local_digests"]:
-            return {"container": c["name"], "image": image_ref, "status": "unknown"}
+            return observed({"container": c["name"], "image": image_ref, "status": "unknown"})
         status = "update_available" if digest not in c["local_digests"] else "current"
         r = {"container": c["name"], "image": image_ref, "status": status}
         if status == "update_available" and source:
             r["_source"] = source
-        return r
+        return observed(r)
 
     results = await asyncio.gather(*(_check_one(c) for c in containers), return_exceptions=True)
     results = sorted(
@@ -655,6 +660,16 @@ async def run() -> None:
             log.error("Host check %s raised: %s", label, result)
 
     sources: dict = homelab_result if isinstance(homelab_result, dict) else {}
+
+    # A remote registry change only means an update is available. Compare the
+    # locally running image identity with the prior scan to record actual image
+    # transitions separately, then remove the internal digest observations.
+    from correlations import append_events, record_container_transitions
+
+    transition_events = record_container_transitions(hosts, CONTAINER_STATE_FILE, now_ts)
+    append_events(EVENT_LEDGER_FILE, transition_events)
+    if transition_events:
+        log.info("Recorded %d container image transition(s)", len(transition_events))
 
     # Changelog LLM for Docker image updates (sequential to avoid Ollama pile-up)
     for label, host in hosts.items():

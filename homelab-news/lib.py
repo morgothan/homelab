@@ -211,6 +211,28 @@ async def hindsight_recall(query: str, max_tokens: int = 600) -> str:
         return ""
 
 
+_TARGETED_RECALL_CACHE: dict[str, tuple[float, str]] = {}
+
+
+async def hindsight_targeted_recall(queries: list[str]) -> str:
+    """Recall focused service history with a six-hour in-process query cache."""
+    selected = list(dict.fromkeys(query for query in queries if query))[:2]
+    if not selected:
+        return ""
+
+    async def _one(query: str) -> str:
+        cached = _TARGETED_RECALL_CACHE.get(query)
+        if cached and time.time() - cached[0] < 6 * 3600:
+            return cached[1]
+        result = await hindsight_recall(query, max_tokens=500)
+        if result:
+            _TARGETED_RECALL_CACHE[query] = (time.time(), result)
+        return result
+
+    results = await asyncio.gather(*(_one(query) for query in selected))
+    return "\n".join(result for result in results if result)
+
+
 async def hindsight_retain_newspaper(date_str: str, articles: list[dict]) -> None:
     """Fire-and-forget: store a day's newspaper articles as memories for future recall."""
     if not HINDSIGHT_URL or not articles:
@@ -1084,16 +1106,31 @@ def _group_by_ip(issues: list[dict]) -> list[dict]:
         rep = issues[indices[0]]["message"][:180]
         issues[indices[0]]["count"] = total
         issues[indices[0]]["message"] = f"[{n} patterns from {ip}, \xd7{total} total] {rep}"[:300]
+        first_seen = [issues[i].get("first_seen") for i in indices if issues[i].get("first_seen")]
+        last_seen = [issues[i].get("last_seen") for i in indices if issues[i].get("last_seen")]
+        if first_seen:
+            issues[indices[0]]["first_seen"] = min(first_seen)
+        if last_seen:
+            issues[indices[0]]["last_seen"] = max(last_seen)
         to_remove.update(indices[1:])
 
     return [issue for idx, issue in enumerate(issues) if idx not in to_remove]
 
 
-def _collect_issues(source: str, lines: list[str]) -> tuple[list[dict], dict[str, int]]:
+def _collect_issues(source: str, lines: list) -> tuple[list[dict], dict[str, int]]:
     issues: list[dict] = []
     seen: dict[str, int] = defaultdict(int)
+    issue_by_key: dict[str, dict] = {}
     for raw in lines:
-        line = _strip_ansi(_extract_text(_fix_waf_client_ip(raw.strip())))
+        observed_at = ""
+        if isinstance(raw, tuple):
+            observed_at, raw_line = raw
+        else:
+            raw_line = raw
+            match = re.match(r"^(\d{4}-\d{2}-\d{2}T\S+)\s+(.*)$", raw_line)
+            if match:
+                observed_at, raw_line = match.groups()
+        line = _strip_ansi(_extract_text(_fix_waf_client_ip(raw_line.strip())))
         if not line or len(line) < 8:
             continue
         if not CONCERNING.search(line):
@@ -1104,15 +1141,27 @@ def _collect_issues(source: str, lines: list[str]) -> tuple[list[dict], dict[str
         seen[key] += 1
         if seen[key] == 1:
             level = "error" if re.search(r"\b(?:error|critical|fatal)\b", line, re.I) else "warn"
-            issues.append({"source": source, "level": level,
-                           "message": line[:300], "_key": key})
+            issue = {"source": source, "level": level,
+                     "message": line[:300], "_key": key}
+            if observed_at:
+                issue["first_seen"] = observed_at
+                issue["last_seen"] = observed_at
+            issues.append(issue)
+            issue_by_key[key] = issue
+        elif observed_at:
+            issue = issue_by_key[key]
+            issue.setdefault("first_seen", observed_at)
+            issue["last_seen"] = observed_at
     return issues, seen
 
 # ── Docker log fetching ───────────────────────────────────────────────────────
 
 def _fetch_logs_sync(container, since_ts: int, until_ts: Optional[int] = None) -> list[str]:
     try:
-        kwargs: dict = {"since": since_ts, "stdout": True, "stderr": True, "stream": False}
+        kwargs: dict = {
+            "since": since_ts, "stdout": True, "stderr": True,
+            "stream": False, "timestamps": True,
+        }
         if until_ts is not None:
             kwargs["until"] = until_ts
         raw = container.logs(**kwargs)
@@ -1181,7 +1230,7 @@ async def check_loki(
     start_ns = int(start.timestamp() * 1_000_000_000)
     end_ns   = int(end.timestamp()   * 1_000_000_000)
 
-    raw_lines: dict[str, list[str]] = defaultdict(list)
+    raw_lines: dict[str, list[tuple[str, str]]] = defaultdict(list)
 
     for page in range(MAX_PAGES):
         try:
@@ -1221,7 +1270,8 @@ async def check_loki(
                 page_count += 1
                 if ts_ns > max_ts_ns:
                     max_ts_ns = ts_ns
-                raw_lines[source].append(line)
+                observed_at = datetime.fromtimestamp(ts_ns / 1_000_000_000, tz=timezone.utc).isoformat()
+                raw_lines[source].append((observed_at, line))
 
         if page_count < PAGE_SIZE or max_ts_ns == 0:
             break  # last page — window exhausted
@@ -2341,6 +2391,8 @@ async def generate_newspaper(
     jellystat: Optional[dict] = None,
     asn_suggestions: Optional[list[dict]] = None,
     media_events: Optional[list[dict]] = None,
+    correlations: Optional[list[dict]] = None,
+    targeted_history: str = "",
 ) -> Optional[list[dict]]:
     # Strip fail2ban/WAF noise from raw log issues — these events are already
     # captured accurately in the structured security block below. Leaving them
@@ -2394,11 +2446,18 @@ async def generate_newspaper(
             lines.append(block)
 
     situation = "\n".join(lines)
+    if correlations:
+        from correlations import format_correlations
+
+        situation += (
+            "\n\nCROSS-SOURCE TIMING CORRELATIONS (authoritative timing only; do not claim causation):\n"
+            + format_correlations(correlations)
+        )
     context = _load_context()
     context_block = f"HOMELAB CONTEXT (use this to write accurate service names and understand what's normal):\n{context}\n\n" if context else ""
-    recalled = await hindsight_recall(situation[:2000])
+    recalled = targeted_history or await hindsight_recall(situation[:2000])
     recalled_block = (
-        f"RELEVANT PAST CONTEXT (from memory — reference if directly relevant, e.g. "
+        f"SERVICE-SPECIFIC PAST CONTEXT (from memory — reference if directly relevant, e.g. "
         f"a recurring issue or 'as previously reported'; don't force it):\n{recalled}\n\n"
         if recalled else ""
     )
@@ -2788,6 +2847,23 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     # present stale articles as fresh.
     existing = load_json(target_file) or {}
     attempt_at = datetime.now(timezone.utc).isoformat()
+
+    from correlations import (
+        append_events, build_cycle_events, correlate_events, events_since,
+        targeted_recall_queries,
+    )
+
+    cycle_events = build_cycle_events(
+        docker_issues=docker_issues,
+        loki_issues=loki_issues,
+        bans=bans,
+        update_hosts=(load_json(UPDATES_FILE) or {}).get("hosts", {}),
+        observed_at=attempt_at,
+    )
+    ledger = append_events(EVENT_LEDGER_FILE, cycle_events)
+    correlation_cutoff = since - timedelta(minutes=10)
+    recent_events = events_since(ledger[:1000], correlation_cutoff)
+    correlations = correlate_events(recent_events)
     save_json(target_file, {
         "built_at":        existing.get("built_at"),
         "last_attempt_at": attempt_at,
@@ -2800,12 +2876,15 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
+        "correlations":    correlations,
     })
 
     unhealthy, _, _ = await get_container_status_async()
     unhealthy_names = [c.name for c in unhealthy]
     updates_raw  = load_json(UPDATES_FILE) or {}
     update_hosts = updates_raw.get("hosts", {})
+    recall_queries = targeted_recall_queries(cycle_events, correlations)
+    targeted_history = await hindsight_targeted_recall(recall_queries)
 
     # Phase 2: LLM calls — run sequentially to avoid concurrent KV-cache spikes on vLLM.
     # (vLLM batches concurrent requests together; 3 simultaneous prefills exhaust memory.)
@@ -2814,6 +2893,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     newspaper = await generate_newspaper(
         docker_issues, loki_issues, update_hosts, unhealthy_names,
         bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions, media_events,
+        correlations, targeted_history,
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
@@ -2844,6 +2924,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
+        "correlations":    correlations,
     }
     if generation_error:
         result["generation_error"] = generation_error
