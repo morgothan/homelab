@@ -31,6 +31,19 @@ class TrendIntelligenceTests(unittest.TestCase):
         self.assertEqual(result["findings"][0]["basis"], "inferred")
         self.assertEqual(len(result["findings"][0]["summary"]), 800)
 
+    def test_reflection_validation_accepts_single_finding_shape(self):
+        result = trend_intelligence.validate_reflection({
+            "title": "Recurring issue",
+            "summary": "Appeared more than once",
+            "window": "7d",
+            "direction": "persistent",
+            "confidence": "medium",
+            "evidence_dates": ["2026-08-20"],
+        }, ["2026-08-20"])
+
+        self.assertEqual(result["overview"], "Appeared more than once")
+        self.assertEqual(len(result["findings"]), 1)
+
     def test_reflection_parser_accepts_fenced_json_object(self):
         result = trend_intelligence._parse_reflection(
             '```json\n{"overview":"Stable","findings":[],"watchlist":[]}\n```'

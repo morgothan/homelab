@@ -122,6 +122,13 @@ def validate_reflection(raw: object, archive_dates: list[str]) -> dict[str, Any]
     """Clamp Hindsight output and retain only links to existing archive dates."""
     if not isinstance(raw, dict):
         return None
+    finding_fields = {"title", "summary", "window", "direction", "confidence", "evidence_dates"}
+    if finding_fields.issubset(raw):
+        raw = {
+            "overview": str(raw.get("summary") or ""),
+            "findings": [raw],
+            "watchlist": [],
+        }
     valid_dates = set(archive_dates)
     findings: list[dict[str, Any]] = []
     for candidate in raw.get("findings") or []:
