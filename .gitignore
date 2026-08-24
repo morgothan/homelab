@@ -266,3 +266,6 @@ cf-poller/data/*
 
 # library-dupe-scan runtime state (dedup signatures, not source)
 bin/.library-dupe-scan-state.json
+
+# Outline API credential used by the local MCP bridge
+bin/.outline-api-key

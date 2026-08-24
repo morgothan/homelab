@@ -1077,8 +1077,8 @@ services:
       - ${DOCKERNET}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ${USERDIR}/.docker/config.json:/home/appuser/.docker/config.json:ro
-      - ${USERDIR}/.ssh:/root/.ssh:ro
+      - ${USERDIR}/.docker/config.json:/run/secrets/docker_config.json:ro
+      - ${USERDIR}/.ssh/id_ed25519:/run/secrets/monitoring_ssh_key:ro
       - ${USERDIR}/docker/homelab-news/data:/data
       - ${USERDIR}/docker/jellyseerr/settings.json:/seerr/settings.json:ro
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
@@ -1092,8 +1092,8 @@ services:
       - HINDSIGHT_URL=${HINDSIGHT_URL}    # optional: enables memory recall/retain for wire report + log analysis
       - HINDSIGHT_BANK=${HINDSIGHT_BANK}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
-      - SSH_KEY=${SSH_KEY}
       - DOCKER_AUTH_FILE=/home/appuser/.docker/config.json
+      - SSH_KEY=/home/appuser/.ssh/id_ed25519
       - PROMETHEUS_URL=http://prometheus:9090
       - KOPIA_USER=${KOPIA_USER}
       - KOPIA_PASS=${KOPIA_PASS}

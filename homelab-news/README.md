@@ -124,8 +124,8 @@ All configuration is supplied through environment variables. Values containing c
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `REMOTE_DOCKER_HOSTS` | Comma-separated remote targets. Each entry may use `label=url`; supported URL schemes include `ssh://`, `tcp://`, and `pct://` | Empty |
-| `SSH_KEY` | Dedicated private key used for remote checks | `/root/.ssh/id_ed25519` |
-| `DOCKER_AUTH_FILE` | Registry authentication file used by `skopeo` | `/root/.docker/config.json` |
+| `SSH_KEY` | Dedicated private key used for remote checks | `/home/appuser/.ssh/id_ed25519` |
+| `DOCKER_AUTH_FILE` | Registry authentication file used by `skopeo` | `/home/appuser/.docker/config.json` |
 | `SKOPEO_TIMEOUT` | Remote image-inspection timeout in seconds | `20` |
 | `GITHUB_TOKEN` | Optional token that raises the release-information API rate limit | Empty |
 
