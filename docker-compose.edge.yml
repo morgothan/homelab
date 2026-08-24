@@ -63,9 +63,10 @@ services:
     volumes:
       - ./traefik/edge/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
     networks:
-      - proxy
-      - edge-blue
-      - edge-green
+      proxy:
+        aliases: [traefik]
+      edge-blue:
+      edge-green:
     healthcheck:
       test: ["CMD", "haproxy", "-c", "-f", "/usr/local/etc/haproxy/haproxy.cfg"]
       interval: 10s
@@ -79,7 +80,6 @@ services:
     profiles: [blue]
     networks:
       proxy:
-        aliases: [traefik]
       dmz:
       edge-blue:
         aliases: [traefik]
@@ -128,7 +128,6 @@ services:
     profiles: [green]
     networks:
       proxy:
-        aliases: [traefik]
       dmz:
       edge-green:
         aliases: [traefik]
