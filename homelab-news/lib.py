@@ -217,8 +217,8 @@ async def hindsight_retain_newspaper(date_str: str, articles: list[dict]) -> Non
         return
     items = [
         {
-            "content":     f"{a['headline']}. {a['blurb']}",
-            "context":     a.get("section", "City Hall"),
+            "content":     f"Homelab News on {date_str}: {a['headline']}. {a['blurb']}",
+            "context":     f"{a.get('section', 'City Hall')} | archived edition {date_str}",
             "document_id": f"newspaper_{date_str}_{i}",
             "timestamp":   f"{date_str}T12:00:00Z",
         }

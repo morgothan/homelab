@@ -15,7 +15,7 @@ from config import (
     ARCHIVE_DIR, ARCHIVE_INDEX, HOMELAB_INTEL_FILE, IP_INTEL_FILE,
     LIBRARY_SCAN_FILE, LOG_HOURS, MEDIA_EVENTS_FILE, PERIODIC_FILE,
     RECENT_MEDIA_FILE, REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS,
-    SITE_NAME, TODAY_FILE, UPDATE_INTERVAL, UPDATES_FILE,
+    SITE_NAME, TODAY_FILE, TREND_INTELLIGENCE_FILE, UPDATE_INTERVAL, UPDATES_FILE,
 )
 from storage import load_json, save_json
 
@@ -555,12 +555,88 @@ def _section(title: str, items: list[dict], label_key: str, empty_msg: str) -> s
     return html + "".join(parts)
 
 
+def render_trend_intelligence(snapshot: dict) -> str:
+    """Render a validated cached trend snapshot with links to supporting editions."""
+    if not snapshot:
+        return (
+            '<div class="arch-section-head">Newsroom Analysis</div>'
+            '<div class="np-pending">The newsroom is preparing its first long-range analysis.</div>'
+        )
+
+    overview = _h(str(snapshot.get("overview") or ""))
+    generated = str(snapshot.get("generated_at") or "")
+    generated_label = generated[:16].replace("T", " ") + " UTC" if generated else "unknown time"
+    archive_range = snapshot.get("archive_range") or {}
+    edition_count = int(archive_range.get("editions") or 0)
+
+    measurement_parts: list[str] = []
+    for window in ("7d", "30d", "90d"):
+        measurement = (snapshot.get("measurements") or {}).get(window) or {}
+        top_sections = measurement.get("top_sections") or []
+        top_section = ""
+        if top_sections and isinstance(top_sections[0], dict):
+            section = _h(str(top_sections[0].get("section") or ""))
+            count = int(top_sections[0].get("articles") or 0)
+            top_section = f'<div class="arch-meta">Most reported: {section} ({count})</div>'
+        measurement_parts.append(
+            '<div class="card"><div class="card-head">'
+            f'<span>{_h(window)} measured</span></div>'
+            f'<div class="card-body"><strong>{int(measurement.get("editions") or 0)}</strong> editions, '
+            f'<strong>{int(measurement.get("articles") or 0)}</strong> articles{top_section}</div></div>'
+        )
+
+    finding_parts: list[str] = []
+    for finding in snapshot.get("findings") or []:
+        dates = [str(value) for value in finding.get("evidence_dates") or []]
+        evidence = ""
+        if dates:
+            links = " · ".join(
+                f'<a href="/archive/{_h(value)}">{_h(value)}</a>' for value in dates
+            )
+            evidence = f'<div class="arch-meta">Supporting editions: {links}</div>'
+        finding_parts.append(
+            '<details class="arch-period">'
+            '<summary><div class="arch-period-hd">'
+            f'<span class="arch-date">{_h(str(finding.get("window") or ""))} · '
+            f'{_h(str(finding.get("direction") or ""))}</span>'
+            f'<span class="arch-meta">{_h(str(finding.get("confidence") or ""))} confidence · inferred</span>'
+            '</div>'
+            f'<div class="arch-period-lead">{_h(str(finding.get("title") or ""))}</div>'
+            '</summary><div class="arch-period-body">'
+            f'<div class="article"><p>{_h(str(finding.get("summary") or ""))}</p>{evidence}</div>'
+            '</div></details>'
+        )
+
+    watchlist = snapshot.get("watchlist") or []
+    watchlist_html = ""
+    if watchlist:
+        items = "".join(f"<li>{_h(str(item))}</li>" for item in watchlist)
+        watchlist_html = (
+            '<details class="arch-period"><summary><div class="arch-period-hd">'
+            '<span class="arch-date">What to watch next</span>'
+            '<span class="arch-meta">signals, not predictions</span></div></summary>'
+            f'<div class="arch-period-body"><ul>{items}</ul></div></details>'
+        )
+
+    return (
+        '<div class="arch-section-head">Newsroom Analysis</div>'
+        '<div class="card full"><div class="card-head">'
+        f'<span>Hindsight reflection across {edition_count} archived editions</span>'
+        f'<span class="arch-meta">Generated {_h(generated_label)}</span></div>'
+        f'<div class="card-body"><p>{overview}</p></div></div>'
+        f'<div class="grid">{"".join(measurement_parts)}</div>'
+        + "".join(finding_parts)
+        + watchlist_html
+    )
+
+
 @app.get("/trends")
 async def trends():
     periodic = load_json(PERIODIC_FILE) or {}
+    intelligence = load_json(TREND_INTELLIGENCE_FILE) or {}
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
-    sections: list[str] = []
+    sections: list[str] = [render_trend_intelligence(intelligence)]
 
     sections.append(_section(
         "Annual Reports", periodic.get("yearly", []), "year",
