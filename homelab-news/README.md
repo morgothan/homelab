@@ -12,7 +12,7 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Current Events** | Rolling operational report and detailed source cards | Generated every 15 minutes |
 | **Wire Reports** | Container-image and application update intelligence with LLM summaries | Generated hourly |
 | **Police Blotter** | Active edge and CrowdSec decisions with optional geo, ASN, and abuse intelligence | Live API-backed view |
-| **Arts & Entertainment** | One consolidated **New Library Additions** story from Seerr availability events, plus optional media-library scan results | On page load |
+| **Arts & Entertainment** | One consolidated **New Library Additions** story from Seerr availability events, plus optional media-library scan results | Hourly snapshot |
 | **Archive** | One snapshot per day, grouped by month | Daily |
 | **Trends** | Weekly, monthly, and yearly synthesized reports | Scheduled |
 
@@ -59,6 +59,7 @@ data/
   context.md              # optional operator-supplied LLM context
   ip_intel.json           # cached IP intelligence
   media_events.json       # retained Seerr request and availability events
+  recent_media.json       # hourly seven-day media list and resolved Jellyfin links
   archive/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day

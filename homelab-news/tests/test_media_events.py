@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import lib
+import media
 import web
 
 
@@ -236,27 +237,44 @@ class MediaEventTests(unittest.TestCase):
              "notification_type": "MEDIA_AVAILABLE", "subject": "Old Movie (2025)"},
         ]
         with tempfile.TemporaryDirectory() as tmp:
-            events_path = os.path.join(tmp, "media_events.json")
+            recent_path = os.path.join(tmp, "recent_media.json")
             scan_path = os.path.join(tmp, "library_scan.json")
-            with open(events_path, "w") as f:
-                json.dump(events, f)
-            with patch.object(lib, "MEDIA_EVENTS_FILE", events_path), \
+            with open(recent_path, "w") as f:
+                json.dump({"refreshed_at": now.isoformat(),
+                           "media_events": events[:1], "media_links": {}}, f)
+            with patch.object(web, "RECENT_MEDIA_FILE", recent_path), \
                  patch.object(web, "LIBRARY_SCAN_FILE", scan_path), \
-                 patch.object(lib, "RADARR_URL", ""), \
-                 patch.object(lib, "RADARR_API_KEY", ""), \
-                 patch.object(lib, "SONARR_URL", ""), \
-                 patch.object(lib, "SONARR_API_KEY", ""), \
-                 patch.object(lib, "SEERR_SETTINGS_FILE", ""), \
-                 patch.object(lib, "JELLYFIN_URL", ""), \
-                 patch.object(lib, "JELLYFIN_KEY", ""):
+                 patch.object(web, "fetch_recent_media", create=True) as fetch:
                 response = TestClient(web.app).get("/entertainment")
 
         self.assertEqual(response.status_code, 200)
         html = response.text
         self.assertIn("Recent Movie (2026)", html)
         self.assertNotIn("Old Movie (2025)", html)
+        fetch.assert_not_called()
         self.assertLess(html.index("New Media &mdash; Past 7 Days"),
                         html.index("Media Library Report"))
+
+    def test_media_refresh_persists_events_and_links(self):
+        now = datetime.now(timezone.utc)
+        events = [{"notification_type": "MEDIA_AVAILABLE", "subject": "Movie"}]
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "recent_media.json")
+            with patch.object(media, "RECENT_MEDIA_FILE", path), \
+                 patch.object(media, "fetch_recent_media", return_value=events) as fetch, \
+                 patch.object(media, "resolve_jellyfin_links",
+                              return_value={"Movie": "https://jellyfin/item"}):
+                asyncio.run(media.refresh_recent_media())
+            with open(path) as f:
+                snapshot = json.load(f)
+
+        self.assertEqual(snapshot["media_events"], events)
+        self.assertEqual(snapshot["media_links"]["Movie"], "https://jellyfin/item")
+        self.assertGreaterEqual(fetch.call_args.args[0], now - timedelta(days=7))
+
+    def test_media_worker_waits_until_next_hour(self):
+        now = datetime(2026, 8, 24, 14, 37, 20, tzinfo=timezone.utc)
+        self.assertEqual(media.seconds_until_next_hour(now), 1360)
 
     def test_recent_media_title_links_to_jellyfin_when_resolved(self):
         events = [{"notification_type": "MEDIA_AVAILABLE", "subject": "A & B (2026)"}]
