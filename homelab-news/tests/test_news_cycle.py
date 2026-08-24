@@ -27,9 +27,14 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             "fetch_recent_media": AsyncMock(return_value=[]),
             "get_container_status_async": AsyncMock(return_value=([], [], 0)),
             "llm_analysis": AsyncMock(return_value=None),
+            "hindsight_targeted_recall": AsyncMock(return_value=""),
             "generate_newspaper": AsyncMock(return_value=generated_articles),
         }
-        with patch.multiple(lib, **checks), patch.object(lib, "UPDATES_FILE", target_file + ".updates"):
+        with (
+            patch.multiple(lib, **checks),
+            patch.object(lib, "UPDATES_FILE", target_file + ".updates"),
+            patch.object(lib, "EVENT_LEDGER_FILE", target_file + ".events"),
+        ):
             asyncio.run(lib.run_news_cycle(datetime.now(timezone.utc), target_file))
 
     def test_failed_generation_preserves_last_successful_edition(self):
