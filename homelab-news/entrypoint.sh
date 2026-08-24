@@ -9,4 +9,8 @@ install -m 0400 -o appuser -g appuser \
 install -m 0400 -o appuser -g appuser \
     /run/secrets/docker_config.json /home/appuser/.docker/config.json
 
+# Docker creates the inherited log pipes as root. Supervisor reopens them for
+# each worker, so grant write-only access before permanently dropping UID 0.
+chmod 0622 /proc/1/fd/1 /proc/1/fd/2
+
 exec gosu appuser "$@"
