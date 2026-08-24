@@ -26,7 +26,7 @@ log = logging.getLogger("trends")
 _WINDOWS = {"7d": 7, "30d": 30, "90d": 90}
 _DIRECTIONS = {"emerging", "improving", "worsening", "persistent", "cyclical", "resolved"}
 _CONFIDENCE = {"low", "medium", "high"}
-_MAX_FINDINGS = 9
+_MAX_FINDINGS = 6
 
 _RESPONSE_SCHEMA = {
     "type": "object",
@@ -179,8 +179,9 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
                 f"{HINDSIGHT_URL.rstrip('/')}/v1/default/banks/{HINDSIGHT_BANK}/reflect",
                 json={
                     "query": query,
-                    "budget": "mid",
-                    "max_tokens": 3000,
+                    "budget": "low",
+                    "max_tokens": 1800,
+                    "exclude_mental_models": True,
                     "response_schema": _RESPONSE_SCHEMA,
                 },
             )
