@@ -37,6 +37,12 @@ class TrendIntelligenceTests(unittest.TestCase):
         )
         self.assertEqual(result["overview"], "Stable")
 
+    def test_reflection_parser_recovers_nested_object_after_preamble(self):
+        result = trend_intelligence._parse_reflection(
+            'Analysis follows:\n{"overview":"Stable","findings":[{"title":"A"}],"watchlist":[]}'
+        )
+        self.assertEqual(result["findings"][0]["title"], "A")
+
     def test_measurements_are_computed_from_archives(self):
         with tempfile.TemporaryDirectory() as directory:
             archive_dir = os.path.join(directory, "archive")

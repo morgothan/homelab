@@ -191,8 +191,18 @@ def _parse_reflection(content: str) -> object:
     try:
         return json.loads(stripped)
     except json.JSONDecodeError:
-        recovered = parse_llm_json(f"[{stripped}]")
-        return recovered[0] if recovered else None
+        decoder = json.JSONDecoder()
+        for position, character in enumerate(stripped):
+            if character != "{":
+                continue
+            try:
+                recovered, _ = decoder.raw_decode(stripped[position:])
+            except json.JSONDecodeError:
+                continue
+            if isinstance(recovered, dict):
+                return recovered
+        recovered_articles = parse_llm_json(f"[{stripped}]")
+        return recovered_articles[0] if recovered_articles else None
 
 
 async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
