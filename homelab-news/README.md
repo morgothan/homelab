@@ -106,6 +106,7 @@ All configuration is supplied through environment variables. Values containing c
 | `HINDSIGHT_URL` | Optional Hindsight-compatible memory service | Empty |
 | `HINDSIGHT_BANK` | Memory bank name | `homelab_news` |
 | `HINDSIGHT_TIMEOUT` | Memory request timeout in seconds | `90` |
+| `TREND_REFLECTION_TIMEOUT` | Timeout for the longer Hindsight reflection loop | `600` |
 | `TREND_REFRESH_INTERVAL` | Hindsight trend-reflection interval in seconds | `21600` |
 
 ### Docker and update discovery

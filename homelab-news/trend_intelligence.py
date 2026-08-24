@@ -12,8 +12,8 @@ from config import (
     ARCHIVE_DIR,
     ARCHIVE_INDEX,
     HINDSIGHT_BANK,
-    HINDSIGHT_TIMEOUT,
     HINDSIGHT_URL,
+    TREND_REFLECTION_TIMEOUT,
     TREND_INTELLIGENCE_FILE,
     TREND_REFRESH_INTERVAL,
 )
@@ -174,7 +174,7 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
         "only concrete signals worth monitoring next, not predictions presented as facts."
     )
     try:
-        async with httpx.AsyncClient(timeout=HINDSIGHT_TIMEOUT) as client:
+        async with httpx.AsyncClient(timeout=TREND_REFLECTION_TIMEOUT) as client:
             response = await client.post(
                 f"{HINDSIGHT_URL.rstrip('/')}/v1/default/banks/{HINDSIGHT_BANK}/reflect",
                 json={
