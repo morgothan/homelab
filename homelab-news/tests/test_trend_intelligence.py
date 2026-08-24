@@ -43,6 +43,11 @@ class TrendIntelligenceTests(unittest.TestCase):
         )
         self.assertEqual(result["findings"][0]["title"], "A")
 
+    def test_reflection_parser_accepts_double_encoded_json(self):
+        content = json.dumps(json.dumps({"overview": "Stable", "findings": [], "watchlist": []}))
+        result = trend_intelligence._parse_reflection(content)
+        self.assertEqual(result["overview"], "Stable")
+
     def test_measurements_are_computed_from_archives(self):
         with tempfile.TemporaryDirectory() as directory:
             archive_dir = os.path.join(directory, "archive")
