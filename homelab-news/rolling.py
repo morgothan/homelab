@@ -4,7 +4,9 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from lib import REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS, run_news_cycle, run_loop
+from config import REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS
+from lib import run_news_cycle
+from runtime import run_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("rolling")

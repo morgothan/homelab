@@ -5,7 +5,9 @@ import logging
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from lib import UPDATE_INTERVAL, TODAY_FILE, run_news_cycle, run_loop
+from config import TODAY_FILE, UPDATE_INTERVAL
+from lib import run_news_cycle
+from runtime import run_loop
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("today")
