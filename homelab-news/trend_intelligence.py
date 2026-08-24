@@ -189,7 +189,10 @@ def _parse_reflection(content: str) -> object:
         stripped = stripped.split("\n", 1)[-1]
         stripped = stripped.rsplit("```", 1)[0].strip()
     try:
-        return json.loads(stripped)
+        parsed = json.loads(stripped)
+        if isinstance(parsed, str):
+            return json.loads(parsed)
+        return parsed
     except json.JSONDecodeError:
         decoder = json.JSONDecoder()
         for position, character in enumerate(stripped):
@@ -258,12 +261,18 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
                     "stream": False,
                     "max_tokens": 2200,
                     "temperature": 0.2,
+                    "response_format": {"type": "json_object"},
                     "chat_template_kwargs": {"enable_thinking": False},
                 },
             )
             response.raise_for_status()
             content = response.json()["choices"][0]["message"]["content"]
-            return validate_reflection(_parse_reflection(content), archive_dates)
+            parsed = _parse_reflection(content)
+            if not isinstance(parsed, dict):
+                log.warning("Trend synthesis did not return a JSON object")
+                return None
+            log.info("Trend synthesis returned fields: %s", ", ".join(sorted(parsed)))
+            return validate_reflection(parsed, archive_dates)
     except Exception as error:
         log.warning("Trend explanation failed: %s: %s", type(error).__name__, error)
         return None
