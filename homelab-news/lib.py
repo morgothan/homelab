@@ -129,6 +129,7 @@ HOMELAB_INTEL_FILE = os.path.join(DATA_DIR, "homelab_intel.json")
 LIBRARY_SCAN_FILE  = os.getenv("LIBRARY_SCAN_FILE", "/traefik/monitor/library-dupe-scan.json")
 MEDIA_EVENTS_FILE  = os.path.join(DATA_DIR, "media_events.json")
 MEDIA_LINKS_FILE   = os.path.join(DATA_DIR, "media_links.json")
+RECENT_MEDIA_FILE  = os.path.join(DATA_DIR, "recent_media.json")
 
 PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")

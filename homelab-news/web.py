@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 from html import escape as _h
@@ -14,9 +14,9 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from lib import (
     REFRESH_INTERVAL, UPDATE_INTERVAL, LOG_HOURS, ROLLING_HOURS, SITE_NAME,
     TODAY_FILE, ROLLING_FILE, ARCHIVE_DIR, ARCHIVE_INDEX, UPDATES_FILE, PERIODIC_FILE, HOMELAB_INTEL_FILE,
-    IP_INTEL_FILE, LIBRARY_SCAN_FILE, MEDIA_EVENTS_FILE,
+    IP_INTEL_FILE, LIBRARY_SCAN_FILE, MEDIA_EVENTS_FILE, RECENT_MEDIA_FILE,
     _FAVICON_SVG, _CSS,
-    load_json, save_json, fetch_recent_media, resolve_jellyfin_links, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
+    load_json, save_json, get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
     _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
@@ -409,9 +409,14 @@ async def api_cs_bans(offset: int = 0):
 @app.get("/entertainment")
 async def entertainment():
     data = load_json(LIBRARY_SCAN_FILE)
-    media_events = await fetch_recent_media(datetime.now(timezone.utc) - timedelta(days=7))
-    media_links = await resolve_jellyfin_links(media_events)
-    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    recent_media = load_json(RECENT_MEDIA_FILE) or {}
+    media_events = recent_media.get("media_events") or []
+    media_links = recent_media.get("media_links") or {}
+    refreshed_at = str(recent_media.get("refreshed_at") or "")
+    now_str = (
+        refreshed_at[0:16].replace("T", " ") + " UTC"
+        if refreshed_at else "awaiting first hourly refresh"
+    )
     body = (
         masthead_rolling(now_str)
         + nav_bar("entertainment")
