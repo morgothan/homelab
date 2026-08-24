@@ -14,13 +14,13 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Police Blotter** | Active edge and CrowdSec decisions with optional geo, ASN, and abuse intelligence | Live API-backed view |
 | **Arts & Entertainment** | One consolidated **New Library Additions** story from Seerr availability events, plus optional media-library scan results | Hourly snapshot |
 | **Archive** | One snapshot per day, grouped by month | Daily |
-| **Trends** | Weekly, monthly, and yearly synthesized reports | Scheduled |
+| **Trends** | Hindsight-reflected operational intelligence plus weekly, monthly, and yearly reports | Reflected every 6 hours; reports scheduled |
 
 Generated articles use newspaper-style sections such as **City Hall**, **Public Safety**, **Weather**, **City Archives**, **Arts & Entertainment**, and **Public Works**. The most important item can be promoted to a lead story.
 
 ## Architecture
 
-A single container runs a FastAPI web server and five background workers under Supervisor:
+A single container runs a FastAPI web server and background workers under Supervisor:
 
 | Program | Role | Schedule |
 |---------|------|----------|
@@ -30,6 +30,7 @@ A single container runs a FastAPI web server and five background workers under S
 | `daily` | Copies the last successful edition into the archive | Daily at 00:01 local time |
 | `updates` | Checks container images and supported applications and summarizes release information | `UPDATE_INTERVAL` |
 | `periodic` | Builds weekly, monthly, and yearly reports and recovers missed schedules after downtime | Scheduled at 00:01 local time |
+| `trends` | Reflects over Hindsight memories, verifies archive evidence, and caches trend intelligence | `TREND_REFRESH_INTERVAL` |
 
 The news workers collect and persist raw observations before calling the LLM. During generation, the existing articles and successful-generation timestamp remain in place. A successful response replaces the edition; a failed response preserves it with `generation_status: stale`.
 
@@ -73,6 +74,7 @@ data/
   updates.json            # image update state
   homelab_intel.json      # generated update intelligence
   periodic.json           # weekly, monthly, and yearly reports
+  trend_intelligence.json # cached Hindsight reflection and deterministic window measurements
   context.md              # optional operator-supplied LLM context
   ip_intel.json           # cached IP intelligence
   media_events.json       # retained Seerr request and availability events
@@ -104,6 +106,7 @@ All configuration is supplied through environment variables. Values containing c
 | `HINDSIGHT_URL` | Optional Hindsight-compatible memory service | Empty |
 | `HINDSIGHT_BANK` | Memory bank name | `homelab_news` |
 | `HINDSIGHT_TIMEOUT` | Memory request timeout in seconds | `90` |
+| `TREND_REFRESH_INTERVAL` | Hindsight trend-reflection interval in seconds | `21600` |
 
 ### Docker and update discovery
 
