@@ -315,7 +315,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.7.3
+    image: amir20/dozzle:v10.7.4
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
