@@ -79,7 +79,7 @@ services:
     profiles: [blue]
     networks:
       proxy:
-        aliases: [traefik, traefik.lan]
+        aliases: [traefik]
       dmz:
       edge-blue:
         aliases: [traefik]
@@ -128,7 +128,7 @@ services:
     profiles: [green]
     networks:
       proxy:
-        aliases: [traefik, traefik.lan]
+        aliases: [traefik]
       dmz:
       edge-green:
         aliases: [traefik]
