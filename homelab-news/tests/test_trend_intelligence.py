@@ -69,6 +69,21 @@ class TrendIntelligenceTests(unittest.TestCase):
         self.assertFalse(result)
         self.assertEqual(persisted, {"overview": "Previous"})
 
+    def test_first_refresh_publishes_measurements_while_reflection_is_pending(self):
+        with tempfile.TemporaryDirectory() as directory:
+            target = os.path.join(directory, "trend_intelligence.json")
+            with patch.object(trend_intelligence, "TREND_INTELLIGENCE_FILE", target), \
+                 patch.object(trend_intelligence, "_archive_dates", return_value=["2026-08-20"]), \
+                 patch.object(trend_intelligence, "build_measurements", return_value={"7d": {}}), \
+                 patch.object(trend_intelligence, "reflect_on_trends", AsyncMock(return_value=None)):
+                result = asyncio.run(trend_intelligence.refresh_trend_intelligence())
+            with open(target, encoding="utf-8") as source:
+                persisted = json.load(source)
+
+        self.assertFalse(result)
+        self.assertEqual(persisted["reflection_status"], "pending")
+        self.assertEqual(persisted["archive_range"]["editions"], 1)
+
     def test_renderer_escapes_reflection_and_links_only_validated_dates(self):
         html = web.render_trend_intelligence({
             "generated_at": "2026-08-24T12:00:00+00:00",

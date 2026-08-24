@@ -201,14 +201,23 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
         return None
     newest = archive_dates[0]
     oldest = archive_dates[-1]
-    recall_queries = [
-        f"Recurring service failures, reliability patterns, and operational cycles from {oldest} through {newest}",
-        f"Security, backup, storage, and infrastructure trends from {oldest} through {newest}",
-        f"Improvements, resolved problems, regressions, and emerging concerns from {oldest} through {newest}",
-    ]
-    recalled = await asyncio.gather(*(_recall_trend_context(query) for query in recall_queries))
-    if not any(recalled):
+    recall_query = (
+        f"Operational trends from {oldest} through {newest}: recurring service failures, "
+        "reliability and security patterns, backup or storage concerns, infrastructure cycles, "
+        "improvements, regressions, emerging concerns, and resolved problems"
+    )
+    log.info("Requesting bounded trend evidence from Hindsight")
+    try:
+        recalled = await asyncio.wait_for(
+            _recall_trend_context(recall_query),
+            timeout=HINDSIGHT_TIMEOUT + 5,
+        )
+    except TimeoutError:
+        log.warning("Hindsight trend recall exceeded its total timeout")
         return None
+    if not recalled:
+        return None
+    log.info("Hindsight trend evidence retrieved; requesting newsroom synthesis")
     measurements = build_measurements(archive_dates)
     system = (
         "You are the trends editor for a private homelab operations newspaper. Hindsight has "
@@ -253,6 +262,25 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
 async def refresh_trend_intelligence() -> bool:
     """Publish a new snapshot, preserving the previous one if reflection fails."""
     archive_dates = _archive_dates()
+    if not archive_dates:
+        log.warning("Trend intelligence has no archives to measure")
+        return False
+    measurements = build_measurements(archive_dates)
+    previous = load_json(TREND_INTELLIGENCE_FILE) or {}
+    if not previous:
+        save_json(TREND_INTELLIGENCE_FILE, {
+            "generated_at": datetime.now(timezone.utc).isoformat(),
+            "reflection_status": "pending",
+            "archive_range": {
+                "newest": archive_dates[0],
+                "oldest": archive_dates[-1],
+                "editions": len(archive_dates),
+            },
+            "measurements": measurements,
+            "overview": "Archive measurements are ready; semantic trend analysis is pending.",
+            "findings": [],
+            "watchlist": [],
+        })
     reflection = await reflect_on_trends(archive_dates)
     if reflection is None:
         log.warning("Trend intelligence refresh produced no reflection; preserving prior snapshot")
@@ -264,7 +292,8 @@ async def refresh_trend_intelligence() -> bool:
             "oldest": archive_dates[-1],
             "editions": len(archive_dates),
         },
-        "measurements": build_measurements(archive_dates),
+        "reflection_status": "ok",
+        "measurements": measurements,
         **reflection,
     }
     save_json(TREND_INTELLIGENCE_FILE, snapshot)
