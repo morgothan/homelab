@@ -20,7 +20,7 @@ from config import (
     SEARCH_INDEX_FILE, SITE_NAME, TODAY_FILE, TREND_INTELLIGENCE_FILE,
     UPDATE_INTERVAL, UPDATES_FILE,
 )
-from correlations import service_correlation_counts
+from correlations import service_correlations
 from search import ensure_index, search_archive, search_current_articles
 from storage import load_json, save_json
 
@@ -650,25 +650,38 @@ def _service_href(name: str) -> str:
     return f'/service/{quote(name, safe="")}'
 
 
+_EVENT_PHRASE = {
+    "container.image_changed": "was redeployed",
+    "security.ban_started": "banned an IP",
+    "application.update_detected": "had an update detected",
+}
+
+
+def _event_phrase(event_type: str) -> str:
+    return _EVENT_PHRASE.get(event_type, event_type)
+
+
 def render_correlation_graph_html(pairs: list[dict]) -> str:
     """Render the cross-service correlation section for /trends and service pages."""
     if not pairs:
         return ""
     rows = "".join(
-        '<div class="issue">'
-        f'<a href="{_service_href(p["service_a"])}">{_h(p["service_a"])}</a>'
-        ' &harr; '
-        f'<a href="{_service_href(p["service_b"])}">{_h(p["service_b"])}</a>'
-        f'<span class="c-dim">{p["count"]} day{"s" if p["count"] != 1 else ""} in the last 90</span>'
+        '<div style="padding:8px 0;border-bottom:1px solid var(--dim)">'
+        f'<a href="{_service_href(p["service_a"])}">{_h(p["service_a"])}</a> '
+        f'{_h(_event_phrase(p["event_a"]))}, then '
+        f'<a href="{_service_href(p["service_b"])}">{_h(p["service_b"])}</a> '
+        f'{_h(_event_phrase(p["event_b"]))} {p["minutes_apart"]:g} min later'
+        '<div class="arch-meta">'
+        f'{p["days"]}&times; in the last 90 days &middot; last '
+        f'<a href="/archive/{_h(p["last_seen"])}">{_h(p["last_seen"])}</a></div>'
         '</div>'
         for p in pairs
     )
     return (
         '<div class="arch-section-head">Cross-Service Correlations</div>'
         '<div class="arch-meta" style="margin-bottom:8px">'
-        'Services with a security ban, image update, or deploy within 10 minutes of each '
-        'other on the same day &mdash; not routine log activity, which would trivially '
-        '"correlate" with anything given how often it happens.</div>'
+        'Specific incidents &mdash; security bans, deploys, update detections &mdash; that '
+        'landed within 10 minutes of each other, not routine log activity.</div>'
         '<div class="card full"><div class="card-body">' + rows + '</div></div>'
         '<div class="arch-meta" style="margin-top:8px">'
         '<a href="/services">Browse all services &rarr;</a></div>'
@@ -787,7 +800,7 @@ async def service_timeline(name: str):
     matches.sort(key=lambda e: str(e.get("observed_at") or ""), reverse=True)
 
     correlated = [
-        p for p in service_correlation_counts(events)
+        p for p in service_correlations(events)
         if name in (p["service_a"], p["service_b"])
     ]
 
@@ -811,7 +824,7 @@ async def trends():
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections: list[str] = [render_trend_intelligence(intelligence)]
-    sections.append(render_correlation_graph_html(service_correlation_counts(events)))
+    sections.append(render_correlation_graph_html(service_correlations(events)))
 
     sections.append(_section(
         "Annual Reports", periodic.get("yearly", []), "year",

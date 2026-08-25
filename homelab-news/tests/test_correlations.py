@@ -18,7 +18,7 @@ from correlations import (
     normalize_service,
     record_container_transitions,
     record_update_detections,
-    service_correlation_counts,
+    service_correlations,
     targeted_recall_queries,
 )
 
@@ -311,73 +311,94 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
 
 
 class ServiceCorrelationGraphTests(unittest.TestCase):
-    def test_different_services_within_window_are_counted(self):
+    def test_correlation_names_the_actual_event_types_and_when(self):
         events = [
-            _evt("traefik", "2026-08-24T12:00:00+00:00"),
-            _evt("plex", "2026-08-24T12:05:00+00:00"),
+            _evt("mealie", "2026-08-24T12:00:00+00:00", "container.image_changed"),
+            _evt("traefik", "2026-08-24T12:04:00+00:00", "security.ban_started"),
         ]
-        pairs = service_correlation_counts(events)
-        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+        pairs = service_correlations(events)
+        self.assertEqual(pairs, [{
+            "service_a": "mealie", "event_a": "container.image_changed",
+            "service_b": "traefik", "event_b": "security.ban_started",
+            "days": 1, "last_seen": "2026-08-24", "minutes_apart": 4.0,
+        }])
 
     def test_same_service_pairs_are_excluded(self):
         events = [
             _evt("traefik", "2026-08-24T12:00:00+00:00"),
             _evt("traefik", "2026-08-24T12:01:00+00:00"),
         ]
-        self.assertEqual(service_correlation_counts(events), [])
+        self.assertEqual(service_correlations(events), [])
 
     def test_events_outside_window_are_not_counted(self):
         events = [
             _evt("traefik", "2026-08-24T12:00:00+00:00"),
-            _evt("plex", "2026-08-24T12:15:00+00:00"),
+            _evt("plex", "2026-08-24T12:15:00+00:00", "container.image_changed"),
         ]
-        self.assertEqual(service_correlation_counts(events, window_minutes=10), [])
+        self.assertEqual(service_correlations(events, window_minutes=10), [])
 
-    def test_pairs_are_ranked_by_count_descending(self):
+    def test_pairs_are_ranked_by_day_count_descending(self):
         events = [
             _evt("traefik", "2026-08-24T12:00:00+00:00"),
-            _evt("plex", "2026-08-24T12:01:00+00:00"),
+            _evt("plex", "2026-08-24T12:01:00+00:00", "container.image_changed"),
             _evt("traefik", "2026-08-25T12:00:00+00:00"),
-            _evt("plex", "2026-08-25T12:01:00+00:00"),
+            _evt("plex", "2026-08-25T12:01:00+00:00", "container.image_changed"),
             _evt("traefik", "2026-08-26T12:00:00+00:00"),
-            _evt("postgres", "2026-08-26T12:01:00+00:00"),
+            _evt("postgres", "2026-08-26T12:01:00+00:00", "container.image_changed"),
         ]
-        pairs = service_correlation_counts(events)
-        self.assertEqual(pairs[0], {"service_a": "plex", "service_b": "traefik", "count": 2})
-        self.assertEqual(pairs[1], {"service_a": "postgres", "service_b": "traefik", "count": 1})
+        pairs = service_correlations(events)
+        self.assertEqual(pairs[0]["service_a"], "plex")
+        self.assertEqual(pairs[0]["days"], 2)
+        self.assertEqual(pairs[1]["service_a"], "postgres")
+        self.assertEqual(pairs[1]["days"], 1)
 
-    def test_same_day_repeated_cooccurrences_count_once(self):
+    def test_same_day_repeated_cooccurrences_count_as_one_day(self):
         events = [
             _evt("traefik", f"2026-08-24T12:0{i}:00+00:00")
             for i in range(5)
         ] + [
-            _evt("plex", f"2026-08-24T12:0{i}:30+00:00")
+            _evt("plex", f"2026-08-24T12:0{i}:30+00:00", "container.image_changed")
             for i in range(5)
         ]
-        pairs = service_correlation_counts(events)
-        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+        pairs = service_correlations(events)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["days"], 1)
+
+    def test_last_seen_reflects_the_most_recent_occurrence(self):
+        events = [
+            _evt("traefik", "2026-08-20T12:00:00+00:00"),
+            _evt("plex", "2026-08-20T12:01:00+00:00", "container.image_changed"),
+            _evt("traefik", "2026-08-25T09:00:00+00:00"),
+            _evt("plex", "2026-08-25T09:03:00+00:00", "container.image_changed"),
+        ]
+        pairs = service_correlations(events)
+        self.assertEqual(pairs[0]["days"], 2)
+        self.assertEqual(pairs[0]["last_seen"], "2026-08-25")
+        self.assertEqual(pairs[0]["minutes_apart"], 3.0)
 
     def test_routine_log_chatter_does_not_correlate(self):
         events = [
             _evt("edge-udm-pro-max", "2026-08-24T12:00:00+00:00", "logs.error_observed"),
             _evt("authelia", "2026-08-24T12:05:00+00:00", "logs.error_observed"),
         ]
-        self.assertEqual(service_correlation_counts(events), [])
+        self.assertEqual(service_correlations(events), [])
 
     def test_discrete_incident_types_still_correlate_across_services(self):
         events = [
             _evt("traefik", "2026-08-24T12:00:00+00:00", "security.ban_started"),
             _evt("plex", "2026-08-24T12:05:00+00:00", "application.update_detected"),
         ]
-        pairs = service_correlation_counts(events)
-        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+        pairs = service_correlations(events)
+        self.assertEqual(len(pairs), 1)
+        self.assertEqual(pairs[0]["event_a"], "application.update_detected")
+        self.assertEqual(pairs[0]["event_b"], "security.ban_started")
 
     def test_max_pairs_caps_results(self):
         events = []
         for i in range(5):
             events.append(_evt(f"svc{i}a", f"2026-08-24T12:0{i}:00+00:00"))
-            events.append(_evt(f"svc{i}b", f"2026-08-24T12:0{i}:30+00:00"))
-        pairs = service_correlation_counts(events, max_pairs=2)
+            events.append(_evt(f"svc{i}b", f"2026-08-24T12:0{i}:30+00:00", "container.image_changed"))
+        pairs = service_correlations(events, max_pairs=2)
         self.assertEqual(len(pairs), 2)
 
 

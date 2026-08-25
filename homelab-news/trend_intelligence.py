@@ -23,7 +23,7 @@ from config import (
     VLLM_URL,
 )
 from articles import parse_llm_json
-from correlations import events_since, service_correlation_counts
+from correlations import events_since, service_correlations
 from lib import _sanitize_for_llm
 from runtime import run_loop
 from storage import load_json, save_json
@@ -102,7 +102,7 @@ def build_measurements(archive_dates: list[str]) -> dict[str, dict[str, Any]]:
                 {"service": service, "events": count}
                 for service, count in service_counts.most_common(3)
             ],
-            "correlated_service_pairs": service_correlation_counts(window_events, max_pairs=3),
+            "correlated_service_pairs": service_correlations(window_events, max_pairs=3),
         }
     return output
 
