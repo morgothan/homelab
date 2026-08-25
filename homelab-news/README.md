@@ -14,7 +14,10 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Police Blotter** | Active edge and CrowdSec decisions with optional geo, ASN, and abuse intelligence | Live API-backed view |
 | **Arts & Entertainment** | One consolidated **New Library Additions** story from Seerr availability events, plus optional media-library scan results | Hourly snapshot |
 | **Archive** | One snapshot per day, grouped by month | Daily |
-| **Trends** | Hindsight-reflected operational intelligence plus weekly, monthly, and yearly reports | Reflected every 6 hours; reports scheduled |
+| **Trends** | Hindsight-reflected operational intelligence, weekly/monthly/yearly reports, and a deterministic cross-service correlation section | Reflected every 6 hours; reports scheduled |
+| **Services** (`/services`) | Every service in the 90-day event ledger with its event count; links into per-service timelines | Live from the event ledger |
+| **Service timeline** (`/service/{name}`) | One service's chronological events plus which other services it co-occurs with | Live from the event ledger |
+| **Search** (`/search`) | Full-text search over article headlines/blurbs across today, Current Events, and the archive | Live query |
 
 Generated articles use newspaper-style sections such as **City Hall**, **Public Safety**, **Weather**, **City Archives**, **Arts & Entertainment**, and **Public Works**. The most important item can be promoted to a lead story.
 
@@ -81,6 +84,7 @@ data/
   ip_intel.json           # cached IP intelligence
   media_events.json       # retained Seerr request and availability events
   recent_media.json       # hourly seven-day media list and resolved Jellyfin links
+  search_index.db         # SQLite FTS5 index of archived article text, rebuilt when stale
   archive/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day

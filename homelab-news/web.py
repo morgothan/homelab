@@ -3,8 +3,10 @@
 import asyncio
 import logging
 import time
+from collections import Counter
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import quote
 
 from html import escape as _h
 
@@ -12,11 +14,14 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse, RedirectResponse
 
 from config import (
-    ARCHIVE_DIR, ARCHIVE_INDEX, HOMELAB_INTEL_FILE, IP_INTEL_FILE,
+    ARCHIVE_DIR, ARCHIVE_INDEX, EVENT_LEDGER_FILE, HOMELAB_INTEL_FILE, IP_INTEL_FILE,
     LIBRARY_SCAN_FILE, LOG_HOURS, MEDIA_EVENTS_FILE, PERIODIC_FILE,
     RECENT_MEDIA_FILE, REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS,
-    SITE_NAME, TODAY_FILE, TREND_INTELLIGENCE_FILE, UPDATE_INTERVAL, UPDATES_FILE,
+    SEARCH_INDEX_FILE, SITE_NAME, TODAY_FILE, TREND_INTELLIGENCE_FILE,
+    UPDATE_INTERVAL, UPDATES_FILE,
 )
+from correlations import service_correlation_counts
+from search import ensure_index, search_archive, search_current_articles
 from storage import load_json, save_json
 
 from lib import (
@@ -630,13 +635,168 @@ def render_trend_intelligence(snapshot: dict) -> str:
     )
 
 
+def _service_href(name: str) -> str:
+    return f'/service/{quote(name, safe="")}'
+
+
+def render_correlation_graph_html(pairs: list[dict]) -> str:
+    """Render the cross-service correlation section for /trends and service pages."""
+    if not pairs:
+        return ""
+    rows = "".join(
+        '<div class="issue">'
+        f'<a href="{_service_href(p["service_a"])}">{_h(p["service_a"])}</a>'
+        ' &harr; '
+        f'<a href="{_service_href(p["service_b"])}">{_h(p["service_b"])}</a>'
+        f'<span class="c-dim">{p["count"]} day{"s" if p["count"] != 1 else ""} in the last 90</span>'
+        '</div>'
+        for p in pairs
+    )
+    return (
+        '<div class="arch-section-head">Cross-Service Correlations</div>'
+        '<div class="card full"><div class="card-body">' + rows + '</div></div>'
+        '<div class="arch-meta" style="margin-top:8px">'
+        '<a href="/services">Browse all services &rarr;</a></div>'
+    )
+
+
+_SEVERITY_LABEL = {"error": ("c-err", "ERR"), "warn": ("c-warn", "WRN"), "info": ("c-dim", "INFO")}
+
+
+def _severity_badge(severity: str) -> str:
+    cls, label = _SEVERITY_LABEL.get(severity, ("c-dim", severity.upper()[:4] or "?"))
+    return f'<span class="{cls}">{label}</span>'
+
+
+def _service_event_row(event: dict) -> str:
+    observed = str(event.get("observed_at") or "")[:16].replace("T", " ")
+    attrs = event.get("attributes") or {}
+    detail = ", ".join(f"{k}={v}" for k, v in attrs.items() if v not in (None, ""))
+    return (
+        '<div class="issue">'
+        + _severity_badge(str(event.get("severity") or ""))
+        + f'<span class="c-dim">{_h(observed)} UTC</span>'
+        + f'<span class="c-gold">{_h(str(event.get("event_type") or ""))}</span>'
+        + f'<span>{_h(detail[:220])}</span>'
+        + '</div>'
+    )
+
+
+def _search_result_row(headline: str, blurb: str, section: str, meta_label: str, href: str) -> str:
+    return (
+        f'<a class="arch-day" href="{href}">'
+        f'<span class="arch-headline">{_h(headline)}</span>'
+        f'<span class="arch-meta">{_h(section)} &middot; {_h(meta_label)}</span></a>'
+        f'<div class="arch-period-lead" style="margin:-4px 0 12px 0">{_h(blurb)}</div>'
+    )
+
+
+@app.get("/search")
+async def search_page(q: str = ""):
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    query = q.strip()
+    rows = ""
+
+    if query:
+        today = load_json(TODAY_FILE) or {}
+        rolling = load_json(ROLLING_FILE) or {}
+        current_hits = [
+            (article, "/", "today's front page")
+            for article in search_current_articles(today.get("newspaper") or [], query)
+        ] + [
+            (article, "/current", "current events")
+            for article in search_current_articles(rolling.get("newspaper") or [], query)
+        ]
+        rows += "".join(
+            _search_result_row(a.get("headline", ""), a.get("blurb", ""), a.get("section", ""), label, href)
+            for a, href, label in current_hits
+        )
+
+        ensure_index(SEARCH_INDEX_FILE, ARCHIVE_DIR, ARCHIVE_INDEX)
+        rows += "".join(
+            _search_result_row(r["headline"], r["blurb"], r["section"], r["date"], f'/archive/{r["date"]}')
+            for r in search_archive(SEARCH_INDEX_FILE, query)
+        )
+
+        content = f'<div class="arch-index">{rows}</div>' if rows else (
+            f'<div class="arch-empty">No articles match &ldquo;{_h(query)}&rdquo;.</div>'
+        )
+    else:
+        content = '<div class="arch-empty">Search headlines and article text across every edition.</div>'
+
+    form = (
+        f'<form method="get" action="/search" class="np-status" style="margin:16px 0">'
+        f'<input type="text" name="q" value="{_h(query)}" placeholder="Search articles&hellip;" '
+        'style="font-family:inherit;padding:6px 10px;width:280px;max-width:70vw">'
+        '<button type="submit" style="font-family:inherit;padding:6px 14px;margin-left:8px">Search</button>'
+        '</form>'
+    )
+
+    body = masthead_rolling(now_str) + nav_bar("search") + form + content
+    return Response(content=page_wrap(body, refresh=None),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/services")
+async def services_index():
+    events = load_json(EVENT_LEDGER_FILE) or []
+    counts = Counter(str(e["service"]) for e in events if e.get("service"))
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+
+    if not counts:
+        content = '<div class="arch-empty">No operational events recorded yet.</div>'
+    else:
+        rows = "".join(
+            f'<a class="arch-day" href="{_service_href(name)}">'
+            f'<span class="arch-date">{_h(name)}</span>'
+            f'<span class="arch-meta">{count} event{"s" if count != 1 else ""}</span></a>'
+            for name, count in counts.most_common()
+        )
+        content = f'<div class="arch-index">{rows}</div>'
+
+    body = (
+        masthead_rolling(now_str) + nav_bar("services")
+        + '<div class="arch-section-head">Services</div>' + content
+    )
+    return Response(content=page_wrap(body, refresh=3600),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/service/{name}")
+async def service_timeline(name: str):
+    events = load_json(EVENT_LEDGER_FILE) or []
+    matches = [e for e in events if str(e.get("service")) == name]
+    if not matches:
+        return Response(content=f"No events recorded for service '{_h(name)}'.",
+                        status_code=404, media_type="text/plain")
+    matches.sort(key=lambda e: str(e.get("observed_at") or ""), reverse=True)
+
+    correlated = [
+        p for p in service_correlation_counts(events)
+        if name in (p["service_a"], p["service_b"])
+    ]
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    body = (
+        masthead_rolling(now_str) + nav_bar("service-detail")
+        + f'<div class="arch-section-head">{_h(name)}</div>'
+        + f'<div class="arch-meta">{len(matches)} event{"s" if len(matches) != 1 else ""} in the last 90 days</div>'
+        + "".join(_service_event_row(e) for e in matches)
+        + render_correlation_graph_html(correlated)
+    )
+    return Response(content=page_wrap(body, refresh=3600),
+                    media_type="text/html; charset=utf-8")
+
+
 @app.get("/trends")
 async def trends():
     periodic = load_json(PERIODIC_FILE) or {}
     intelligence = load_json(TREND_INTELLIGENCE_FILE) or {}
+    events = load_json(EVENT_LEDGER_FILE) or []
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections: list[str] = [render_trend_intelligence(intelligence)]
+    sections.append(render_correlation_graph_html(service_correlation_counts(events)))
 
     sections.append(_section(
         "Annual Reports", periodic.get("yearly", []), "year",

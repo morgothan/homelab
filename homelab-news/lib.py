@@ -3580,6 +3580,8 @@ def nav_bar(active: str) -> str:
         + _item("/archive", "Archive", "archive")
         + " &nbsp;&middot;&nbsp; "
         + _item("/trends", "Trends", "trends")
+        + " &nbsp;&middot;&nbsp; "
+        + _item("/search", "Search", "search")
         + '</div>'
     )
 

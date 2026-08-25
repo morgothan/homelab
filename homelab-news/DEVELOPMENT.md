@@ -12,6 +12,9 @@ purpose.
 - `storage.py` owns durable JSON reads and atomic writes.
 - `articles.py` is the trust boundary for untrusted LLM article output.
 - `runtime.py` owns scheduling behavior shared by long-running workers.
+- `correlations.py` owns the operational event ledger: normalization, retention,
+  and both same-service and cross-service correlation.
+- `search.py` owns the archived-article full-text index (SQLite FTS5).
 - `lib.py` remains a compatibility facade for collectors, inference, security,
   and rendering while those areas are extracted incrementally. New foundational
   code must not be added to it.
