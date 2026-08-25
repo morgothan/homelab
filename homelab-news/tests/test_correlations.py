@@ -69,6 +69,15 @@ class CorrelationTests(unittest.TestCase):
         self.assertEqual(normalize_service("edge-gateway"), "traefik")
         self.assertEqual(normalize_service("Traefik"), "traefik")
 
+    def test_replica_suffixes_still_collapse_to_the_base_service(self):
+        self.assertEqual(normalize_service("traefik-blue"), "traefik")
+        self.assertEqual(normalize_service("traefik-1"), "traefik")
+
+    def test_ipv4_addresses_are_not_truncated_by_suffix_stripping(self):
+        self.assertEqual(normalize_service("172.18.0.1"), "172.18.0.1")
+        self.assertEqual(normalize_service("172.18.0.2"), "172.18.0.2")
+        self.assertNotEqual(normalize_service("172.18.0.1"), normalize_service("172.18.0.2"))
+
     def test_update_detection_and_error_spike_correlate_without_claiming_cause(self):
         observed = "2026-08-24T12:02:00+00:00"
         events = build_cycle_events(
@@ -156,6 +165,77 @@ class CorrelationTests(unittest.TestCase):
         self.assertEqual(events[0]["event_type"], "container.image_changed")
         self.assertEqual(events[0]["service"], "traefik")
         self.assertNotIn("_local_digests", second["local"]["results"][0])
+
+
+class NetworkGearLogNoiseTests(unittest.TestCase):
+    def test_udm_short_lived_process_stat_race_is_noise(self):
+        message = (
+            "ubios-udapi-server[2143]: process: Process' stime is unknown "
+            "(not an error); failed to parse /proc/919352/stat: Short read"
+        )
+        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        self.assertEqual(issues, [])
+
+    def test_ap_garp_netlink_resource_busy_is_noise(self):
+        message = "wevent[7643]: garp.get_ipv4_by_mac(): Netlink error response: Resource busy"
+        issues, _ = lib._collect_issues("backyard-u7prooutdoor", [message])
+        self.assertEqual(issues, [])
+
+    def test_sip_registration_success_logged_as_error_is_noise(self):
+        message = (
+            "USER.INFO [00:00:00:00:00:00][1.0.3.25][869254208] "
+            "SigControl(performRegistration):5242:Register transaction got error: "
+            "No Error, code:200, retry after: 0"
+        )
+        issues, _ = lib._collect_issues("172.18.0.1", [message])
+        self.assertEqual(issues, [])
+
+    def test_mcad_retry_chatter_is_noise(self):
+        messages = [
+            "mca-ctrl[908924]: mca-proto.service_json(): failed to contact mcad",
+            "mca-ctrl[908924]: mca-monitor.mca_control_main(): service_json event fail, retry (35 sec left)",
+        ]
+        issues, _ = lib._collect_issues("edge-udm-pro-max", messages)
+        self.assertEqual(issues, [])
+
+    def test_dhcp_probe_start_event_is_noise(self):
+        message = (
+            "mcad[5162]: probe-runner.probe_runner_dispatch(): [dhcpv6] start "
+            "ifname=eth8 timeout=10 req=2f99add0-965c-4410-b7e7-15c4"
+        )
+        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        self.assertEqual(issues, [])
+
+    def test_smartctl_unsupported_device_is_noise(self):
+        message = 'beszel-agent[4276]: 2026/08/25 16:45:26 INFO smartctl failed device=/dev/sda err="exit status 2"'
+        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        self.assertEqual(issues, [])
+
+    def test_smartctl_failure_with_other_exit_status_remains_alertable(self):
+        message = 'beszel-agent[4276]: 2026/08/25 16:45:26 INFO smartctl failed device=/dev/sda err="exit status 4"'
+        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        self.assertEqual(len(issues), 1)
+
+    def test_wifi_soft_fail_association_telemetry_is_noise(self):
+        message = (
+            'stahtd[6247]: [STA-TRACKER].stahtd_dump_event(): {"op":"event",'
+            '"message_type":"STA_ASSOC_TRACKER","event_type":"soft fail"}'
+        )
+        issues, _ = lib._collect_issues("upstairs-u7-pro", [message])
+        self.assertEqual(issues, [])
+
+    def test_dhcp_probe_explicit_failure_remains_alertable(self):
+        message = "mcad[5162]: probe-runner.probe_runner_dispatch(): [dhcpv6] failed ifname=eth8"
+        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        self.assertEqual(len(issues), 1)
+
+    def test_unrelated_registration_failure_remains_alertable(self):
+        message = (
+            "SigControl(performRegistration):5242:Register transaction got error: "
+            "Request Timeout, code:408, retry after: 30"
+        )
+        issues, _ = lib._collect_issues("172.18.0.1", [message])
+        self.assertEqual(len(issues), 1)
 
 
 class ServiceCorrelationGraphTests(unittest.TestCase):

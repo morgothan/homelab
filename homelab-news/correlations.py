@@ -25,10 +25,14 @@ _RETENTION_DAYS = 90
 _MAX_EVENTS = 20_000
 
 
+_IPV4_RE = re.compile(r"^\d{1,3}(?:\.\d{1,3}){3}$")
+
+
 def normalize_service(value: str) -> str:
     """Return a stable, query-safe service identifier."""
     normalized = re.sub(r"[^a-z0-9_.-]+", "-", value.lower().strip()).strip("-._")
-    normalized = re.sub(r"[-_.](?:blue|green|1|2)$", "", normalized)
+    if not _IPV4_RE.match(normalized):
+        normalized = re.sub(r"[-_.](?:blue|green|1|2)$", "", normalized)
     return _ALIASES.get(normalized, normalized or "unknown")
 
 
