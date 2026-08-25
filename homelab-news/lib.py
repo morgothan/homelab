@@ -2864,15 +2864,19 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
 
     from correlations import (
         append_events, build_cycle_events, correlate_events, events_since,
-        targeted_recall_queries,
+        record_update_detections, targeted_recall_queries,
     )
 
     cycle_events = build_cycle_events(
         docker_issues=docker_issues,
         loki_issues=loki_issues,
         bans=bans,
-        update_hosts=(load_json(UPDATES_FILE) or {}).get("hosts", {}),
         observed_at=attempt_at,
+    )
+    cycle_events += record_update_detections(
+        (load_json(UPDATES_FILE) or {}).get("hosts", {}),
+        UPDATE_DETECTION_STATE_FILE,
+        attempt_at,
     )
     ledger = append_events(EVENT_LEDGER_FILE, cycle_events)
     correlation_cutoff = since - timedelta(minutes=10)

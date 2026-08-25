@@ -69,8 +69,7 @@ def _event(event_type: str, service: str, source: str, observed_at: str,
 
 
 def build_cycle_events(*, docker_issues: list[dict], loki_issues: list[dict],
-                       bans: list[dict], update_hosts: dict,
-                       observed_at: str) -> list[dict[str, Any]]:
+                       bans: list[dict], observed_at: str) -> list[dict[str, Any]]:
     """Convert one collection cycle into normalized, deduplicable events."""
     events: list[dict[str, Any]] = []
     fallback = _timestamp(observed_at, datetime.now(timezone.utc).isoformat())
@@ -98,18 +97,55 @@ def build_cycle_events(*, docker_issues: list[dict], loki_issues: list[dict],
             "hit_count": max(0, int(ban.get("hit_count") or 0)),
         }))
 
-    for host, host_data in update_hosts.items():
-        if host.startswith("_") or not isinstance(host_data, dict):
-            continue
-        checked = _timestamp(host_data.get("ts"), fallback)
-        for result in host_data.get("results") or []:
-            if result.get("status") != "update_available":
+    return events
+
+
+def record_update_detections(update_hosts: dict, state_path: str,
+                             observed_at: str) -> list[dict[str, Any]]:
+    """Persist pending-update state and return only newly-detected updates.
+
+    update_hosts is rechecked every cycle regardless of whether a pending
+    update is new or has been pending for days. Without this dedup,
+    application.update_detected would fire on every cycle for as long as the
+    update remains unapplied, making any two containers with simultaneously
+    pending updates look "correlated" purely because they were both checked
+    in the same batch run. The read-modify-write is lock-protected because
+    both the today and rolling workers call this independently — an unlocked
+    version lets both see no prior state at once and both emit.
+    """
+    fallback = _timestamp(observed_at, datetime.now(timezone.utc).isoformat())
+    parent = os.path.dirname(state_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    lock_path = f"{state_path}.lock"
+    with open(lock_path, "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        previous = load_json(state_path) or {}
+        current: dict[str, dict[str, str]] = {}
+        events = []
+        for host, host_data in update_hosts.items():
+            if host.startswith("_") or not isinstance(host_data, dict):
                 continue
-            service = normalize_service(str(result.get("container") or "unknown"))
-            events.append(_event("application.update_detected", service, "updates", checked, "info", {
-                "host": normalize_service(host),
-                "new_version": str(result.get("new_version") or "")[:80],
-            }))
+            host_key = normalize_service(host)
+            current[host_key] = {}
+            checked = _timestamp(host_data.get("ts"), fallback)
+            for result in host_data.get("results") or []:
+                if result.get("status") != "update_available":
+                    continue
+                service = normalize_service(str(result.get("container") or "unknown"))
+                if service == "unknown":
+                    continue
+                new_version = str(result.get("new_version") or "")[:80]
+                current[host_key][service] = new_version
+                previously_known = (previous.get(host_key) or {}).get(service)
+                if previously_known == new_version:
+                    continue
+                events.append(_event("application.update_detected", service, "updates", checked, "info", {
+                    "host": host_key,
+                    "new_version": new_version,
+                }))
+        save_json(state_path, current)
+        fcntl.flock(lock, fcntl.LOCK_UN)
     return events
 
 
@@ -221,6 +257,17 @@ def correlate_events(events: list[dict[str, Any]], *, window_minutes: int = 10,
 
 _DEFAULT_SERVICE_PAIR_LIMIT = 15
 
+# Event types sparse and discrete enough for cross-service co-occurrence to be
+# meaningful. Routine log chatter (logs.error_spike/logs.error_observed) is
+# excluded: a service that logs every few minutes would otherwise trivially
+# "correlate" with anything else that logs at all, purely by volume, not by
+# any real relationship.
+_INCIDENT_EVENT_TYPES = {
+    "security.ban_started",
+    "application.update_detected",
+    "container.image_changed",
+}
+
 
 def service_correlation_counts(events: list[dict[str, Any]], *, window_minutes: int = 10,
                                max_pairs: int = _DEFAULT_SERVICE_PAIR_LIMIT) -> list[dict[str, Any]]:
@@ -233,9 +280,11 @@ def service_correlation_counts(events: list[dict[str, Any]], *, window_minutes: 
     per pair rather than per event pair: a chatty service that logs many events
     an hour would otherwise inflate a structurally-coupled pair (e.g. two
     devices on the same network segment) into the tens of thousands, drowning
-    out infrequent, meaningful correlations.
+    out infrequent, meaningful correlations. Considers only _INCIDENT_EVENT_TYPES
+    for the same reason: a high-frequency logger would trivially pair with
+    everything else if routine log events counted.
     """
-    parsed = _sorted_parsed_events(events)
+    parsed = _sorted_parsed_events([e for e in events if e.get("event_type") in _INCIDENT_EVENT_TYPES])
     days_by_pair: dict[tuple[str, str], set[str]] = {}
     for index, (left_time, left) in enumerate(parsed):
         for right_time, right in parsed[index + 1:]:

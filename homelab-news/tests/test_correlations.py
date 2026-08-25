@@ -2,6 +2,8 @@ import asyncio
 import os
 import sys
 import tempfile
+import threading
+import time
 import unittest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, patch
@@ -15,12 +17,13 @@ from correlations import (
     correlate_events,
     normalize_service,
     record_container_transitions,
+    record_update_detections,
     service_correlation_counts,
     targeted_recall_queries,
 )
 
 
-def _evt(service: str, observed_at: str, event_type: str = "logs.error_observed") -> dict:
+def _evt(service: str, observed_at: str, event_type: str = "security.ban_started") -> dict:
     return {
         "event_id": f"{service}-{observed_at}-{event_type}",
         "observed_at": observed_at,
@@ -80,7 +83,7 @@ class CorrelationTests(unittest.TestCase):
 
     def test_update_detection_and_error_spike_correlate_without_claiming_cause(self):
         observed = "2026-08-24T12:02:00+00:00"
-        events = build_cycle_events(
+        log_events = build_cycle_events(
             docker_issues=[{
                 "source": "traefik",
                 "level": "error",
@@ -91,35 +94,104 @@ class CorrelationTests(unittest.TestCase):
             }],
             loki_issues=[],
             bans=[],
-            update_hosts={"local": {
+            observed_at=observed,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            update_events = record_update_detections({"local": {
                 "ts": "2026-08-24T12:00:00+00:00",
                 "results": [{
                     "container": "edge-gateway",
                     "status": "update_available",
                     "new_version": "v3.6",
                 }],
-            }},
-            observed_at=observed,
-        )
+            }}, os.path.join(tmp, "update_state.json"), observed)
 
-        matches = correlate_events(events)
+        matches = correlate_events(log_events + update_events)
         self.assertEqual(len(matches), 1)
         self.assertEqual(matches[0]["service"], "traefik")
         self.assertFalse(matches[0]["causation_confirmed"])
         self.assertEqual(matches[0]["minutes_apart"], 2.0)
 
     def test_different_services_do_not_correlate(self):
-        events = build_cycle_events(
+        log_events = build_cycle_events(
             docker_issues=[{"source": "loki", "level": "error", "count": 5}],
             loki_issues=[],
             bans=[],
-            update_hosts={"local": {
-                "ts": "2026-08-24T12:00:00+00:00",
-                "results": [{"container": "traefik", "status": "update_available"}],
-            }},
             observed_at="2026-08-24T12:01:00+00:00",
         )
-        self.assertEqual(correlate_events(events), [])
+        with tempfile.TemporaryDirectory() as tmp:
+            update_events = record_update_detections({"local": {
+                "ts": "2026-08-24T12:00:00+00:00",
+                "results": [{"container": "traefik", "status": "update_available"}],
+            }}, os.path.join(tmp, "update_state.json"), "2026-08-24T12:01:00+00:00")
+        self.assertEqual(correlate_events(log_events + update_events), [])
+
+    def test_update_first_detection_emits_event(self):
+        hosts = {"local": {"ts": "2026-08-24T12:00:00+00:00", "results": [{
+            "container": "traefik", "status": "update_available", "new_version": "v3.6",
+        }]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            events = record_update_detections(hosts, os.path.join(tmp, "update_state.json"), "")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["event_type"], "application.update_detected")
+        self.assertEqual(events[0]["service"], "traefik")
+
+    def test_update_still_pending_next_cycle_does_not_reemit(self):
+        hosts = {"local": {"ts": "2026-08-24T12:00:00+00:00", "results": [{
+            "container": "traefik", "status": "update_available", "new_version": "v3.6",
+        }]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "update_state.json")
+            first = record_update_detections(hosts, path, "")
+            second = record_update_detections(hosts, path, "")
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+
+    def test_update_version_change_emits_a_new_event(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "update_state.json")
+            record_update_detections({"local": {"ts": "2026-08-24T12:00:00+00:00", "results": [
+                {"container": "traefik", "status": "update_available", "new_version": "v3.6"},
+            ]}}, path, "")
+            events = record_update_detections({"local": {"ts": "2026-08-24T13:00:00+00:00", "results": [
+                {"container": "traefik", "status": "update_available", "new_version": "v3.7"},
+            ]}}, path, "")
+
+        self.assertEqual(len(events), 1)
+        self.assertEqual(events[0]["attributes"]["new_version"], "v3.7")
+
+    def test_concurrent_callers_do_not_both_emit_for_the_same_new_update(self):
+        # today.py and rolling.py both call this via run_news_cycle on independent
+        # schedules; an unlocked read-modify-write lets both see no prior state and
+        # both emit, double-counting one new update as two.
+        import correlations as correlations_module
+        real_load_json = correlations_module.load_json
+
+        def slow_load_json(path):
+            value = real_load_json(path)
+            time.sleep(0.05)
+            return value
+
+        hosts = {"local": {"ts": "x", "results": [{
+            "container": "traefik", "status": "update_available", "new_version": "v9",
+        }]}}
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "update_state.json")
+            results = []
+
+            def run():
+                results.append(len(record_update_detections(hosts, path, "x")))
+
+            with patch.object(correlations_module, "load_json", side_effect=slow_load_json):
+                threads = [threading.Thread(target=run) for _ in range(2)]
+                for t in threads:
+                    t.start()
+                for t in threads:
+                    t.join()
+
+        self.assertEqual(sum(results), 1)
 
     def test_targeted_recall_names_service_and_relevant_history(self):
         event = {
@@ -281,6 +353,21 @@ class ServiceCorrelationGraphTests(unittest.TestCase):
         ] + [
             _evt("plex", f"2026-08-24T12:0{i}:30+00:00")
             for i in range(5)
+        ]
+        pairs = service_correlation_counts(events)
+        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+
+    def test_routine_log_chatter_does_not_correlate(self):
+        events = [
+            _evt("edge-udm-pro-max", "2026-08-24T12:00:00+00:00", "logs.error_observed"),
+            _evt("authelia", "2026-08-24T12:05:00+00:00", "logs.error_observed"),
+        ]
+        self.assertEqual(service_correlation_counts(events), [])
+
+    def test_discrete_incident_types_still_correlate_across_services(self):
+        events = [
+            _evt("traefik", "2026-08-24T12:00:00+00:00", "security.ban_started"),
+            _evt("plex", "2026-08-24T12:05:00+00:00", "application.update_detected"),
         ]
         pairs = service_correlation_counts(events)
         self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])

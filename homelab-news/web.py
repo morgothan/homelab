@@ -665,6 +665,10 @@ def render_correlation_graph_html(pairs: list[dict]) -> str:
     )
     return (
         '<div class="arch-section-head">Cross-Service Correlations</div>'
+        '<div class="arch-meta" style="margin-bottom:8px">'
+        'Services with a security ban, image update, or deploy within 10 minutes of each '
+        'other on the same day &mdash; not routine log activity, which would trivially '
+        '"correlate" with anything given how often it happens.</div>'
         '<div class="card full"><div class="card-body">' + rows + '</div></div>'
         '<div class="arch-meta" style="margin-top:8px">'
         '<a href="/services">Browse all services &rarr;</a></div>'
