@@ -78,6 +78,53 @@ class TrendIntelligenceTests(unittest.TestCase):
         self.assertEqual(measurements["7d"]["articles"], 2)
         self.assertEqual(measurements["7d"]["top_sections"][0]["articles"], 1)
 
+    def test_measurements_include_operational_event_stats(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_dir = os.path.join(directory, "archive")
+            os.makedirs(archive_dir)
+            today = trend_intelligence.datetime.now(trend_intelligence.timezone.utc).date().isoformat()
+            with open(os.path.join(archive_dir, f"{today}.json"), "w", encoding="utf-8") as target:
+                json.dump({"newspaper": []}, target)
+            now = trend_intelligence.datetime.now(trend_intelligence.timezone.utc)
+            events_path = os.path.join(directory, "events.json")
+            with open(events_path, "w", encoding="utf-8") as target:
+                json.dump([
+                    {"service": "traefik", "observed_at": now.isoformat(),
+                     "event_type": "security.ban_started", "severity": "warn", "attributes": {}},
+                    {"service": "traefik", "observed_at": now.isoformat(),
+                     "event_type": "security.ban_started", "severity": "error", "attributes": {}},
+                ], target)
+            with patch.object(trend_intelligence, "ARCHIVE_DIR", archive_dir), \
+                 patch.object(trend_intelligence, "EVENT_LEDGER_FILE", events_path):
+                measurements = trend_intelligence.build_measurements([today])
+
+        self.assertEqual(measurements["7d"]["operational_events"], 2)
+        self.assertEqual(measurements["7d"]["top_services"][0]["service"], "traefik")
+        self.assertEqual(measurements["7d"]["top_services"][0]["events"], 2)
+        self.assertEqual(measurements["7d"]["events_by_severity"]["error"], 1)
+        self.assertEqual(measurements["7d"]["events_by_severity"]["warn"], 1)
+
+    def test_measurements_exclude_events_outside_the_window(self):
+        with tempfile.TemporaryDirectory() as directory:
+            archive_dir = os.path.join(directory, "archive")
+            os.makedirs(archive_dir)
+            today = trend_intelligence.datetime.now(trend_intelligence.timezone.utc).date().isoformat()
+            with open(os.path.join(archive_dir, f"{today}.json"), "w", encoding="utf-8") as target:
+                json.dump({"newspaper": []}, target)
+            stale = trend_intelligence.datetime.now(trend_intelligence.timezone.utc) - trend_intelligence.timedelta(days=10)
+            events_path = os.path.join(directory, "events.json")
+            with open(events_path, "w", encoding="utf-8") as target:
+                json.dump([
+                    {"service": "traefik", "observed_at": stale.isoformat(),
+                     "event_type": "security.ban_started", "severity": "warn", "attributes": {}},
+                ], target)
+            with patch.object(trend_intelligence, "ARCHIVE_DIR", archive_dir), \
+                 patch.object(trend_intelligence, "EVENT_LEDGER_FILE", events_path):
+                measurements = trend_intelligence.build_measurements([today])
+
+        self.assertEqual(measurements["7d"]["operational_events"], 0)
+        self.assertEqual(measurements["30d"]["operational_events"], 1)
+
     def test_failed_refresh_preserves_previous_snapshot(self):
         with tempfile.TemporaryDirectory() as directory:
             target = os.path.join(directory, "trend_intelligence.json")

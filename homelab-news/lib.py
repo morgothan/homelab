@@ -1009,7 +1009,18 @@ NOISE = re.compile(
     # cloudflared emits two ERR lines when an incoming client abandons a request.
     # This is client lifecycle noise, not a tunnel or origin connectivity failure.
     r'|Incoming request ended abruptly: context canceled'
-    r'|eps_last',
+    r'|eps_last'
+    # UniFi/UDM internal chatter that self-describes as non-failure or is a routine
+    # retry/telemetry cycle, but matches CONCERNING on a keyword like "error"/"fail"/
+    # "timeout" used as a field name or in a phrase that negates it.
+    r"|stime is unknown \(not an error\)"
+    r'|garp\.get_ipv4_by_mac\(\).*Resource busy'
+    r'|Register transaction got error: No Error'
+    r'|failed to contact mcad'
+    r'|service_json event fail, retry'
+    r'|probe_runner_dispatch\(\):\s*\[\w+\]\s*start'
+    r'|smartctl failed device=\S+ err="exit status 2"'
+    r'|"event_type":"soft fail"',
     re.I,
 )
 

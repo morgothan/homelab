@@ -583,11 +583,22 @@ def render_trend_intelligence(snapshot: dict) -> str:
             section = _h(str(top_sections[0].get("section") or ""))
             count = int(top_sections[0].get("articles") or 0)
             top_section = f'<div class="arch-meta">Most reported: {section} ({count})</div>'
+
+        top_services = measurement.get("top_services") or []
+        operational = ""
+        if top_services and isinstance(top_services[0], dict):
+            service = _h(str(top_services[0].get("service") or ""))
+            events = int(top_services[0].get("events") or 0)
+            operational = (
+                f'<div class="arch-meta">{int(measurement.get("operational_events") or 0)} operational events '
+                f'&middot; most active: {service} ({events})</div>'
+            )
+
         measurement_parts.append(
             '<div class="card"><div class="card-head">'
             f'<span>{_h(window)} measured</span></div>'
             f'<div class="card-body"><strong>{int(measurement.get("editions") or 0)}</strong> editions, '
-            f'<strong>{int(measurement.get("articles") or 0)}</strong> articles{top_section}</div></div>'
+            f'<strong>{int(measurement.get("articles") or 0)}</strong> articles{top_section}{operational}</div></div>'
         )
 
     finding_parts: list[str] = []
