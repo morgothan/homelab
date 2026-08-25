@@ -23,7 +23,7 @@ from config import (
     VLLM_URL,
 )
 from articles import parse_llm_json
-from correlations import events_since, service_correlations
+from correlations import events_since
 from lib import _sanitize_for_llm
 from runtime import run_loop
 from storage import load_json, save_json
@@ -56,9 +56,9 @@ def build_measurements(archive_dates: list[str]) -> dict[str, dict[str, Any]]:
     """Compute deterministic window statistics from archived editions and the event ledger.
 
     Publishing stats (editions, articles, top_sections) describe the newspaper's own
-    output and are context only. operational_events, events_by_severity, top_services,
-    and correlated_service_pairs describe the actual infrastructure and are the
-    intended basis for trend findings.
+    output and are context only. operational_events, events_by_severity, and
+    top_services describe the actual infrastructure and are the intended basis
+    for trend findings.
     """
     today = datetime.now(timezone.utc).date()
     all_events = load_json(EVENT_LEDGER_FILE) or []
@@ -102,7 +102,6 @@ def build_measurements(archive_dates: list[str]) -> dict[str, dict[str, Any]]:
                 {"service": service, "events": count}
                 for service, count in service_counts.most_common(3)
             ],
-            "correlated_service_pairs": service_correlations(window_events, max_pairs=3),
         }
     return output
 
@@ -231,7 +230,7 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
     system = (
         "You are the trends editor for a private homelab operations newspaper. Hindsight has "
         "semantically retrieved relevant past articles. In each window's measurements, "
-        "operational_events, events_by_severity, top_services, and correlated_service_pairs "
+        "operational_events, events_by_severity, and top_services "
         "describe the actual infrastructure and are authoritative — base findings on them. "
         "editions, articles, and top_sections describe the newspaper's own publishing volume; "
         "they are context only, never the subject of a finding or the overview. "

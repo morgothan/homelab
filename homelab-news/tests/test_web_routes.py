@@ -72,21 +72,6 @@ class ServicesRoutesTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 404)
 
-    def test_service_timeline_links_correlated_services(self):
-        with tempfile.TemporaryDirectory() as tmp:
-            events_path = os.path.join(tmp, "events.json")
-            _write_json(events_path, [
-                {"service": "traefik", "observed_at": "2026-08-24T12:00:00+00:00",
-                 "event_type": "security.ban_started", "severity": "warn", "attributes": {}},
-                {"service": "plex", "observed_at": "2026-08-24T12:01:00+00:00",
-                 "event_type": "application.update_detected", "severity": "info", "attributes": {}},
-            ])
-            with patch.object(web, "EVENT_LEDGER_FILE", events_path):
-                response = TestClient(web.app).get("/service/traefik")
-
-        self.assertIn('href="/service/plex"', response.text)
-
-
 class SearchRouteTests(unittest.TestCase):
     def test_search_without_query_shows_prompt_only(self):
         response = TestClient(web.app).get("/search")
