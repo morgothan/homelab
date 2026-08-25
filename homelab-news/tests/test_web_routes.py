@@ -79,7 +79,7 @@ class ServicesRoutesTests(unittest.TestCase):
                 {"service": "traefik", "observed_at": "2026-08-24T12:00:00+00:00",
                  "event_type": "security.ban_started", "severity": "warn", "attributes": {}},
                 {"service": "plex", "observed_at": "2026-08-24T12:01:00+00:00",
-                 "event_type": "logs.error_spike", "severity": "error", "attributes": {}},
+                 "event_type": "application.update_detected", "severity": "info", "attributes": {}},
             ])
             with patch.object(web, "EVENT_LEDGER_FILE", events_path):
                 response = TestClient(web.app).get("/service/traefik")

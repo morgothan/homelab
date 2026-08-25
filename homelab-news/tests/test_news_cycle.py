@@ -34,6 +34,7 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             patch.multiple(lib, **checks),
             patch.object(lib, "UPDATES_FILE", target_file + ".updates"),
             patch.object(lib, "EVENT_LEDGER_FILE", target_file + ".events"),
+            patch.object(lib, "UPDATE_DETECTION_STATE_FILE", target_file + ".update_state"),
         ):
             asyncio.run(lib.run_news_cycle(datetime.now(timezone.utc), target_file))
 
