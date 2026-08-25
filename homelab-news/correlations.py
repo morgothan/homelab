@@ -269,23 +269,26 @@ _INCIDENT_EVENT_TYPES = {
 }
 
 
-def service_correlation_counts(events: list[dict[str, Any]], *, window_minutes: int = 10,
-                               max_pairs: int = _DEFAULT_SERVICE_PAIR_LIMIT) -> list[dict[str, Any]]:
-    """Return distinct-service pairs ranked by the number of UTC days they co-occurred.
+def service_correlations(events: list[dict[str, Any]], *, window_minutes: int = 10,
+                         max_pairs: int = _DEFAULT_SERVICE_PAIR_LIMIT) -> list[dict[str, Any]]:
+    """Return cross-service incident correlations naming what happened, not just a count.
 
     Unlike correlate_events, which links events sharing one service, this looks
     at pairs of *different* services with events within WINDOW_MINUTES of each
-    other — a cross-service view of the same ledger, for surfacing incident
-    patterns that span services. Co-occurrence is counted once per calendar day
-    per pair rather than per event pair: a chatty service that logs many events
-    an hour would otherwise inflate a structurally-coupled pair (e.g. two
-    devices on the same network segment) into the tens of thousands, drowning
-    out infrequent, meaningful correlations. Considers only _INCIDENT_EVENT_TYPES
-    for the same reason: a high-frequency logger would trivially pair with
-    everything else if routine log events counted.
+    other. Each result names the specific event type on each side (e.g. "a
+    deploy on mealie" and "a ban started on traefik") and the most recent date
+    it happened, instead of collapsing to an opaque count — a bare "N days"
+    number can't distinguish a rare, meaningful coincidence from a service
+    that is simply always active. Grouping is by (service, event_type) pairs,
+    not just service pairs, so a chatty event type doesn't blend into a rare
+    one for the same two services. Co-occurrence is counted once per calendar
+    day per group rather than per event pair, so a burst of same-day repeats
+    (e.g. several updates detected in one batch check) doesn't inflate the
+    day count. Considers only _INCIDENT_EVENT_TYPES: routine log chatter would
+    trivially pair with everything else if it counted.
     """
     parsed = _sorted_parsed_events([e for e in events if e.get("event_type") in _INCIDENT_EVENT_TYPES])
-    days_by_pair: dict[tuple[str, str], set[str]] = {}
+    groups: dict[tuple[tuple[str, str], tuple[str, str]], dict[str, Any]] = {}
     for index, (left_time, left) in enumerate(parsed):
         for right_time, right in parsed[index + 1:]:
             delta = right_time - left_time
@@ -295,12 +298,25 @@ def service_correlation_counts(events: list[dict[str, Any]], *, window_minutes: 
             right_service = str(right.get("service"))
             if left_service == right_service:
                 continue
-            service_pair = tuple(sorted((left_service, right_service)))
-            days_by_pair.setdefault(service_pair, set()).add(left_time.date().isoformat())
-    ranked = sorted(days_by_pair.items(), key=lambda item: (-len(item[1]), item[0]))
+            left_key = (left_service, str(left.get("event_type")))
+            right_key = (right_service, str(right.get("event_type")))
+            group_key = tuple(sorted((left_key, right_key)))
+            day = left_time.date().isoformat()
+            group = groups.setdefault(group_key, {"days": set(), "last_seen": "", "minutes_apart": 0.0})
+            group["days"].add(day)
+            if day >= group["last_seen"]:
+                group["last_seen"] = day
+                group["minutes_apart"] = round(delta.total_seconds() / 60, 1)
+    ranked = sorted(groups.items(), key=lambda item: (-len(item[1]["days"]), item[0]))
     return [
-        {"service_a": pair[0], "service_b": pair[1], "count": len(days)}
-        for pair, days in ranked[:max_pairs]
+        {
+            "service_a": a_key[0], "event_a": a_key[1],
+            "service_b": b_key[0], "event_b": b_key[1],
+            "days": len(info["days"]),
+            "last_seen": info["last_seen"],
+            "minutes_apart": info["minutes_apart"],
+        }
+        for (a_key, b_key), info in ranked[:max_pairs]
     ]
 
 
