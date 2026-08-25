@@ -85,6 +85,7 @@ CONTEXT_FILE = os.path.join(DATA_DIR, "context.md")
 IP_INTEL_FILE = os.path.join(DATA_DIR, "ip_intel.json")
 ARCHIVE_DIR = os.path.join(DATA_DIR, "archive")
 ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
+SEARCH_INDEX_FILE = os.path.join(DATA_DIR, "search_index.db")
 
 PVE_SSH_HOST = os.getenv("PVE_SSH_HOST", "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")

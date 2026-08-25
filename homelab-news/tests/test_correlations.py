@@ -15,8 +15,21 @@ from correlations import (
     correlate_events,
     normalize_service,
     record_container_transitions,
+    service_correlation_counts,
     targeted_recall_queries,
 )
+
+
+def _evt(service: str, observed_at: str, event_type: str = "logs.error_observed") -> dict:
+    return {
+        "event_id": f"{service}-{observed_at}-{event_type}",
+        "observed_at": observed_at,
+        "event_type": event_type,
+        "service": service,
+        "source": "docker",
+        "severity": "warn",
+        "attributes": {},
+    }
 
 
 class CorrelationTests(unittest.TestCase):
@@ -143,6 +156,62 @@ class CorrelationTests(unittest.TestCase):
         self.assertEqual(events[0]["event_type"], "container.image_changed")
         self.assertEqual(events[0]["service"], "traefik")
         self.assertNotIn("_local_digests", second["local"]["results"][0])
+
+
+class ServiceCorrelationGraphTests(unittest.TestCase):
+    def test_different_services_within_window_are_counted(self):
+        events = [
+            _evt("traefik", "2026-08-24T12:00:00+00:00"),
+            _evt("plex", "2026-08-24T12:05:00+00:00"),
+        ]
+        pairs = service_correlation_counts(events)
+        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+
+    def test_same_service_pairs_are_excluded(self):
+        events = [
+            _evt("traefik", "2026-08-24T12:00:00+00:00"),
+            _evt("traefik", "2026-08-24T12:01:00+00:00"),
+        ]
+        self.assertEqual(service_correlation_counts(events), [])
+
+    def test_events_outside_window_are_not_counted(self):
+        events = [
+            _evt("traefik", "2026-08-24T12:00:00+00:00"),
+            _evt("plex", "2026-08-24T12:15:00+00:00"),
+        ]
+        self.assertEqual(service_correlation_counts(events, window_minutes=10), [])
+
+    def test_pairs_are_ranked_by_count_descending(self):
+        events = [
+            _evt("traefik", "2026-08-24T12:00:00+00:00"),
+            _evt("plex", "2026-08-24T12:01:00+00:00"),
+            _evt("traefik", "2026-08-25T12:00:00+00:00"),
+            _evt("plex", "2026-08-25T12:01:00+00:00"),
+            _evt("traefik", "2026-08-26T12:00:00+00:00"),
+            _evt("postgres", "2026-08-26T12:01:00+00:00"),
+        ]
+        pairs = service_correlation_counts(events)
+        self.assertEqual(pairs[0], {"service_a": "plex", "service_b": "traefik", "count": 2})
+        self.assertEqual(pairs[1], {"service_a": "postgres", "service_b": "traefik", "count": 1})
+
+    def test_same_day_repeated_cooccurrences_count_once(self):
+        events = [
+            _evt("traefik", f"2026-08-24T12:0{i}:00+00:00")
+            for i in range(5)
+        ] + [
+            _evt("plex", f"2026-08-24T12:0{i}:30+00:00")
+            for i in range(5)
+        ]
+        pairs = service_correlation_counts(events)
+        self.assertEqual(pairs, [{"service_a": "plex", "service_b": "traefik", "count": 1}])
+
+    def test_max_pairs_caps_results(self):
+        events = []
+        for i in range(5):
+            events.append(_evt(f"svc{i}a", f"2026-08-24T12:0{i}:00+00:00"))
+            events.append(_evt(f"svc{i}b", f"2026-08-24T12:0{i}:30+00:00"))
+        pairs = service_correlation_counts(events, max_pairs=2)
+        self.assertEqual(len(pairs), 2)
 
 
 class TargetedRecallTests(unittest.TestCase):

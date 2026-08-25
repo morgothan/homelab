@@ -168,9 +168,8 @@ def append_events(path: str, events: list[dict[str, Any]]) -> list[dict[str, Any
     return retained
 
 
-def correlate_events(events: list[dict[str, Any]], *, window_minutes: int = 10,
-                     max_results: int = 12) -> list[dict[str, Any]]:
-    """Return temporal correlations sharing a service within WINDOW_MINUTES."""
+def _sorted_parsed_events(events: list[dict[str, Any]]) -> list[tuple[datetime, dict[str, Any]]]:
+    """Return EVENTS with a parsed timestamp, ascending, dropping unparseable entries."""
     parsed: list[tuple[datetime, dict[str, Any]]] = []
     for event in events:
         try:
@@ -181,6 +180,13 @@ def correlate_events(events: list[dict[str, Any]], *, window_minutes: int = 10,
         except (KeyError, TypeError, ValueError):
             continue
     parsed.sort(key=lambda pair: pair[0])
+    return parsed
+
+
+def correlate_events(events: list[dict[str, Any]], *, window_minutes: int = 10,
+                     max_results: int = 12) -> list[dict[str, Any]]:
+    """Return temporal correlations sharing a service within WINDOW_MINUTES."""
+    parsed = _sorted_parsed_events(events)
     correlations: list[dict[str, Any]] = []
     window = timedelta(minutes=window_minutes)
     seen: set[tuple[str, str]] = set()
@@ -207,6 +213,42 @@ def correlate_events(events: list[dict[str, Any]], *, window_minutes: int = 10,
                 "causation_confirmed": False,
             })
     return correlations[-max_results:]
+
+
+_DEFAULT_SERVICE_PAIR_LIMIT = 15
+
+
+def service_correlation_counts(events: list[dict[str, Any]], *, window_minutes: int = 10,
+                               max_pairs: int = _DEFAULT_SERVICE_PAIR_LIMIT) -> list[dict[str, Any]]:
+    """Return distinct-service pairs ranked by the number of UTC days they co-occurred.
+
+    Unlike correlate_events, which links events sharing one service, this looks
+    at pairs of *different* services with events within WINDOW_MINUTES of each
+    other — a cross-service view of the same ledger, for surfacing incident
+    patterns that span services. Co-occurrence is counted once per calendar day
+    per pair rather than per event pair: a chatty service that logs many events
+    an hour would otherwise inflate a structurally-coupled pair (e.g. two
+    devices on the same network segment) into the tens of thousands, drowning
+    out infrequent, meaningful correlations.
+    """
+    parsed = _sorted_parsed_events(events)
+    days_by_pair: dict[tuple[str, str], set[str]] = {}
+    for index, (left_time, left) in enumerate(parsed):
+        for right_time, right in parsed[index + 1:]:
+            delta = right_time - left_time
+            if delta > timedelta(minutes=window_minutes):
+                break
+            left_service = str(left.get("service"))
+            right_service = str(right.get("service"))
+            if left_service == right_service:
+                continue
+            service_pair = tuple(sorted((left_service, right_service)))
+            days_by_pair.setdefault(service_pair, set()).add(left_time.date().isoformat())
+    ranked = sorted(days_by_pair.items(), key=lambda item: (-len(item[1]), item[0]))
+    return [
+        {"service_a": pair[0], "service_b": pair[1], "count": len(days)}
+        for pair, days in ranked[:max_pairs]
+    ]
 
 
 def events_since(events: list[dict[str, Any]], cutoff: datetime,
