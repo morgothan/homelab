@@ -1006,6 +1006,9 @@ NOISE = re.compile(
     r'|New session.*of user'
     r'|Removed session'
     r'|Log statistics'
+    # cloudflared emits two ERR lines when an incoming client abandons a request.
+    # This is client lifecycle noise, not a tunnel or origin connectivity failure.
+    r'|Incoming request ended abruptly: context canceled'
     r'|eps_last',
     re.I,
 )

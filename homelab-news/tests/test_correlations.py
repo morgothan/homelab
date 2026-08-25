@@ -20,6 +20,28 @@ from correlations import (
 
 
 class CorrelationTests(unittest.TestCase):
+    def test_cloudflared_client_cancellation_is_noise(self):
+        messages = [
+            'ERR error="Incoming request ended abruptly: context canceled" '
+            'connIndex=1 event=1 ingressRule=56 originService=https://traefik',
+            'ERR failed to serve incoming request error="Failed to proxy HTTP: '
+            'Incoming request ended abruptly: context canceled"',
+        ]
+
+        issues, _ = lib._collect_issues("cf-tunnel-blue", messages)
+
+        self.assertEqual(issues, [])
+
+    def test_cloudflared_connection_loss_remains_alertable(self):
+        message = (
+            'WRN Serve tunnel error error="connection with edge closed" '
+            'connIndex=1 event=0'
+        )
+
+        issues, _ = lib._collect_issues("cf-tunnel-blue", [message])
+
+        self.assertEqual(len(issues), 1)
+
     def test_log_collection_preserves_observation_window(self):
         issues, counts = lib._collect_issues("traefik", [
             ("2026-08-24T12:00:00+00:00", "ERROR backend connection failed"),
