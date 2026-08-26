@@ -925,7 +925,14 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
                 event = events_by_title.get(subject, {})
                 lookup_title = str(event.get("lookup_title") or subject).strip()
                 match = re.fullmatch(r"(.+?)\s*\((\d{4})\)", lookup_title)
-                search_title = match.group(1).strip() if match else lookup_title
+                episode_match = re.fullmatch(
+                    r"(.+?)\s+S(\d+)E(\d+)\s+[—-]\s+(.+)", subject,
+                    flags=re.IGNORECASE,
+                )
+                search_title = (
+                    episode_match.group(4).strip() if episode_match
+                    else match.group(1).strip() if match else lookup_title
+                )
                 expected_year = int(match.group(2)) if match else None
                 response = await client.get(
                     f"{JELLYFIN_URL}/Items",
@@ -934,15 +941,72 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
                         "SearchTerm": search_title,
                         "Recursive": "true",
                         "IncludeItemTypes": "Movie,Series,Episode",
-                        "Fields": "ProductionYear",
+                        "Fields": (
+                            "ProductionYear,SeriesName,ParentIndexNumber,IndexNumber"
+                        ),
                         "Limit": "25",
                     },
                 )
                 response.raise_for_status()
-                candidates = [
-                    item for item in response.json().get("Items", [])
-                    if str(item.get("Name") or "").strip().casefold() == search_title.casefold()
-                ]
+                if episode_match:
+                    expected_series = episode_match.group(1).strip().casefold()
+                    expected_season = int(episode_match.group(2))
+                    expected_episode = int(episode_match.group(3))
+                    candidates = [
+                        item for item in response.json().get("Items", [])
+                        if item.get("Type") == "Episode"
+                        and str(item.get("SeriesName") or "").strip().casefold()
+                        == expected_series
+                        and item.get("ParentIndexNumber") == expected_season
+                        and item.get("IndexNumber") == expected_episode
+                    ]
+                    # Some libraries contain episodes with broken Name metadata
+                    # (for example, several NOVA specials are named only "NOVA").
+                    # When a title search cannot find them, locate the unique
+                    # series and retrieve the episode by its season coordinates.
+                    if not candidates:
+                        series_response = await client.get(
+                            f"{JELLYFIN_URL}/Items",
+                            headers=headers,
+                            params={
+                                "SearchTerm": episode_match.group(1).strip(),
+                                "Recursive": "true",
+                                "IncludeItemTypes": "Series",
+                                "Fields": "ProductionYear",
+                                "Limit": "25",
+                            },
+                        )
+                        series_response.raise_for_status()
+                        series_candidates = [
+                            item for item in series_response.json().get("Items", [])
+                            if item.get("Type") == "Series"
+                            and str(item.get("Name") or "").strip().casefold()
+                            == expected_series
+                            and item.get("Id")
+                        ]
+                        if len(series_candidates) == 1:
+                            episode_response = await client.get(
+                                f"{JELLYFIN_URL}/Shows/{series_candidates[0]['Id']}/Episodes",
+                                headers=headers,
+                                params={
+                                    "Fields": "SeriesName,ParentIndexNumber,IndexNumber",
+                                    "Season": expected_season,
+                                    "Limit": "1000",
+                                },
+                            )
+                            episode_response.raise_for_status()
+                            candidates = [
+                                item for item in episode_response.json().get("Items", [])
+                                if item.get("Type") == "Episode"
+                                and item.get("ParentIndexNumber") == expected_season
+                                and item.get("IndexNumber") == expected_episode
+                            ]
+                else:
+                    candidates = [
+                        item for item in response.json().get("Items", [])
+                        if str(item.get("Name") or "").strip().casefold()
+                        == search_title.casefold()
+                    ]
                 if expected_year is not None:
                     year_matches = [item for item in candidates
                                     if item.get("ProductionYear") == expected_year]
@@ -1020,7 +1084,10 @@ NOISE = re.compile(
     r'|service_json event fail, retry'
     r'|probe_runner_dispatch\(\):\s*\[\w+\]\s*start'
     r'|smartctl failed device=\S+ err="exit status 2"'
-    r'|"event_type":"soft fail"',
+    r'|"event_type":"soft fail"'
+    # Jellyfin logs the full ffmpeg command at INFO level.  The literal
+    # "-loglevel error" is an ffmpeg argument, not the severity of this line.
+    r'|\[INF\].*\b(?:ffmpeg|ffprobe)\b.*-loglevel error\b',
     re.I,
 )
 

@@ -1012,7 +1012,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.23.1 #
+    image: ghcr.io/mealie-recipes/mealie:v3.24.0 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
@@ -1105,7 +1105,7 @@ services:
       - HERMES_SSH_HOST=${HERMES_SSH_HOST}
       - JELLYSTAT_URL=http://jellystat:3000
       - JELLYSTAT_KEY=${JELLYSTAT_KEY}
-      - JELLYFIN_URL=http://plex.iot.${LOCAL}:8096
+      - JELLYFIN_URL=http://jellyfin.${LOCAL}:8096
       - JELLYFIN_KEY=${JELLYFIN_KEY}
       - JELLYFIN_WEB_URL=https://jellyfin.${DOMAIN}
       - SEERR_SETTINGS_FILE=/seerr/settings.json
