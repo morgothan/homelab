@@ -17,6 +17,59 @@ import web
 
 
 class MediaEventTests(unittest.TestCase):
+    def test_jellyfin_episode_link_uses_full_episode_identity(self):
+        class Response:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def raise_for_status(self):
+                pass
+
+            def json(self):
+                return self.payload
+
+        class Client:
+            search_params = None
+
+            def __init__(self, *args, **kwargs):
+                pass
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *args):
+                pass
+
+            async def get(self, url, **kwargs):
+                if url.endswith("/System/Info"):
+                    return Response({"Id": "server-1"})
+                Client.search_params = kwargs["params"]
+                return Response({"Items": [
+                    {"Id": "special", "Type": "Episode", "Name": "NOVA",
+                     "SeriesName": "NOVA", "ParentIndexNumber": 0,
+                     "IndexNumber": 15},
+                    {"Id": "episode-1", "Type": "Episode",
+                     "Name": "Athens: Birth of Democracy", "SeriesName": "NOVA",
+                     "ParentIndexNumber": 53, "IndexNumber": 8},
+                ]})
+
+        event = {
+            "event": "Episode Download Imported",
+            "subject": "NOVA S53E08 — Athens: Birth of Democracy",
+            "lookup_title": "NOVA",
+            "media": {"mediaType": "episode"},
+        }
+        with tempfile.TemporaryDirectory() as tmp, \
+             patch.object(lib, "MEDIA_LINKS_FILE", os.path.join(tmp, "links.json")), \
+             patch.object(lib, "JELLYFIN_URL", "http://jellyfin"), \
+             patch.object(lib, "JELLYFIN_KEY", "key"), \
+             patch.object(lib, "JELLYFIN_WEB_URL", "https://watch.example"), \
+             patch.object(lib.httpx, "AsyncClient", Client):
+            links = asyncio.run(lib.resolve_jellyfin_links([event]))
+
+        self.assertEqual(Client.search_params["SearchTerm"], "Athens: Birth of Democracy")
+        self.assertIn("id=episode-1", links[event["subject"]])
+
     def test_jellyfin_recent_items_include_movies_and_episodes(self):
         now = datetime.now(timezone.utc)
 

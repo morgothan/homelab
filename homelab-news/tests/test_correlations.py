@@ -287,6 +287,24 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
         issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(len(issues), 1)
 
+
+class JellyfinLogNoiseTests(unittest.TestCase):
+    def test_info_ffmpeg_command_with_error_loglevel_is_noise(self):
+        message = (
+            '[13:56:06] [INF] Trickplay generation: '
+            '/usr/lib/jellyfin-ffmpeg/ffmpeg -loglevel error -i file:"episode.mkv"'
+        )
+        issues, _ = lib._collect_issues("jellyfin.lan", [message])
+        self.assertEqual(issues, [])
+
+    def test_real_jellyfin_sqlite_error_remains_alertable(self):
+        message = (
+            "Microsoft.Data.Sqlite.SqliteException: SQLite Error 5: "
+            "'database is locked'"
+        )
+        issues, _ = lib._collect_issues("jellyfin.lan", [message])
+        self.assertEqual(len(issues), 1)
+
     def test_wifi_soft_fail_association_telemetry_is_noise(self):
         message = (
             'stahtd[6247]: [STA-TRACKER].stahtd_dump_event(): {"op":"event",'

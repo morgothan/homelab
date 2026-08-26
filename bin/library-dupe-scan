@@ -22,7 +22,7 @@ report file consumed by the Homelab News entertainment page.
 Required env vars (OpenBao kv/docker/library-dupe-scan):
   SONARR_URL SONARR_API_KEY JELLYFIN_URL JELLYFIN_API_KEY
 Optional:
-  JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: plex.iot.<LOCAL>)
+  JELLYFIN_SSH_HOST   host to run ffmpeg on for trickplay decode (default: jellyfin.<LOCAL>)
 
 Usage:
   library-dupe-scan             # full scan and write the text + JSON reports
@@ -53,7 +53,7 @@ SONARR_URL = cfg.get("SONARR_URL", "").rstrip("/")
 SONARR_KEY = cfg.get("SONARR_API_KEY", "")
 JELLYFIN_URL = cfg.get("JELLYFIN_URL", "").rstrip("/")
 JELLYFIN_KEY = cfg.get("JELLYFIN_API_KEY", "")
-JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", f"plex.iot.{cfg.get('LOCAL', '')}")
+JELLYFIN_SSH_HOST = cfg.get("JELLYFIN_SSH_HOST", f"jellyfin.{cfg.get('LOCAL', '')}")
 
 
 def log(msg):
