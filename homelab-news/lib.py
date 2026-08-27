@@ -21,6 +21,8 @@ import docker
 import httpx
 import tiktoken
 
+from homelab_news.collectors.loki import LokiCollector
+from homelab_news.capabilities import configured_capabilities
 from operational_coverage import build_operational_alerts_article, select_news_issues
 
 log = logging.getLogger(__name__)
@@ -1317,53 +1319,12 @@ async def _fetch_loki_complete(
     max_depth: int = 64,
     max_requests: int = 4096,
 ) -> tuple[list[tuple[dict, str, str]], dict]:
-    """Fetch a Loki interval completely by bisecting every saturated response."""
-    entries: list[tuple[dict, str, str]] = []
-    metadata = {"requests": 0, "split_windows": 0, "truncated_slices": [], "errors": []}
-
-    async def fetch_slice(slice_start: int, slice_end: int, depth: int) -> None:
-        if metadata["requests"] >= max_requests:
-            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
-            return
-        metadata["requests"] += 1
-        try:
-            response = await client.get(
-                f"{LOKI_URL}/loki/api/v1/query_range",
-                params={
-                    "query": query,
-                    "start": str(slice_start),
-                    "end": str(slice_end),
-                    "limit": str(page_size),
-                    "direction": "forward",
-                },
-            )
-            response.raise_for_status()
-        except Exception as error:
-            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
-            metadata["errors"].append(str(error)[:300])
-            return
-        result = response.json().get("data", {}).get("result", [])
-        count = sum(len(stream.get("values", [])) for stream in result)
-        if count < page_size:
-            for stream in result:
-                labels = stream.get("stream", {})
-                entries.extend((labels, ts, line) for ts, line in stream.get("values", []))
-            return
-        if slice_start >= slice_end or depth >= max_depth:
-            for stream in result:
-                labels = stream.get("stream", {})
-                entries.extend((labels, ts, line) for ts, line in stream.get("values", []))
-            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
-            return
-        metadata["split_windows"] += 1
-        midpoint = (slice_start + slice_end) // 2
-        await fetch_slice(slice_start, midpoint, depth + 1)
-        await fetch_slice(midpoint + 1, slice_end, depth + 1)
-
-    await fetch_slice(start_ns, end_ns, 0)
-    metadata["raw_entries"] = len(entries)
-    metadata["collection_complete"] = not metadata["truncated_slices"]
-    return entries, metadata
+    """Compatibility wrapper around the packaged Loki collector."""
+    collector = LokiCollector(
+        LOKI_URL, query, page_size=page_size, max_depth=max_depth, max_requests=max_requests
+    )
+    result = await collector.collect_ns(client, start_ns, end_ns)
+    return result.events, result.metadata
 
 
 async def check_loki(
@@ -2970,26 +2931,46 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     since_ts = int(since.timestamp())
     log.info("run_news_cycle: %s → %s", since.strftime("%Y-%m-%d %H:%M UTC"), target_file)
 
+    features = APP_SETTINGS.features
+
+    async def disabled(value):
+        return value
+
+    disabled_loki = LokiCollection([], {
+        "collection_complete": True,
+        "disabled": True,
+        "raw_entries": 0,
+        "window_start": since.isoformat(),
+        "window_end": datetime.now(timezone.utc).isoformat(),
+    })
+
     (docker_issues, loki_issues, (bans, probes),
      prometheus, kopia, beszel, jellystat) = await asyncio.gather(
-        check_docker_logs(since_ts=since_ts),
-        check_loki(start=since),
-        check_fail2ban_bans(),
-        check_prometheus(),
-        check_kopia(),
-        check_beszel(),
-        check_jellystat(),
+        check_docker_logs(since_ts=since_ts) if features.docker else disabled([]),
+        check_loki(start=since) if features.loki else disabled(disabled_loki),
+        check_fail2ban_bans() if features.security else disabled(([], [])),
+        check_prometheus() if features.prometheus else disabled({}),
+        check_kopia() if features.backups else disabled({}),
+        check_beszel() if features.host_monitoring else disabled({}),
+        check_jellystat() if features.media else disabled({}),
     )
     loki_collection = getattr(loki_issues, "metadata", {
         "collection_complete": True,
         "raw_entries": sum(int(issue.get("count") or 1) for issue in loki_issues),
     })
+    capabilities = configured_capabilities(features)
+    capabilities["loki"]["healthy"] = bool(loki_collection.get("collection_complete"))
+    capabilities["loki"]["detail"] = (
+        "disabled" if not features.loki else
+        f"{loki_collection.get('raw_entries', 0)} entries; complete={loki_collection.get('collection_complete')}"
+    )
 
     asn_suggestions = _suggest_asn_blocks(bans)
     # Library additions are a seven-day feature, independent of the shorter
     # daily/rolling operational-log window used by the rest of the edition.
-    media_events = await fetch_recent_media(
-        datetime.now(timezone.utc) - timedelta(days=7)
+    media_events = (
+        await fetch_recent_media(datetime.now(timezone.utc) - timedelta(days=7))
+        if features.media else []
     )
     if asn_suggestions:
         log.info("ASN block candidates: %s", ", ".join(s["asn"] for s in asn_suggestions))
@@ -3035,6 +3016,8 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
         "correlations":    correlations,
+        "capabilities":    capabilities,
+        "configuration":   APP_SETTINGS.public_dict(),
     })
 
     unhealthy, _, _ = await get_container_status_async()
@@ -3084,6 +3067,8 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
         "correlations":    correlations,
+        "capabilities":    capabilities,
+        "configuration":   APP_SETTINGS.public_dict(),
     }
     if generation_error:
         result["generation_error"] = generation_error

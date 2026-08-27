@@ -1,0 +1,14 @@
+# Homelab News feature policy. Connection details and secrets continue to use
+# environment variables; every setting below can also be overridden with an
+# environment variable such as NEWS_FEATURE_MEDIA=false.
+
+[features]
+loki = true
+docker = true
+security = true
+prometheus = true
+backups = true
+host_monitoring = true
+media = true
+updates = true
+trend_intelligence = true

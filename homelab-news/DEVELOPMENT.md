@@ -7,6 +7,14 @@ purpose.
 
 ## Source boundaries
 
+- `homelab_news/` is the portable application package. New reusable code belongs
+  here, organized behind collector, newsroom, configuration, and capability
+  contracts. Top-level modules are worker entry points or compatibility facades.
+- `homelab_news/configuration.py` owns typed feature policy loaded from TOML and
+  environment overrides. Connection secrets remain environment-only.
+- `homelab_news/collectors/` owns collector contracts and source-specific raw
+  retrieval. Collectors return events plus explicit completeness metadata.
+- `homelab_news/newsroom/` owns deterministic selection and mandatory coverage.
 - `config.py` owns environment parsing and derived paths. Import configuration
   from here rather than reading the environment throughout the application.
 - `storage.py` owns durable JSON reads and atomic writes.
@@ -15,7 +23,7 @@ purpose.
 - `correlations.py` owns the operational event ledger: normalization, retention,
   and same-service correlation.
 - `search.py` owns the archived-article full-text index (SQLite FTS5).
-- `lib.py` remains a compatibility facade for collectors, inference, security,
+- `lib.py` remains a compatibility facade for integrations, inference, security,
   and rendering while those areas are extracted incrementally. New foundational
   code must not be added to it.
 - Worker files contain orchestration, not reusable implementation.

@@ -11,6 +11,7 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 COPY *.py supervisord.conf entrypoint.sh ./
+COPY homelab_news ./homelab_news
 RUN chmod 0755 /app/entrypoint.sh
 ENV HEADROOM_WORKSPACE_DIR=/home/appuser/.headroom
 ENV DOCKER_AUTH_FILE=/home/appuser/.docker/config.json

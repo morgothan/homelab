@@ -17,6 +17,7 @@ from config import (
     JELLYFIN_KEY, JELLYFIN_URL, PVE_SSH_HOST, REMOTE_HOSTS, SPARK_SSH_HOST,
     SSH_KEY, TRUENAS_SSH_HOST, UPDATE_INTERVAL, UPDATES_FILE,
 )
+from config import APP_SETTINGS
 from runtime import run_loop
 from storage import load_json, save_json
 
@@ -746,6 +747,10 @@ async def run() -> None:
 
 
 async def main() -> None:
+    if not APP_SETTINGS.features.updates:
+        log.info("Update reporting disabled by configuration")
+        await asyncio.Event().wait()
+        return
     await run_loop(run, UPDATE_INTERVAL, log)
 
 

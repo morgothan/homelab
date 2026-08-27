@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -110,13 +111,20 @@ class DailyArchiveTests(unittest.TestCase):
             today_path = os.path.join(tmp, "today.json")
             archive_dir = os.path.join(tmp, "archive")
             with open(today_path, "w", encoding="utf-8") as destination:
-                json.dump({"newspaper": [], "loki_issues": [{"source": "pve"}]}, destination)
+                json.dump({
+                    "newspaper": [],
+                    "loki_issues": [{"source": "pve"}],
+                    "capabilities": {"loki": {"enabled": True}},
+                    "configuration": {"features": {"loki": True}},
+                }, destination)
             with patch.object(daily, "TODAY_FILE", today_path), \
                  patch.object(daily, "ARCHIVE_DIR", archive_dir), \
                  patch.object(daily, "ARCHIVE_INDEX", os.path.join(archive_dir, "index.json")):
                 record = daily.snapshot("2026-08-27")
             self.assertEqual(record["newspaper"], [])
             self.assertEqual(record["generation_status"], "empty")
+            self.assertTrue(record["capabilities"]["loki"]["enabled"])
+            self.assertTrue(record["configuration"]["features"]["loki"])
             self.assertTrue(os.path.exists(os.path.join(archive_dir, "2026-08-27.json")))
 
 
@@ -194,6 +202,45 @@ class NewsCyclePersistenceTests(unittest.TestCase):
         for masthead in (today, rolling):
             self.assertIn("Generated 2026-08-14 12:00 UTC", masthead)
             self.assertIn("Update failed; showing last successful edition", masthead)
+
+    def test_disabled_features_do_not_call_optional_collectors(self):
+        names = (
+            "loki", "docker", "security", "prometheus", "backups",
+            "host_monitoring", "media", "updates", "trend_intelligence",
+        )
+        settings = SimpleNamespace(
+            features=SimpleNamespace(**{name: False for name in names}),
+            public_dict=lambda: {"features": {name: False for name in names}},
+        )
+        forbidden = AsyncMock(side_effect=AssertionError("disabled collector called"))
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "today.json")
+            with (
+                patch.object(lib, "APP_SETTINGS", settings),
+                patch.multiple(
+                    lib,
+                    check_docker_logs=forbidden,
+                    check_loki=forbidden,
+                    check_fail2ban_bans=forbidden,
+                    check_prometheus=forbidden,
+                    check_kopia=forbidden,
+                    check_beszel=forbidden,
+                    check_jellystat=forbidden,
+                    fetch_recent_media=forbidden,
+                    get_container_status_async=AsyncMock(return_value=([], [], 0)),
+                    llm_analysis=AsyncMock(return_value=None),
+                    hindsight_targeted_recall=AsyncMock(return_value=""),
+                    generate_newspaper=AsyncMock(return_value=[]),
+                ),
+                patch.object(lib, "UPDATES_FILE", os.path.join(tmp, "updates.json")),
+                patch.object(lib, "EVENT_LEDGER_FILE", os.path.join(tmp, "events.json")),
+                patch.object(lib, "UPDATE_DETECTION_STATE_FILE", os.path.join(tmp, "state.json")),
+            ):
+                asyncio.run(lib.run_news_cycle(datetime.now(timezone.utc), target))
+            with open(target, encoding="utf-8") as source:
+                result = json.load(source)
+        self.assertTrue(result["loki_collection"]["disabled"])
+        self.assertFalse(result["capabilities"]["media"]["enabled"])
 
 
 if __name__ == "__main__":
