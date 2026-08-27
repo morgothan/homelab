@@ -511,7 +511,7 @@ services:
     networks:
       - ${DOCKERNET}
     environment:
-      - ADGUARD_SERVERS=http://dns.${LOCAL},http://<SECONDARY_DNS_IP>,http://dns.kids.${LOCAL}
+      - ADGUARD_SERVERS=http://dns.${LOCAL},http://dns2.${LOCAL},http://dns.kids.${LOCAL}
       - ADGUARD_USERNAMES=admin,admin,admin
       - ADGUARD_PASSWORDS=${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD}
       - INTERVAL=15s
@@ -531,7 +531,7 @@ services:
       - ORIGIN_URL=http://dns.${LOCAL}
       - ORIGIN_USERNAME=admin
       - ORIGIN_PASSWORD=${ADGUARD_SYNC_PASSWORD}
-      - REPLICA1_URL=http://<SECONDARY_DNS_IP>
+      - REPLICA1_URL=http://dns2.${LOCAL}
       - REPLICA1_USERNAME=admin
       - REPLICA1_PASSWORD=${ADGUARD_SYNC_PASSWORD}
       - CRON=*/5 * * * *
@@ -1140,7 +1140,7 @@ services:
       - PVE_SSH_HOST=${PVE_SSH_HOST}
       - TRUENAS_SSH_HOST=${TRUENAS_SSH_HOST}
       - ADGUARD_PRIMARY_URL=${ADGUARD_PRIMARY_URL}
-      - ADGUARD_SECONDARY_URL=http://<SECONDARY_DNS_IP>
+      - ADGUARD_SECONDARY_URL=http://dns2.${LOCAL}
       - ADGUARD_KIDS_URL=${ADGUARD_KIDS_URL}
       - ADGUARD_USERNAME=admin
       - ADGUARD_PASSWORD=${ADGUARD_SYNC_PASSWORD}
