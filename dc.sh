@@ -129,6 +129,13 @@ while IFS= read -r service; do
     done <<< "${secret_data}"
 done <<< "${PATHS}"
 
+# The AdGuard exporter stores one credential per server as a comma-separated
+# secret.  Services that authenticate to a single AdGuard instance need the
+# first credential without duplicating it in OpenBao.
+if [[ -z "${ADGUARD_SYNC_PASSWORD:-}" && -n "${ADGUARD_PASSWORDS:-}" ]]; then
+    export ADGUARD_SYNC_PASSWORD="${ADGUARD_PASSWORDS%%,*}"
+fi
+
 if [[ "${FULL}" == "true" && "${1:-}" == "down" ]]; then
     if [[ -f "${EDGE_COMPOSE}" ]]; then
         docker compose -f "${EDGE_COMPOSE}" --profile blue --profile green down

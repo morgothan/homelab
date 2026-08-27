@@ -135,6 +135,7 @@ PVE_SSH_HOST     = os.getenv("PVE_SSH_HOST",     "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
 ADGUARD_URLS: list[tuple[str, str]] = [
     (os.getenv("ADGUARD_PRIMARY_URL", ""), "Primary DNS"),
+    (os.getenv("ADGUARD_SECONDARY_URL", ""), "Secondary DNS"),
     (os.getenv("ADGUARD_KIDS_URL",    ""), "Kids DNS"),
 ]
 HOMEASSISTANT_URL   = os.getenv("HOMEASSISTANT_URL",   "")
@@ -3846,6 +3847,7 @@ _SOURCE_HOWTO = {
     "Proxmox VE":      "SSH to the Proxmox host: apt update && apt upgrade -y "
                         "(hypervisor — do this in a maintenance window)",
     "Primary DNS":     "AdGuard Home UI → Settings → General → Check for updates (self-updates in place)",
+    "Secondary DNS":   "Proxmox LXC 110: pct exec 110 -- /opt/AdGuardHome/AdGuardHome -s update",
     "Kids DNS":        "AdGuard Home UI → Settings → General → Check for updates (self-updates in place)",
     "Jellyfin":        "Jellyfin Dashboard → General → Check for updates (not managed by this repo)",
     "TrueNAS Apps":    'TrueNAS UI → Apps → Update, or over SSH: midclt call app.upgrade \'["<app>"]\'',

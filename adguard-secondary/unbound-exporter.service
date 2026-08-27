@@ -1,0 +1,18 @@
+[Unit]
+Description=Prometheus exporter for Unbound
+After=network-online.target unbound.service
+Requires=unbound.service
+
+[Service]
+User=unbound
+Group=unbound
+ExecStart=/usr/bin/unbound_exporter -web.listen-address=:9167 -unbound.ca= -unbound.cert= -unbound.key= -unbound.host=unix:///run/unbound.ctl
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

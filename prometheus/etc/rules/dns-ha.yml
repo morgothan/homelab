@@ -1,0 +1,56 @@
+groups:
+  - name: dns-ha
+    rules:
+      - alert: PrimaryDNSDown
+        expr: (adguard_running{server="http://dns.lan"} == 0) or absent(adguard_running{server="http://dns.lan"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Primary AdGuard DNS is down"
+          description: "The primary AdGuard instance at <PRIMARY_DNS_IP> has been unavailable for two minutes."
+
+      - alert: SecondaryDNSDown
+        expr: (adguard_running{server="http://<SECONDARY_DNS_IP>"} == 0) or absent(adguard_running{server="http://<SECONDARY_DNS_IP>"})
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Secondary AdGuard DNS is down"
+          description: "The independent secondary AdGuard instance at <SECONDARY_DNS_IP> has been unavailable for two minutes."
+
+      - alert: SecondaryDNSHostDown
+        expr: up{job="node",instance="<SECONDARY_DNS_IP>:9100"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Secondary DNS LXC is down"
+          description: "Prometheus cannot scrape Node Exporter on the secondary resolver for two minutes."
+
+      - alert: SecondaryUnboundDown
+        expr: unbound_up{instance="<SECONDARY_DNS_IP>:9167"} != 1
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Secondary Unbound is down"
+          description: "The independent recursive backend on <SECONDARY_DNS_IP> is unavailable."
+
+      - alert: AdGuardHomeSyncDown
+        expr: up{job="adguardhome-sync"} == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AdGuard configuration sync service is down"
+          description: "Prometheus has been unable to scrape adguardhome-sync for two minutes."
+
+      - alert: AdGuardHomeSyncFailed
+        expr: max(adguard_home_sync_sync_successful) == 0
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AdGuard configuration synchronization is failing"
+          description: "The primary-to-secondary AdGuard sync has reported failures for at least ten minutes."

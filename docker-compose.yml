@@ -500,7 +500,7 @@ services:
       - traefik.http.services.authelia-svc.loadbalancer.server.port=9091
 
 ########## AdGuard Exporter
-# Exports AdGuard Home metrics (primary + kids) to Prometheus
+# Exports AdGuard Home metrics (primary + independent secondary + kids) to Prometheus
   adguard-exporter:
     container_name: adguard_exporter
     image: ghcr.io/henrywhitaker3/adguard-exporter:v1.2.1
@@ -511,10 +511,36 @@ services:
     networks:
       - ${DOCKERNET}
     environment:
-      - ADGUARD_SERVERS=http://dns.${LOCAL},http://dns.kids.${LOCAL}
-      - ADGUARD_USERNAMES=admin,admin
-      - ADGUARD_PASSWORDS=${ADGUARD_PASSWORDS}
+      - ADGUARD_SERVERS=http://dns.${LOCAL},http://<SECONDARY_DNS_IP>,http://dns.kids.${LOCAL}
+      - ADGUARD_USERNAMES=admin,admin,admin
+      - ADGUARD_PASSWORDS=${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD}
       - INTERVAL=15s
+
+########## AdGuard Home Sync
+# One-way configuration sync from primary DNS to the independent secondary.
+# DHCP is intentionally excluded; UniFi remains the DHCP authority.
+  adguardhome-sync:
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.2
+    container_name: adguardhome-sync
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    command: ["run"]
+    environment:
+      - ORIGIN_URL=http://dns.${LOCAL}
+      - ORIGIN_USERNAME=admin
+      - ORIGIN_PASSWORD=${ADGUARD_SYNC_PASSWORD}
+      - REPLICA1_URL=http://<SECONDARY_DNS_IP>
+      - REPLICA1_USERNAME=admin
+      - REPLICA1_PASSWORD=${ADGUARD_SYNC_PASSWORD}
+      - CRON=*/5 * * * *
+      - RUN_ON_START=true
+      - CONTINUE_ON_ERROR=true
+      - FEATURES_DHCP_SERVER_CONFIG=false
+      - FEATURES_DHCP_STATIC_LEASES=false
+      - API_PORT=8080
+      - API_METRICS_ENABLED=true
 ########## Tdarr Exporter
 # Exports Tdarr media transcoding metrics to Prometheus
   tdarr-exporter:
@@ -1114,7 +1140,10 @@ services:
       - PVE_SSH_HOST=${PVE_SSH_HOST}
       - TRUENAS_SSH_HOST=${TRUENAS_SSH_HOST}
       - ADGUARD_PRIMARY_URL=${ADGUARD_PRIMARY_URL}
+      - ADGUARD_SECONDARY_URL=http://<SECONDARY_DNS_IP>
       - ADGUARD_KIDS_URL=${ADGUARD_KIDS_URL}
+      - ADGUARD_USERNAME=admin
+      - ADGUARD_PASSWORD=${ADGUARD_SYNC_PASSWORD}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter
       - CROWDSEC_KEY=${CROWDSEC_KEY}         # optional: enables CrowdSec CTI on police blotter
       - CROWDSEC_LAPI_URL=http://crowdsec:8080
