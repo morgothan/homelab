@@ -21,6 +21,8 @@ import docker
 import httpx
 import tiktoken
 
+from operational_coverage import build_operational_alerts_article, select_news_issues
+
 log = logging.getLogger(__name__)
 
 _CL100K_ENCODING = tiktoken.get_encoding("cl100k_base")
@@ -2482,6 +2484,9 @@ async def generate_newspaper(
     # failures" or "credential attacks".
     clean_docker = [i for i in docker_issues if not _SECURITY_NOISE.search(i.get("message", ""))]
     clean_loki   = [i for i in loki_issues   if not _SECURITY_NOISE.search(i.get("message", ""))]
+    selected_docker = select_news_issues(clean_docker)
+    selected_loki = select_news_issues(clean_loki)
+    operational_alert = build_operational_alerts_article(clean_docker + clean_loki)
 
     lines: list[str] = []
     if unhealthy_names:
@@ -2504,17 +2509,17 @@ async def generate_newspaper(
                 line += f" — CHANGELOG: {_sanitize_for_llm(cl, max_len=200)}"
             lines.append(line)
 
-    if clean_docker:
-        lines.append("\nTOP DOCKER LOG ISSUES:")
-        for i in sorted(clean_docker, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
+    if selected_docker:
+        lines.append("\nSELECTED DOCKER LOG ISSUES:")
+        for i in selected_docker:
             msg = _sanitize_for_llm(i['message'], max_len=120)
-            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {msg}")
+            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}; {i['selection_reason']}] {msg}")
 
-    if clean_loki:
-        lines.append("\nTOP NETWORK/SYSLOG ISSUES:")
-        for i in sorted(clean_loki, key=lambda x: (x["level"] != "error", -x["count"]))[:5]:
+    if selected_loki:
+        lines.append("\nSELECTED NETWORK/SYSLOG ISSUES:")
+        for i in selected_loki:
             msg = _sanitize_for_llm(i['message'], max_len=120)
-            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}] {msg}")
+            lines.append(f"  [{i['source']} {i['level'].upper()} x{i['count']}; {i['selection_reason']}] {msg}")
 
     lines.append("\n" + _security_prompt_block(bans or [], probes or [], asn_suggestions))
 
@@ -2608,12 +2613,14 @@ async def generate_newspaper(
             content = resp.json()["choices"][0]["message"]["content"].strip()
             articles = _parse_llm_json(content)
             if articles:
-                valid = _validate_articles(articles)
+                valid = _validate_articles(articles, max_count=15 if operational_alert else 16)
                 if valid:
+                    if operational_alert:
+                        valid.append(operational_alert)
                     return valid
     except Exception as e:
         log.warning("Newspaper generation failed (%s): %s", type(e).__name__, e)
-    return None
+    return [operational_alert] if operational_alert else None
 
 
 def _validate_articles(raw: list, max_count: int = 16) -> list[dict]:

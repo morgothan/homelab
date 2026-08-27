@@ -72,10 +72,9 @@ def snapshot(date_str: str) -> "dict | None":
         log.warning("No today.json available to archive for %s", date_str)
         return None
 
-    newspaper = today.get("newspaper")
+    newspaper = today.get("newspaper") or []
     if not newspaper:
-        log.warning("Today's newspaper is empty for %s — skipping archive", date_str)
-        return None
+        log.warning("Today's newspaper is empty for %s — archiving operational data", date_str)
 
     record = {
         "date": date_str,
@@ -86,6 +85,7 @@ def snapshot(date_str: str) -> "dict | None":
         "loki_analysis":   today.get("loki_analysis"),
         "bans":            today.get("bans") or [],
         "newspaper":       newspaper,
+        "generation_status": today.get("generation_status", "ok" if newspaper else "empty"),
     }
     save_json(day_path, record)
     _rebuild_index()

@@ -11,6 +11,66 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import lib
+import daily
+from operational_coverage import build_operational_alerts_article, select_news_issues
+
+
+class IssueCoverageTests(unittest.TestCase):
+    def test_escalations_survive_noisy_top_five_and_receive_coverage(self):
+        issues = [
+            {"source": f"noise-{number}", "level": "error", "count": 1000 - number,
+             "message": "routine request failed"}
+            for number in range(8)
+        ]
+        backup = {"source": "pve", "level": "error", "count": 1,
+                  "message": "ERROR: Backup of VM 109 failed"}
+        disk = {"source": "host", "level": "error", "count": 1,
+                "message": "I/O error, dev mmcblk0, sector 42"}
+        issues.extend([backup, disk])
+
+        selected = select_news_issues(issues, limit=5)
+        article = build_operational_alerts_article(issues)
+
+        self.assertIn(backup, selected)
+        self.assertIn(disk, selected)
+        self.assertTrue(backup["selected_for_news"])
+        self.assertEqual(backup["article_coverage"], "deterministic operational alerts")
+        self.assertIn("backup failure", article["blurb"])
+        self.assertIn("storage I/O error", article["blurb"])
+
+    def test_high_volume_warning_beats_error_only_ranking(self):
+        warning = {"source": "ap", "level": "warn", "count": 1566,
+                   "message": "ntpd: send failed: Network unreachable"}
+        selected = select_news_issues([
+            {"source": f"service-{number}", "level": "error", "count": 1,
+             "message": "ordinary error"}
+            for number in range(10)
+        ] + [warning], limit=5)
+        self.assertIn(warning, selected)
+        self.assertIn("sustained network outage", warning["selection_reason"])
+
+    def test_known_benign_noise_does_not_consume_selection_slots(self):
+        noise = {"source": "edge", "level": "error", "count": 5000,
+                 "message": "Process stime is unknown (not an error); failed to parse"}
+        useful = {"source": "dns", "level": "error", "count": 2,
+                  "message": "upstream lookup failed"}
+        self.assertEqual(select_news_issues([noise, useful], limit=1), [useful])
+
+
+class DailyArchiveTests(unittest.TestCase):
+    def test_empty_newspaper_still_archives_operational_data(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            today_path = os.path.join(tmp, "today.json")
+            archive_dir = os.path.join(tmp, "archive")
+            with open(today_path, "w", encoding="utf-8") as destination:
+                json.dump({"newspaper": [], "loki_issues": [{"source": "pve"}]}, destination)
+            with patch.object(daily, "TODAY_FILE", today_path), \
+                 patch.object(daily, "ARCHIVE_DIR", archive_dir), \
+                 patch.object(daily, "ARCHIVE_INDEX", os.path.join(archive_dir, "index.json")):
+                record = daily.snapshot("2026-08-27")
+            self.assertEqual(record["newspaper"], [])
+            self.assertEqual(record["generation_status"], "empty")
+            self.assertTrue(os.path.exists(os.path.join(archive_dir, "2026-08-27.json")))
 
 
 class NewsCyclePersistenceTests(unittest.TestCase):
