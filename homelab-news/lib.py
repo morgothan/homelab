@@ -1299,6 +1299,73 @@ async def check_docker_logs(
 
 # ── Loki log fetching ─────────────────────────────────────────────────────────
 
+class LokiCollection(list):
+    """List of grouped issues with auditable raw-collection metadata."""
+
+    def __init__(self, issues: list[dict], metadata: dict):
+        super().__init__(issues)
+        self.metadata = metadata
+
+
+async def _fetch_loki_complete(
+    client: httpx.AsyncClient,
+    query: str,
+    start_ns: int,
+    end_ns: int,
+    *,
+    page_size: int = 5000,
+    max_depth: int = 64,
+    max_requests: int = 4096,
+) -> tuple[list[tuple[dict, str, str]], dict]:
+    """Fetch a Loki interval completely by bisecting every saturated response."""
+    entries: list[tuple[dict, str, str]] = []
+    metadata = {"requests": 0, "split_windows": 0, "truncated_slices": [], "errors": []}
+
+    async def fetch_slice(slice_start: int, slice_end: int, depth: int) -> None:
+        if metadata["requests"] >= max_requests:
+            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
+            return
+        metadata["requests"] += 1
+        try:
+            response = await client.get(
+                f"{LOKI_URL}/loki/api/v1/query_range",
+                params={
+                    "query": query,
+                    "start": str(slice_start),
+                    "end": str(slice_end),
+                    "limit": str(page_size),
+                    "direction": "forward",
+                },
+            )
+            response.raise_for_status()
+        except Exception as error:
+            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
+            metadata["errors"].append(str(error)[:300])
+            return
+        result = response.json().get("data", {}).get("result", [])
+        count = sum(len(stream.get("values", [])) for stream in result)
+        if count < page_size:
+            for stream in result:
+                labels = stream.get("stream", {})
+                entries.extend((labels, ts, line) for ts, line in stream.get("values", []))
+            return
+        if slice_start >= slice_end or depth >= max_depth:
+            for stream in result:
+                labels = stream.get("stream", {})
+                entries.extend((labels, ts, line) for ts, line in stream.get("values", []))
+            metadata["truncated_slices"].append({"start_ns": slice_start, "end_ns": slice_end})
+            return
+        metadata["split_windows"] += 1
+        midpoint = (slice_start + slice_end) // 2
+        await fetch_slice(slice_start, midpoint, depth + 1)
+        await fetch_slice(midpoint + 1, slice_end, depth + 1)
+
+    await fetch_slice(start_ns, end_ns, 0)
+    metadata["raw_entries"] = len(entries)
+    metadata["collection_complete"] = not metadata["truncated_slices"]
+    return entries, metadata
+
+
 async def check_loki(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
@@ -1309,66 +1376,42 @@ async def check_loki(
         start = end - timedelta(hours=LOG_HOURS)
 
     query = '{job=~".+"} |~ `(?i)(error|critical|fatal|fail|refused|denied|timeout|warn)`'
-    PAGE_SIZE = 5000   # Loki server default max_entries_limit_per_query
-    MAX_PAGES = 20     # safety cap: 20 × 5 000 = 100 000 entries max
     start_ns = int(start.timestamp() * 1_000_000_000)
     end_ns   = int(end.timestamp()   * 1_000_000_000)
-
     raw_lines: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            entries, metadata = await _fetch_loki_complete(client, query, start_ns, end_ns)
+    except Exception as e:
+        metadata = {
+            "collection_complete": False,
+            "window_start": start.isoformat(),
+            "window_end": end.isoformat(),
+            "raw_entries": 0,
+            "requests": 0,
+            "split_windows": 0,
+            "truncated_slices": [],
+            "error": str(e)[:300],
+        }
+        issue = {"source": "loki", "level": "error",
+                 "message": f"Could not reach Loki at {LOKI_URL}: {e}", "count": 1}
+        return LokiCollection([issue], metadata)
 
-    for page in range(MAX_PAGES):
-        try:
-            async with httpx.AsyncClient(timeout=30) as client:
-                resp = await client.get(
-                    f"{LOKI_URL}/loki/api/v1/query_range",
-                    params={
-                        "query":     query,
-                        "start":     str(start_ns),
-                        "end":       str(end_ns),
-                        "limit":     str(PAGE_SIZE),
-                        "direction": "forward",
-                    },
-                )
-                resp.raise_for_status()
-                data = resp.json()
-        except Exception as e:
-            if page == 0:
-                return [{"source": "loki", "level": "warn",
-                         "message": f"Could not reach Loki at {LOKI_URL}: {e}", "count": 1}]
-            log.warning("Loki page %d fetch failed: %s", page, e)
-            break
-
-        result = data.get("data", {}).get("result", [])
-        page_count = 0
-        max_ts_ns  = 0
-
-        for stream in result:
-            labels = stream.get("stream", {})
-            source = (
-                labels.get("host") or labels.get("hostname") or
-                labels.get("container_name") or labels.get("app") or
-                labels.get("job") or "unknown"
-            )
-            for ts_str, line in stream.get("values", []):
-                ts_ns = int(ts_str)
-                page_count += 1
-                if ts_ns > max_ts_ns:
-                    max_ts_ns = ts_ns
-                observed_at = datetime.fromtimestamp(ts_ns / 1_000_000_000, tz=timezone.utc).isoformat()
-                raw_lines[source].append((observed_at, line))
-
-        if page_count < PAGE_SIZE or max_ts_ns == 0:
-            break  # last page — window exhausted
-
-        if page == MAX_PAGES - 1:
-            log.warning("Loki pagination hit MAX_PAGES=%d; some entries may be missing", MAX_PAGES)
-            break
-
-        start_ns = max_ts_ns + 1
-        if start_ns >= end_ns:
-            break
-        log.info("Loki page %d returned %d entries; fetching next page from ts %d",
-                 page, page_count, start_ns)
+    metadata["window_start"] = start.isoformat()
+    metadata["window_end"] = end.isoformat()
+    timestamps = [int(timestamp) for _, timestamp, _ in entries]
+    metadata["last_collected_at"] = (
+        datetime.fromtimestamp(max(timestamps) / 1_000_000_000, tz=timezone.utc).isoformat()
+        if timestamps else None
+    )
+    for labels, ts_str, line in entries:
+        source = (
+            labels.get("host") or labels.get("hostname") or
+            labels.get("container_name") or labels.get("app") or
+            labels.get("job") or "unknown"
+        )
+        observed_at = datetime.fromtimestamp(int(ts_str) / 1_000_000_000, tz=timezone.utc).isoformat()
+        raw_lines[source].append((observed_at, line))
 
     all_issues: list[dict] = []
     all_seen: dict[str, int] = defaultdict(int)
@@ -1382,7 +1425,24 @@ async def check_loki(
     for i in all_issues:
         i["count"] = all_seen[i.pop("_key")]
     all_issues = _group_by_ip(all_issues)
-    return sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"]))[:500]
+    if not metadata["collection_complete"]:
+        all_issues.append({
+            "source": "loki",
+            "level": "error",
+            "message": "Loki collection incomplete; one or more saturated time slices could not be exhausted",
+            "count": len(metadata["truncated_slices"]),
+        })
+        log.error("Loki collection incomplete: %d saturated slices", len(metadata["truncated_slices"]))
+    metadata["grouped_issues"] = len(all_issues)
+    log.info(
+        "Loki collection complete=%s entries=%d groups=%d requests=%d splits=%d",
+        metadata["collection_complete"], metadata["raw_entries"], len(all_issues),
+        metadata["requests"], metadata["split_windows"],
+    )
+    return LokiCollection(
+        sorted(all_issues, key=lambda x: (x["level"] != "error", -x["count"])),
+        metadata,
+    )
 
 # ── CrowdSec LAPI ────────────────────────────────────────────────────────────
 
@@ -2920,6 +2980,10 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         check_beszel(),
         check_jellystat(),
     )
+    loki_collection = getattr(loki_issues, "metadata", {
+        "collection_complete": True,
+        "raw_entries": sum(int(issue.get("count") or 1) for issue in loki_issues),
+    })
 
     asn_suggestions = _suggest_asn_blocks(bans)
     # Library additions are a seven-day feature, independent of the shorter
@@ -2965,6 +3029,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "docker_issues":   docker_issues,
         "docker_analysis": existing.get("docker_analysis"),
         "loki_issues":     loki_issues,
+        "loki_collection": loki_collection,
         "loki_analysis":   existing.get("loki_analysis"),
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
@@ -3013,6 +3078,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "docker_issues":   docker_issues,
         "docker_analysis": docker_analysis,
         "loki_issues":     loki_issues,
+        "loki_collection": loki_collection,
         "loki_analysis":   loki_analysis,
         "bans":            bans,
         "asn_suggestions": asn_suggestions,
