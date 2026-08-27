@@ -11,6 +11,7 @@ A self-hosted homelab running on a Proxmox LXC. All services are exposed through
 | Proxmox | Hypervisor | Intel Core Ultra 7 155H, 94 GB RAM, Intel Arc iGPU |
 | Docker LXC | Runs this stack | Main Proxmox LXC |
 | Raspberry Pi (primary DNS) | Primary DNS | AdGuard Home + Unbound + Chrony NTP |
+| Proxmox LXC 110 (secondary DNS) | Secondary DNS | Independent AdGuard Home + Unbound; config synchronized from primary |
 | Raspberry Pi (kids DNS) | Kids DNS | AdGuard Home with child-safety filters |
 | Raspberry Pi (monitoring) | Monitoring hub | Beszel — independent of Proxmox |
 | Intel NUC | Media server | Jellyfin as systemd service, Intel Arc iGPU for HW transcoding |

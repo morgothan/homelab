@@ -11,7 +11,7 @@ from typing import Optional
 import httpx
 
 from config import (
-    ADGUARD_URLS, BESZEL_SSH_HOST, HERMES_SSH_HOST,
+    ADGUARD_PASSWORD, ADGUARD_URLS, ADGUARD_USERNAME, BESZEL_SSH_HOST, HERMES_SSH_HOST,
     CONTAINER_STATE_FILE, EVENT_LEDGER_FILE, HOMEASSISTANT_TOKEN, HOMEASSISTANT_URL,
     HOMELAB_INTEL_FILE,
     JELLYFIN_KEY, JELLYFIN_URL, PVE_SSH_HOST, REMOTE_HOSTS, SPARK_SSH_HOST,
@@ -253,8 +253,11 @@ async def check_adguard_update(url: str, label: str) -> dict:
     """
     ts = datetime.now(timezone.utc).isoformat()
     try:
+        auth = None
+        if ADGUARD_USERNAME and ADGUARD_PASSWORD:
+            auth = httpx.BasicAuth(ADGUARD_USERNAME, ADGUARD_PASSWORD)
         async with httpx.AsyncClient(timeout=10) as client:
-            status_r = await client.get(f"{url}/control/status")
+            status_r = await client.get(f"{url}/control/status", auth=auth)
             status_r.raise_for_status()
             current_version = status_r.json().get("version", "?")
     except Exception as e:

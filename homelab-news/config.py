@@ -92,8 +92,11 @@ PVE_SSH_HOST = os.getenv("PVE_SSH_HOST", "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")
 ADGUARD_URLS: list[tuple[str, str]] = [
     (os.getenv("ADGUARD_PRIMARY_URL", ""), "Primary DNS"),
+    (os.getenv("ADGUARD_SECONDARY_URL", ""), "Secondary DNS"),
     (os.getenv("ADGUARD_KIDS_URL", ""), "Kids DNS"),
 ]
+ADGUARD_USERNAME = os.getenv("ADGUARD_USERNAME", "")
+ADGUARD_PASSWORD = os.getenv("ADGUARD_PASSWORD", "")
 HOMEASSISTANT_URL = os.getenv("HOMEASSISTANT_URL", "")
 HOMEASSISTANT_TOKEN = os.getenv("HOMEASSISTANT_TOKEN", "")
 BESZEL_SSH_HOST = os.getenv("BESZEL_SSH_HOST", "")
