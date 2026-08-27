@@ -89,6 +89,7 @@ async def process_day(d: date, dry_run: bool, no_llm: bool) -> dict:
         "newspaper":     newspaper,
         "docker_issues": [],
         "loki_issues":   real_issues,
+        "loki_collection": getattr(loki_issues, "metadata", {}),
         "loki_analysis": loki_analysis_result,
         "bans":          [],
         "backfilled":    True,

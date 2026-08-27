@@ -15,6 +15,53 @@ import daily
 from operational_coverage import build_operational_alerts_article, select_news_issues
 
 
+class _LokiResponse:
+    def __init__(self, values):
+        self._values = values
+
+    def raise_for_status(self):
+        return None
+
+    def json(self):
+        result = []
+        if self._values:
+            result.append({"stream": {"job": "test"}, "values": self._values})
+        return {"data": {"result": result}}
+
+
+class _LokiClient:
+    def __init__(self, values):
+        self.values = values
+
+    async def get(self, _url, params):
+        start = int(params["start"])
+        end = int(params["end"])
+        limit = int(params["limit"])
+        selected = [value for value in self.values if start <= int(value[0]) <= end][:limit]
+        return _LokiResponse(selected)
+
+
+class LokiCollectionTests(unittest.TestCase):
+    def test_saturated_windows_are_split_without_boundary_loss(self):
+        values = [[str(timestamp), f"error {timestamp}"] for timestamp in range(1, 8)]
+        entries, metadata = asyncio.run(lib._fetch_loki_complete(
+            _LokiClient(values), "query", 1, 7, page_size=3,
+        ))
+        self.assertEqual([int(entry[1]) for entry in entries], list(range(1, 8)))
+        self.assertEqual(len({(entry[1], entry[2]) for entry in entries}), 7)
+        self.assertTrue(metadata["collection_complete"])
+        self.assertGreater(metadata["split_windows"], 0)
+
+    def test_irreducible_saturated_timestamp_is_reported_incomplete(self):
+        values = [["5", f"error {number}"] for number in range(4)]
+        entries, metadata = asyncio.run(lib._fetch_loki_complete(
+            _LokiClient(values), "query", 5, 5, page_size=3,
+        ))
+        self.assertEqual(len(entries), 3)
+        self.assertFalse(metadata["collection_complete"])
+        self.assertEqual(metadata["truncated_slices"], [{"start_ns": 5, "end_ns": 5}])
+
+
 class IssueCoverageTests(unittest.TestCase):
     def test_escalations_survive_noisy_top_five_and_receive_coverage(self):
         issues = [
@@ -137,6 +184,7 @@ class NewsCyclePersistenceTests(unittest.TestCase):
                 result = json.load(f)
             self.assertEqual(result["newspaper"], fresh)
             self.assertEqual(result["generation_status"], "ok")
+            self.assertTrue(result["loki_collection"]["collection_complete"])
             self.assertNotIn("generation_error", result)
             self.assertNotEqual(result["built_at"], "2026-08-14T12:00:00+00:00")
 

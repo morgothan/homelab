@@ -6,6 +6,7 @@ from typing import Optional
 
 
 _ESCALATION_RULES: tuple[tuple[str, re.Pattern], ...] = (
+    ("log collection incomplete", re.compile(r"(?i)\bloki collection incomplete\b|\bcould not reach loki\b")),
     ("backup failure", re.compile(r"(?i)\b(?:backup|snapshot)\b.{0,80}\b(?:fail(?:ed|ure)?|error)\b|\b(?:fail(?:ed|ure)?|error)\b.{0,80}\b(?:backup|snapshot)\b")),
     ("storage I/O error", re.compile(r"(?i)\b(?:i/o|input/output) error\b|\bno space left\b|\bread-only file system\b|\b(?:raid|pool|array)\b.{0,50}\bdegraded\b")),
     ("process crash", re.compile(r"(?i)\b(?:segfault|kernel panic|panic:|out of memory|oom.kill|fatal error|exiting due to fatal|database corrupt(?:ion|ed)?)\b")),
