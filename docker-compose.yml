@@ -133,7 +133,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.44.0
+    image: portainer/portainer-ce:2.45.0
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -455,8 +455,6 @@ services:
 
       - OIDC_GRAFANA_CLIENT_ID
       - OIDC_GRAFANA_CLIENT_SECRET
-      - OIDC_TERMIX_CLIENT_ID
-      - OIDC_TERMIX_CLIENT_SECRET
       - OIDC_IMMICH_CLIENT_ID
       - OIDC_IMMICH_CLIENT_SECRET
       - OIDC_MEALIE_CLIENT_ID
@@ -622,7 +620,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.89.0
+    image: oliver006/redis_exporter:v1.90.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -635,11 +633,11 @@ services:
     command:
       - '--redis.addr=redis://redis:6379'
 
-########## Termix
-# Browser-based SSH management — replaces ttyd and guacamole
-  termix:
-    image: ghcr.io/lukegus/termix:latest
-    container_name: termix
+########## WeTTY
+# Simple web-based SSH terminal — no credential storage, opens straight to a shell on traefik.${LOCAL}
+  wetty:
+    image: ghcr.io/butlerx/wetty:latest
+    container_name: wetty
     restart: unless-stopped
     logging: *logging
     networks:
@@ -647,27 +645,22 @@ services:
     volumes:
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
-      - ${DOCKERDIR}/termix:/app/data
-      - /home/nat/docker/termix/backend/users.js:/app/dist/backend/backend/database/routes/users.js:ro
+      - ${DOCKERDIR}/wetty/ssh/id_ed25519:/ssh/id_ed25519:ro
     environment:
-      - PORT=8080
-      - OIDC_CLIENT_ID=${TERMIX_OIDC_CLIENT_ID}
-      - OIDC_CLIENT_SECRET=${TERMIX_OIDC_CLIENT_SECRET}
-      - OIDC_ISSUER_URL=https://authelia.${DOMAIN}
-      - OIDC_AUTHORIZATION_URL=https://authelia.${DOMAIN}/api/oidc/authorization
-      - OIDC_TOKEN_URL=https://authelia.${DOMAIN}/api/oidc/token
-      - OIDC_USERINFO_URL=https://authelia.${DOMAIN}/api/oidc/userinfo
-      - OIDC_SCOPES=openid email profile groups
-      - OIDC_SYSTEM_SECRET=${TERMIX_OIDC_SYSTEM_SECRET}
+      - SSHHOST=traefik.${LOCAL}
+      - SSHUSER=nat
+      - SSHAUTH=publickey
+      - SSHKEY=/ssh/id_ed25519
+      - TITLE=traefik.${LOCAL}
     labels:
       - traefik.enable=true
-      - traefik.http.routers.termix.entrypoints=https
-      - traefik.http.routers.termix.rule=Host(`termix.${DOMAIN}`)
-      - traefik.http.routers.termix.middlewares=chain-authelia-nowaf@file
-      - traefik.http.routers.termix.tls.certresolver=letsencrypt
-      - traefik.http.routers.termix.tls.domains[0].main=${DOMAIN}
-      - traefik.http.routers.termix.tls.domains[0].sans=*.${DOMAIN}
-      - traefik.http.services.termix.loadbalancer.server.port=8080
+      - traefik.http.routers.wetty.entrypoints=https
+      - traefik.http.routers.wetty.rule=Host(`shell.${DOMAIN}`)
+      - traefik.http.routers.wetty.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.wetty.tls.certresolver=letsencrypt
+      - traefik.http.routers.wetty.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.wetty.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.wetty.loadbalancer.server.port=3000
 
 ########## ntfy (disabled)
 #  ntfy:
@@ -962,7 +955,7 @@ services:
 ########## Scraparr
 # Exports *arr app metrics (Radarr, Sonarr, etc.) to Prometheus
   scraparr:
-    image: ghcr.io/thecfu/scraparr:3.1.0
+    image: ghcr.io/thecfu/scraparr:3.2.0
     container_name: scraparr
     restart: unless-stopped
     logging: *logging
