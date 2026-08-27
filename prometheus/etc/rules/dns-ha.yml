@@ -11,7 +11,7 @@ groups:
           description: "The primary AdGuard instance at <PRIMARY_DNS_IP> has been unavailable for two minutes."
 
       - alert: SecondaryDNSDown
-        expr: (adguard_running{server="http://<SECONDARY_DNS_IP>"} == 0) or absent(adguard_running{server="http://<SECONDARY_DNS_IP>"})
+        expr: (adguard_running{server="http://dns2.lan"} == 0) or absent(adguard_running{server="http://dns2.lan"})
         for: 2m
         labels:
           severity: critical
