@@ -4,7 +4,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from config import RECENT_MEDIA_FILE
+from config import APP_SETTINGS, RECENT_MEDIA_FILE
 from lib import fetch_recent_media, resolve_jellyfin_links
 from storage import save_json
 
@@ -34,6 +34,10 @@ def seconds_until_next_hour(now: datetime | None = None) -> float:
 
 
 async def main() -> None:
+    if not APP_SETTINGS.features.media:
+        log.info("Media feature disabled by configuration")
+        await asyncio.Event().wait()
+        return
     try:
         await refresh_recent_media()
     except Exception:

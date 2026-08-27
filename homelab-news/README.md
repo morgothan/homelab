@@ -1,5 +1,22 @@
 # Homelab News
 
+## Feature configuration
+
+The application keeps its historical environment-variable connection settings,
+while optional feature policy is loaded from `/data/config.toml`. Start from
+`config.example.toml`. Every feature also has an environment override, for
+example `NEWS_FEATURE_MEDIA=false` or `NEWS_FEATURE_BACKUPS=false`.
+
+Disabled collectors are not called, their prompt sections receive no synthetic
+"healthy" data, and their state is recorded in each current-edition snapshot
+under `capabilities`. The `configuration` snapshot contains only feature policy
+and the configuration path; it never includes connection details or secrets.
+
+The portable core is organized under `homelab_news/`: collectors return events
+with completeness metadata, newsroom policy deterministically selects and covers
+important events, and top-level worker modules remain stable compatibility entry
+points during the refactor.
+
 A self-hosted operations digest that presents homelab activity as a newspaper. It gathers container state, logs, metrics, backup status, security events, media activity, and software updates, then uses an OpenAI-compatible local LLM endpoint to generate concise articles and trend reports.
 
 The web server reads previously generated JSON files and does not depend on the LLM being available. If generation fails, the last successful edition remains visible and its timestamp is marked as potentially stale.

@@ -10,6 +10,8 @@ import articles
 import config
 import runtime
 import storage
+from homelab_news.capabilities import configured_capabilities
+from homelab_news.configuration import load_settings
 
 
 class ConfigurationTests(unittest.TestCase):
@@ -23,6 +25,30 @@ class ConfigurationTests(unittest.TestCase):
                 ("tcp-host", "tcp://tcp-host:2375"),
             ],
         )
+
+    def test_toml_feature_policy_and_environment_override(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as destination:
+                destination.write("[features]\nmedia = false\nupdates = false\n")
+            settings = load_settings(path, {"NEWS_FEATURE_MEDIA": "true"})
+        self.assertTrue(settings.features.media)
+        self.assertFalse(settings.features.updates)
+        self.assertTrue(settings.features.loki)
+
+    def test_unknown_feature_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as destination:
+                destination.write("[features]\ntelepathy = true\n")
+            with self.assertRaisesRegex(ValueError, "unknown feature"):
+                load_settings(path, {})
+
+    def test_capability_report_contains_no_connection_configuration(self):
+        settings = load_settings("/does/not/exist", {"NEWS_FEATURE_LOKI": "false"})
+        report = configured_capabilities(settings.features)
+        self.assertFalse(report["loki"]["enabled"])
+        self.assertEqual(set(report["loki"]), {"name", "enabled", "healthy", "detail"})
 
 
 class StorageTests(unittest.TestCase):

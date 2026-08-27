@@ -8,6 +8,8 @@ configuration behavior.
 import os
 from dataclasses import dataclass
 
+from homelab_news.configuration import APP_SETTINGS
+
 
 def _integer(name: str, default: int) -> int:
     """Return integer environment variable NAME, using DEFAULT when it is unset."""

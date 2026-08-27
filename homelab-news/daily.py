@@ -87,6 +87,8 @@ def snapshot(date_str: str) -> "dict | None":
         "bans":            today.get("bans") or [],
         "newspaper":       newspaper,
         "generation_status": today.get("generation_status", "ok" if newspaper else "empty"),
+        "capabilities":    today.get("capabilities") or {},
+        "configuration":   today.get("configuration") or {},
     }
     save_json(day_path, record)
     _rebuild_index()

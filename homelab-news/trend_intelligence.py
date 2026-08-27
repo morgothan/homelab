@@ -22,6 +22,7 @@ from config import (
     VLLM_MODEL,
     VLLM_URL,
 )
+from config import APP_SETTINGS
 from articles import parse_llm_json
 from correlations import events_since
 from lib import _sanitize_for_llm
@@ -325,6 +326,10 @@ async def refresh_trend_intelligence() -> bool:
 
 
 async def main() -> None:
+    if not APP_SETTINGS.features.trend_intelligence:
+        log.info("Trend intelligence disabled by configuration")
+        await asyncio.Event().wait()
+        return
     await run_loop(refresh_trend_intelligence, TREND_REFRESH_INTERVAL, log)
 
 
