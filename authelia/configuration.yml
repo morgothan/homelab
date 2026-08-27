@@ -268,28 +268,6 @@ identity_providers:
         userinfo_signed_response_alg: 'none'
           #        claims_policy: 'default'
 
-#TERMIX
-      - client_id: '{{ env "OIDC_TERMIX_CLIENT_ID" }}'
-        client_name: 'Termix'
-        client_secret: '{{ env "OIDC_TERMIX_CLIENT_SECRET" }}'
-        public: false
-        authorization_policy: 'two_factor'
-        require_pkce: false
-        consent_mode: implicit
-        redirect_uris:
-          - 'https://termix.{{ env "DOMAIN" }}/users/oidc/callback'
-        scopes:
-          - 'openid'
-          - 'profile'
-          - 'groups'
-          - 'email'
-        response_types:
-          - 'code'
-        grant_types:
-          - 'authorization_code'
-        token_endpoint_auth_method: 'client_secret_post'
-        userinfo_signed_response_alg: 'none'
-
 
 ######## Proxmox ###############
       - client_id: '{{ env "OIDC_PROXMOX_CLIENT_ID" }}'
