@@ -651,6 +651,7 @@ services:
       - SSHUSER=nat
       - SSHAUTH=publickey
       - SSHKEY=/ssh/id_ed25519
+      - SSHCMD=/home/nat/docker/bin/start-tmux.sh
       - TITLE=traefik.${LOCAL}
     labels:
       - traefik.enable=true
