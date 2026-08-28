@@ -3912,10 +3912,15 @@ _SOURCE_HOWTO = {
     "TrueNAS Scale":   "TrueNAS UI → System → Update (reboots the NAS), or: midclt call update.update",
     "Home Assistant":  "HA UI → Settings → System → Updates → Update",
     "Beszel":          "SSH to the Beszel host: docker compose pull beszel && docker compose up -d beszel",
-    "vLLM":            f"SSH to spark.{LOCAL}: ~/bin/update-vllm.sh <version> "
-                        "(builds a fresh ~/venvs/vllm-<version> venv, symlinks ~/venvs/vllm-active to it, "
-                        "restarts vllm.service). Rollback: ln -sfn ~/venvs/<old-version> ~/venvs/vllm-active "
-                        "&& systemctl --user restart vllm.",
+    "vLLM":            f"Distributed vLLM runs via sparkrun on the 2-node spark cluster "
+                        f"(systemd: sparkrun-deepseek on spark1, recipe @spark-arena/c236b076..., "
+                        f"model deepseek-v4-flash-0731). Update the sparkrun CLI: SSH to spark.{LOCAL} "
+                        f"(and the docker host): sparkrun setup update. Swap the vLLM build / model: "
+                        f"pick a newer recipe (sparkrun search / sparkrun show @spark-arena/<id>), then "
+                        f"sparkrun export systemd <recipe> --cluster lan-2x --port 8000 "
+                        f"--served-model-name <name> --service-name sparkrun-deepseek --install, and "
+                        f"sudo systemctl restart sparkrun-deepseek. Rollback to single-node Qwen3.6: "
+                        f"sudo systemctl disable --now sparkrun-deepseek && systemctl --user enable --now vllm.",
     "DGX Spark":       f"SSH to spark.{LOCAL}: sudo apt update && sudo apt upgrade "
                         "(NVIDIA driver/CUDA packages — review before rebooting)",
     "Traefik Plugins": "Bump the version: field for the plugin in traefik/traefik.yml, "

@@ -453,33 +453,52 @@ async def check_beszel_update() -> dict:
 
 
 async def check_vllm_update() -> dict:
-    """Check installed vLLM version (native uv venv on spark) against latest GitHub release."""
+    """Check the spark inference stack. Since 2026-08-27 vLLM runs as a distributed,
+    sparkrun-orchestrated container cluster (systemd `sparkrun-deepseek` on spark1),
+    not a native venv — so the meaningful "is it current" signal is the `sparkrun`
+    CLI version (real PyPI package) rather than the vLLM build (a pinned community
+    fork image, `ghcr.io/bjk110/vllm-spark`, with no upstream "latest" to diff)."""
     label = "vLLM"
     ts = datetime.now(timezone.utc).isoformat()
     if not SPARK_SSH_HOST:
         return {"label": label, "status": "skipped", "ts": ts, "updates": []}
     ok, out = await _ssh_run(
         SPARK_SSH_HOST,
-        "~/venvs/vllm-active/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
-        timeout=20,
+        "~/.local/bin/sparkrun --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1; "
+        "echo '---'; "
+        "docker exec \"$(docker ps -q -f name=node_0 2>/dev/null | head -1)\" "
+        "/opt/env/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
+        timeout=25,
     )
-    if not ok or not out.strip():
+    sparkrun_version, _, vllm_build = (out.strip().partition("---"))
+    sparkrun_version = sparkrun_version.strip()
+    vllm_build = vllm_build.strip()
+    if not ok or not sparkrun_version:
         return {"label": label, "status": "error", "ts": ts,
-                "error": "could not read vLLM version", "updates": []}
-    current_version = out.strip()
+                "error": "could not read sparkrun version on spark", "updates": []}
 
-    release = await fetch_github_release_notes("https://github.com/vllm-project/vllm")
-    latest_tag = release[0] if release else None
-    new_version = (latest_tag or "").lstrip("v")
+    current_version = sparkrun_version
+    if vllm_build:
+        current_version += f" (vLLM {vllm_build} in container)"
+
+    new_version = ""
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get("https://pypi.org/pypi/sparkrun/json")
+            r.raise_for_status()
+            new_version = (r.json().get("info", {}).get("version") or "").strip()
+    except Exception as e:  # noqa: BLE001
+        log.warning("vLLM check: PyPI sparkrun lookup failed: %s", e)
 
     updates = []
-    if new_version and new_version != current_version.lstrip("v"):
+    if new_version and new_version != sparkrun_version:
         updates.append({
-            "app":             "vllm",
-            "current_version": current_version,
+            "app":             "sparkrun",
+            "current_version": sparkrun_version,
             "new_version":     new_version,
         })
-    log.info("vLLM: current=%s latest=%s updates=%d", current_version, new_version, len(updates))
+    log.info("vLLM/sparkrun: current=%s latest=%s vllm_build=%s updates=%d",
+             sparkrun_version, new_version, vllm_build or "?", len(updates))
     return {"label": label, "status": "done", "ts": ts,
             "current_version": current_version, "updates": updates}
 
