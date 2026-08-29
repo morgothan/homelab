@@ -2442,7 +2442,10 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         + (f"\n\nHOMELAB CONTEXT:\n{ctx}" if ctx else "")
         + (f"\n\nRELEVANT PAST INCIDENTS (from memory — reference if directly relevant):\n{recalled}" if recalled else "")
         + "\n\nFor each entry: one line saying what it means, one line starting with '→' "
-        "saying what to do. If it is harmless noise, write 'Noise: <reason>'. No preamble."
+        "saying what to do. If it is harmless noise, write 'Noise: <reason>'. No preamble.\n"
+        "A high-volume 'network unreachable'/'send failed' from a single daemon (ntpd, chronyd) "
+        "on one host is a stuck or misconfigured daemon on that host — not a network outage; "
+        "say so plainly and keep the fix scoped to that host."
     )
     user = json.dumps({"context": context, "entries": sanitized_issues}, indent=2)
     messages = _compress_messages([
@@ -2590,6 +2593,18 @@ async def generate_newspaper(
         "- ASN BLOCK CANDIDATES = autonomous systems with multiple banned IPs, identified for manual review.\n"
         "  If present, write one Public Safety article: name the ASN(s), IP count, and that manual\n"
         "  review is recommended. Do NOT suggest or imply automatic blocking.\n\n"
+        "OPERATIONAL LOG INTERPRETATION GUIDE — read before writing any infra/syslog article:\n"
+        "- A HIGH-VOLUME line from ONE daemon on ONE host (e.g. ntpd logging 'network unreachable'\n"
+        "  every poll) = a stuck or misconfigured daemon on that host. It is NOT a network outage,\n"
+        "  connectivity loss, or uplink/switch fault. Report the host, the daemon, the message, and\n"
+        "  the rate; say it is not service-impacting unless a correlated alert says otherwise.\n"
+        "- Do NOT infer cascading failures, and do NOT recommend broad investigations ('check the\n"
+        "  uplink and switch port health') that the evidence does not support.\n"
+        "- A steady rate with no start spike and no correlated impact = a persistent condition to\n"
+        "  fix, not an incident. One short factual article ('Upstairs AP's ntpd has logged send\n"
+        "  failures at ~110/hr for weeks; time sync still working; needs a config fix'), not a\n"
+        "  lead story. Escalation labels from the deterministic layer name the condition, not its\n"
+        "  blast radius — 'NTP time-sync failures on one host' is exactly that, nothing wider.\n\n"
         "Rules:\n"
         "- 'UPDATE AVAILABLE' lines are PENDING updates that have NOT been installed — nothing has\n"
         "  been upgraded, rebuilt, or refreshed yet. Write these as availability, not completed action:\n"

@@ -11,7 +11,13 @@ _ESCALATION_RULES: tuple[tuple[str, re.Pattern], ...] = (
     ("process crash", re.compile(r"(?i)\b(?:segfault|kernel panic|panic:|out of memory|oom.kill|fatal error|exiting due to fatal|database corrupt(?:ion|ed)?)\b")),
     ("certificate failure", re.compile(r"(?i)\b(?:certificate|cert|tls)\b.{0,70}\b(?:expir(?:e|ed|y|ing)|invalid|fail(?:ed|ure)?)\b")),
 )
+# Order matters: issue_escalation_reason returns the first match, so daemon-scoped
+# rules must precede the broad "network unreachable" catch-all. A single daemon
+# (ntpd, chronyd) logging "network unreachable" every poll is a stuck/misconfigured
+# daemon on one host, not a network outage — label it honestly so the newspaper
+# doesn't dramatise chronic log noise into a connectivity incident.
 _HIGH_VOLUME_ESCALATION_RULES: tuple[tuple[str, re.Pattern, int], ...] = (
+    ("NTP time-sync failures on one host", re.compile(r"(?i)\b(?:ntpd?|chronyd?|ntpsec|timesyncd)\b.{0,60}\b(?:network (?:is )?unreachable|send failed|no route to host)\b"), 50),
     ("sustained network outage", re.compile(r"(?i)\bnetwork (?:is )?unreachable\b"), 10),
     ("access-control denial spike", re.compile(r"(?i)apparmor=.?denied.?|\bselinux\b.{0,30}\bdenied\b"), 100),
 )
