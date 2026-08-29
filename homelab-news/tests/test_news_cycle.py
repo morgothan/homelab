@@ -95,6 +95,15 @@ class IssueCoverageTests(unittest.TestCase):
             for number in range(10)
         ] + [warning], limit=5)
         self.assertIn(warning, selected)
+        # A single daemon spamming "network unreachable" is a stuck daemon on one
+        # host, not an outage — it still escalates, but with an honestly scoped label.
+        self.assertIn("NTP time-sync failures on one host", warning["selection_reason"])
+
+    def test_broad_network_unreachable_still_escalates_as_outage(self):
+        warning = {"source": "gateway", "level": "warn", "count": 40,
+                   "message": "route add failed: Network is unreachable"}
+        selected = select_news_issues([warning], limit=5)
+        self.assertIn(warning, selected)
         self.assertIn("sustained network outage", warning["selection_reason"])
 
     def test_known_benign_noise_does_not_consume_selection_slots(self):
