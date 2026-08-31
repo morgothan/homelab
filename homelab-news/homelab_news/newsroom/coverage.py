@@ -21,7 +21,15 @@ _HIGH_VOLUME_ESCALATION_RULES: tuple[tuple[str, re.Pattern, int], ...] = (
     ("sustained network outage", re.compile(r"(?i)\bnetwork (?:is )?unreachable\b"), 10),
     ("access-control denial spike", re.compile(r"(?i)apparmor=.?denied.?|\bselinux\b.{0,30}\bdenied\b"), 100),
 )
-_BENIGN_LOG_NOISE = re.compile(r"(?i)\bnot an error\b|STA_ASSOC_TRACKER.*\bsoft failure\b|collector failed.*name=thermal_zone")
+_BENIGN_LOG_NOISE = re.compile(
+    r"(?i)\bnot an error\b"
+    r"|STA_ASSOC_TRACKER.*\bsoft failure\b"
+    r"|collector failed.*name=thermal_zone"
+    # fwupd emits these at warning level while inventorying devices that either
+    # have no applicable release or are already current. They are successful
+    # negative update checks, not operational failures or news.
+    r"|\bNo upgrades detected for this device\b.*\b(?:Device is not updatable|No releases found|current version is\b)"
+)
 
 
 def issue_escalation_reason(issue: dict) -> Optional[str]:
