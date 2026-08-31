@@ -15,6 +15,7 @@ from config import (
     CONTAINER_STATE_FILE, EVENT_LEDGER_FILE, HOMEASSISTANT_TOKEN, HOMEASSISTANT_URL,
     HOMELAB_INTEL_FILE,
     JELLYFIN_KEY, JELLYFIN_URL, PVE_SSH_HOST, REMOTE_HOSTS, SPARK_SSH_HOST,
+    SPARK2_SSH_HOST,
     SSH_KEY, TRUENAS_SSH_HOST, UPDATE_INTERVAL, UPDATES_FILE,
 )
 from config import APP_SETTINGS
@@ -503,14 +504,13 @@ async def check_vllm_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
-async def check_spark_apt() -> dict:
+async def check_spark_apt(host: str, label: str) -> dict:
     """Check DGX Spark for available apt upgrades (NVIDIA drivers, CUDA, system packages)."""
-    label = "DGX Spark"
     ts = datetime.now(timezone.utc).isoformat()
-    if not SPARK_SSH_HOST:
+    if not host:
         return {"label": label, "status": "skipped", "ts": ts, "updates": []}
     ok, out = await _ssh_run(
-        SPARK_SSH_HOST,
+        host,
         "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
         timeout=120,
     )
@@ -525,7 +525,7 @@ async def check_spark_apt() -> dict:
                 "current_version": m.group(3),
                 "new_version": m.group(2),
             })
-    log.info("DGX Spark apt: %d upgradable packages", len(updates))
+    log.info("%s apt: %d upgradable packages", label, len(updates))
     return {"label": label, "status": "done", "ts": ts, "updates": updates}
 
 
@@ -626,7 +626,8 @@ async def run_homelab_checks() -> dict:
         check_truenas_update(),
         check_beszel_update(),
         check_vllm_update(),
-        check_spark_apt(),
+        check_spark_apt(SPARK_SSH_HOST, "DGX Spark"),
+        check_spark_apt(SPARK2_SSH_HOST, "DGX Spark 2"),
         check_traefik_plugins(),
         return_exceptions=True,
     )
@@ -637,7 +638,7 @@ async def run_homelab_checks() -> dict:
         ["proxmox", "proxmox_lxc"]
         + [_key(label) for _, label in ADGUARD_URLS]
         + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel",
-           "vllm", "dgx_spark", "traefik_plugins"]
+           "vllm", "dgx_spark", "dgx_spark_2", "traefik_plugins"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):
@@ -660,6 +661,8 @@ async def run() -> None:
     host_specs = [("local", "local")] + list(REMOTE_HOSTS)
     if SPARK_SSH_HOST:
         host_specs.append(("spark", f"ssh://{SPARK_SSH_HOST}"))
+    if SPARK2_SSH_HOST:
+        host_specs.append(("spark2", f"ssh://{SPARK2_SSH_HOST}"))
     if HERMES_SSH_HOST:
         host_specs.append(("hermes", f"ssh://{HERMES_SSH_HOST}"))
     # nntmux LXC (CT 106) was decommissioned 2026-08-21. Keep the container,

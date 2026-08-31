@@ -181,6 +181,7 @@ environment:
 | `TRUENAS_SSH_HOST` | SSH target used for storage-host update checks |
 | `BESZEL_SSH_HOST` | SSH target used for monitoring-host version checks |
 | `SPARK_SSH_HOST` | SSH target used for compute-host version checks |
+| `SPARK2_SSH_HOST` | SSH target used for the second compute-host version checks |
 | `HERMES_SSH_HOST` | SSH target used for agent-host version checks |
 | `ADGUARD_PRIMARY_URL` | Primary DNS service URL |
 | `ADGUARD_SECONDARY_URL` | Independent secondary DNS service URL |

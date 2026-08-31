@@ -113,6 +113,19 @@ class IssueCoverageTests(unittest.TestCase):
                   "message": "upstream lookup failed"}
         self.assertEqual(select_news_issues([noise, useful], limit=1), [useful])
 
+    def test_fwupd_no_upgrade_warnings_are_not_selected(self):
+        issues = [
+            {"source": host, "level": "error", "count": 1,
+             "message": f'WRN No upgrades detected for this device error="{detail}" current_version=2025'}
+            for host, detail in (
+                ("spark.lan", "Device is not updatable"),
+                ("spark2.lan", "current version is 2025: 2025=same"),
+                ("spark2.lan", "No releases found"),
+            )
+        ]
+        self.assertEqual(select_news_issues(issues), [])
+        self.assertTrue(all(not issue["selected_for_news"] for issue in issues))
+
 
 class DailyArchiveTests(unittest.TestCase):
     def test_empty_newspaper_still_archives_operational_data(self):
