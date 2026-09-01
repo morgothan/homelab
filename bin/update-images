@@ -15,8 +15,8 @@ Usage:
   bin/update-images --no-commit  # skip the automatic git commit + push of tag bumps
 
 After a successful deploy the compose-file tag bumps are committed and pushed
-automatically, unless the diff contains a leak marker (see LEAK_MARKERS) or
---no-commit is given.
+automatically, unless --no-commit is given or the diff contains a private
+hostname/domain (LEAK_MARKERS, derived from OpenBao).
 """
 
 import argparse
@@ -468,10 +468,14 @@ def _run(cmd: list, check: bool = True) -> int:
 
 # ── auto-commit compose tag bumps ─────────────────────────────────────────────
 
-# Substrings that must never appear in a pushed compose diff. Compose files use
-# ${DOMAIN}/${LOCAL} vars, so a literal internal name in a diff means something
-# leaked. Matched case-insensitively against added ("+") lines.
-LEAK_MARKERS = ("lan", "example")
+# Substrings that must never appear in a pushed compose diff — the private LAN /
+# domain names, pulled from OpenBao rather than hardcoded (this file is public).
+# Compose files use ${LOCAL}/${DOMAIN}/${PUBLIC} vars, so a literal match on an
+# added line means something leaked. If OpenBao is unreachable this is empty and
+# _autocommit_compose refuses to push rather than scan blind.
+LEAK_MARKERS = tuple(sorted({
+    _SECRETS[k].lower() for k in ("LOCAL", "DOMAIN", "PUBLIC") if _SECRETS.get(k)
+}))
 
 
 def _git(args: list) -> subprocess.CompletedProcess:
@@ -490,6 +494,11 @@ def _autocommit_compose(applied_bumps: list) -> None:
     rel = [str(p.relative_to(REPO_ROOT)) for p in COMPOSE_FILES if p.exists()]
     if _git(["diff", "--quiet", "--", *rel]).returncode == 0:
         return  # no file changes (e.g. only rolling-tag pulls)
+
+    if not LEAK_MARKERS:
+        print("\n[!] Auto-commit skipped — no leak markers (OpenBao unreachable?); "
+              "commit manually.", file=sys.stderr)
+        return
 
     diff = _git(["diff", "--", *rel]).stdout
     added = [ln for ln in diff.splitlines()
