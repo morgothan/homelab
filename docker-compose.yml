@@ -202,7 +202,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.2.0
+    image: grafana/grafana:13.2.1
     restart: unless-stopped
     logging: *logging
     container_name: grafana
