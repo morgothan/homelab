@@ -20,6 +20,15 @@ scrape_configs:
   - targets:
     - localhost:9090
 
+# vLLM exposes OpenAI-server metrics on the same HTTP listener as its API.
+- job_name: 'vllm'
+  scrape_interval: 15s
+  metrics_path: /metrics
+  static_configs:
+    - targets: ['spark.yourlocalname:8000']
+      labels:
+        service: vllm
+
 - job_name: 'unifipoller'
   scrape_interval: 30s
   static_configs:

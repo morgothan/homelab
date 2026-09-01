@@ -218,6 +218,9 @@ services:
         # - '3000:3000'
     volumes:
       - grafana-storage:/var/lib/grafana
+      - ${DOCKERDIR}/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ${DOCKERDIR}/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ${DOCKERDIR}/grafana/dashboards:/var/lib/grafana/dashboards:ro
       - /etc/localtime:/etc/localtime:ro
       - /etc/timezone:/etc/timezone:ro
     depends_on:
@@ -315,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.7.4
+    image: amir20/dozzle:v10.8.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -1183,6 +1186,9 @@ services:
     environment:
       - OPENAI_API_BASE_URL=http://spark.${LOCAL}:8000/v1
       - ENABLE_OLLAMA_API=False
+      - ENABLE_WEB_SEARCH=True
+      - WEB_SEARCH_ENGINE=searxng
+      - SEARXNG_QUERY_URL=http://hermes.${LOCAL}:8090/search?q=<query>
       - OAUTH_CLIENT_ID=${OIDC_OPENWEBUI_CLIENT_ID}
       - OAUTH_CLIENT_SECRET=${OPENWEBUI_OIDC_CLIENT_SECRET}
       - OPENID_PROVIDER_URL=https://authelia.${DOMAIN}/.well-known/openid-configuration

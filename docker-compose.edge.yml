@@ -49,7 +49,7 @@ services:
   # This stable listener owns the host ports. It is not replaced during a
   # Traefik promotion and health-checks whichever color is running.
   edge-gateway:
-    image: haproxy:3.4.3-alpine # update-images: ignore; opt in with --edge-gateway
+    image: haproxy:3.4.4-alpine # update-images: ignore; opt in with --edge-gateway
     container_name: edge-gateway
     restart: unless-stopped
     logging: *logging
@@ -112,7 +112,7 @@ services:
 
   tunnel-blue:
     <<: *tunnel-common
-    image: cloudflare/cloudflared:2026.8.2
+    image: cloudflare/cloudflared:2026.8.3
     container_name: cf-tunnel-blue
     profiles: [blue]
     depends_on:
@@ -145,7 +145,7 @@ services:
 
   tunnel-green:
     <<: *tunnel-common
-    image: cloudflare/cloudflared:2026.8.2
+    image: cloudflare/cloudflared:2026.8.3
     container_name: cf-tunnel-green
     profiles: [green]
     depends_on:

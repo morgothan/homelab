@@ -43,7 +43,7 @@ _SECRETS = fetch_secrets()
 LOCAL = _SECRETS.get("LOCAL", "")
 
 # Remote hosts with their own ~/docker/dc.sh stack — updated via `--all`
-REMOTE_DC_HOSTS = [f"beszel.{LOCAL}", f"whisper.{LOCAL}", f"spark.{LOCAL}", f"hermes.{LOCAL}"]
+REMOTE_DC_HOSTS = [f"beszel.{LOCAL}", f"whisper.{LOCAL}", f"spark.{LOCAL}", f"spark2.{LOCAL}", f"hermes.{LOCAL}"]
 REMOTE_DC_CMD = "cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa"
 SKETCHY_NAS_HOST = f"sketchy-nas.{LOCAL}"
 SKETCHY_NAS_CMD = "~/docker-update.sh"
