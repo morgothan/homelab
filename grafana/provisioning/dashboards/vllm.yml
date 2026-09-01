@@ -1,0 +1,13 @@
+apiVersion: 1
+
+providers:
+  - name: vLLM
+    orgId: 1
+    folder: AI / vLLM
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /var/lib/grafana/dashboards/vllm
+      foldersFromFilesStructure: false
