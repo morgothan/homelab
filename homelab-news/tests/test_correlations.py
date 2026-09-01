@@ -327,6 +327,30 @@ class JellyfinLogNoiseTests(unittest.TestCase):
         self.assertEqual(len(issues), 1)
 
 
+class GroupByIpTests(unittest.TestCase):
+    def _issue(self, message: str) -> dict:
+        return {"source": "172.18.0.1", "level": "error", "count": 1, "message": message}
+
+    def test_sip_phone_firmware_version_is_not_treated_as_an_ip(self):
+        # Grandstream DECT base: [MAC][firmware-version][pid] prefix. The 1.0.3.25
+        # is the firmware version, not a source IP — it must not be aggregated on.
+        issues = [
+            self._issue(f"USER.ERROR [ec:74:d7:aa:bf:b4][1.0.3.25][{pid}] "
+                        "could not download https://fm.grandstream.com/gs/dp755fw.bin (No error)")
+            for pid in (111, 222, 333, 444)
+        ]
+        grouped = lib._group_by_ip(issues)
+        self.assertEqual(len(grouped), 4)
+        self.assertFalse(any("patterns from 1.0.3.25" in i["message"] for i in grouped))
+
+    def test_real_lan_ip_still_aggregates(self):
+        issues = [self._issue(f"denied connection from 192.168.1.50 attempt {n}") for n in range(4)]
+        grouped = lib._group_by_ip(issues)
+        self.assertEqual(len(grouped), 1)
+        self.assertIn("patterns from 192.168.1.50", grouped[0]["message"])
+        self.assertEqual(grouped[0]["count"], 4)
+
+
 class TargetedRecallTests(unittest.TestCase):
     def test_targeted_recall_deduplicates_and_caches_queries(self):
         lib._TARGETED_RECALL_CACHE.clear()
