@@ -1173,14 +1173,23 @@ def _extract_text(line: str) -> str:
 
 
 _IP_RE = re.compile(r'\b(\d{1,3}(?:\.\d{1,3}){3})\b')
+# SIP desk/DECT phones (Grandstream, Yealink) prefix every syslog line with
+# [MAC][firmware-version][pid]. The version (e.g. 1.0.3.25) is a dotted quad that
+# _IP_RE would otherwise mistake for a source IP and aggregate on, producing
+# bogus "N patterns from 1.0.3.25" groups and "a device at 1.0.3.25" blurbs.
+_SIP_PHONE_PREFIX_RE = re.compile(r'\[[0-9A-Fa-f:]{12,17}\]\[\d+(?:\.\d+){3}\]\[\d+\]')
+
+
+def _valid_ipv4(addr: str) -> bool:
+    return all(part.isdigit() and 0 <= int(part) <= 255 for part in addr.split('.'))
 
 
 def _group_by_ip(issues: list[dict]) -> list[dict]:
     """Collapse multiple issues sharing the same source IP into one aggregated entry."""
     groups: dict[tuple, list[int]] = defaultdict(list)
     for idx, issue in enumerate(issues):
-        m = _IP_RE.search(issue["message"])
-        if m:
+        m = _IP_RE.search(_SIP_PHONE_PREFIX_RE.sub('', issue["message"]))
+        if m and _valid_ipv4(m.group(1)):
             groups[(issue["source"], issue["level"], m.group(1))].append(idx)
 
     to_remove: set[int] = set()
