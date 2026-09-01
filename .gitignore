@@ -198,6 +198,8 @@ homepage/tmp/
 
 # Prometheus (contains LAN hostnames for scrape targets)
 prometheus/etc/prometheus.yml
+# Prometheus alert rules (contain LAN hostnames + resolver IPs); see dns-ha.yml.example
+prometheus/etc/rules/dns-ha.yml
 
 # Promtail (contains LAN Loki endpoint and runtime state)
 promtail/promtail-config.yml

@@ -2,7 +2,7 @@ groups:
   - name: dns-ha
     rules:
       - alert: PrimaryDNSDown
-        expr: (adguard_running{server="http://dns.lan"} == 0) or absent(adguard_running{server="http://dns.lan"})
+        expr: (adguard_running{server="http://dns.LOCAL_DOMAIN"} == 0) or absent(adguard_running{server="http://dns.LOCAL_DOMAIN"})
         for: 2m
         labels:
           severity: critical
@@ -11,7 +11,7 @@ groups:
           description: "The primary AdGuard instance at <PRIMARY_DNS_IP> has been unavailable for two minutes."
 
       - alert: SecondaryDNSDown
-        expr: (adguard_running{server="http://dns2.lan"} == 0) or absent(adguard_running{server="http://dns2.lan"})
+        expr: (adguard_running{server="http://dns2.LOCAL_DOMAIN"} == 0) or absent(adguard_running{server="http://dns2.LOCAL_DOMAIN"})
         for: 2m
         labels:
           severity: critical
