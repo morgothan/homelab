@@ -17,6 +17,9 @@ Usage:
 After a successful deploy the compose-file tag bumps are committed and pushed
 automatically, unless --no-commit is given or the diff contains a private
 hostname/domain (LEAK_MARKERS, derived from OpenBao).
+
+Every run ends with a "WHAT CHANGED" table summarising the image updates,
+rebuilds, redeploys, git commit/push, and remote-host results.
 """
 
 import argparse
@@ -483,22 +486,24 @@ def _git(args: list) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
-def _autocommit_compose(applied_bumps: list) -> None:
+def _autocommit_compose(applied_bumps: list) -> Optional[tuple]:
     """Commit changed compose files and push — unless the diff trips a leak marker.
 
     applied_bumps: [(image_name, old_tag, new_tag), ...] used only for the message.
     A push failure is non-fatal (the commit stays local).
+    Returns (detail, result) for the summary table, or None if there is no git row
+    to report (not a repo, or no compose-file changes).
     """
     if _git(["rev-parse", "--is-inside-work-tree"]).returncode != 0:
-        return
+        return None
     rel = [str(p.relative_to(REPO_ROOT)) for p in COMPOSE_FILES if p.exists()]
     if _git(["diff", "--quiet", "--", *rel]).returncode == 0:
-        return  # no file changes (e.g. only rolling-tag pulls)
+        return None  # no file changes (e.g. only rolling-tag pulls)
 
     if not LEAK_MARKERS:
         print("\n[!] Auto-commit skipped — no leak markers (OpenBao unreachable?); "
               "commit manually.", file=sys.stderr)
-        return
+        return ("OpenBao unreachable", "NOT committed")
 
     diff = _git(["diff", "--", *rel]).stdout
     added = [ln for ln in diff.splitlines()
@@ -508,7 +513,7 @@ def _autocommit_compose(applied_bumps: list) -> None:
     if hits:
         print(f"\n[!] Auto-commit skipped — diff adds {', '.join(hits)}; "
               f"review and commit manually.", file=sys.stderr)
-        return
+        return (f"blocked: diff adds {', '.join(hits)}", "NOT committed")
 
     if applied_bumps:
         summary = ", ".join(f"{name.rsplit('/', 1)[-1]} {old}→{new}"
@@ -523,30 +528,55 @@ def _autocommit_compose(applied_bumps: list) -> None:
     commit = _git(["commit", "-m", msg])
     if commit.returncode != 0:
         print(f"\n[!] git commit failed:\n{commit.stderr.strip()}", file=sys.stderr)
-        return
+        return ("git commit error", "FAILED")
     print(f"\n+ git commit -m {msg!r}")
+    sha = _git(["rev-parse", "--short", "HEAD"]).stdout.strip()
     push = _git(["push"])
     if push.returncode != 0:
         print(f"[!] git push failed (commit is local):\n{push.stderr.strip()}",
               file=sys.stderr)
-    else:
-        print("+ git push")
+        return (f"commit {sha}", "PUSH FAILED (local only)")
+    print("+ git push")
+    return (f"commit {sha}", "pushed")
 
 
 # ── remote hosts (--all) ───────────────────────────────────────────────────────
 
-def _update_remote_hosts() -> None:
-    """SSH into each remote host and run its own pull/up/prune (or update script)."""
-    failed = []
-    for host in REMOTE_DC_HOSTS:
+def _update_remote_hosts() -> tuple:
+    """SSH into each remote host and run its own pull/up/prune (or update script).
+
+    Returns (ok_hosts, failed_hosts) for the summary table.
+    """
+    ok, failed = [], []
+    for host in [*REMOTE_DC_HOSTS, SKETCHY_NAS_HOST]:
+        cmd = SKETCHY_NAS_CMD if host == SKETCHY_NAS_HOST else REMOTE_DC_CMD
         print(f"\n=== {host} ===")
-        if _run(["ssh", f"nat@{host}", REMOTE_DC_CMD], check=False) != 0:
-            failed.append(host)
-    print(f"\n=== {SKETCHY_NAS_HOST} ===")
-    if _run(["ssh", f"nat@{SKETCHY_NAS_HOST}", SKETCHY_NAS_CMD], check=False) != 0:
-        failed.append(SKETCHY_NAS_HOST)
+        (ok if _run(["ssh", f"nat@{host}", cmd], check=False) == 0 else failed).append(host)
     if failed:
         print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
+    return ok, failed
+
+
+# ── end-of-run summary ────────────────────────────────────────────────────────
+
+def _print_change_table(rows: list) -> None:
+    """rows: list of (category, item, change, result). Prints one aligned table
+    so the net effect of the run is visible without scrolling back through the
+    docker/compose/git output."""
+    print()
+    print("═" * 72)
+    print("  WHAT CHANGED")
+    print("─" * 72)
+    if not rows:
+        print("  (nothing — everything already up to date)")
+        print("═" * 72)
+        return
+    w0 = max(len(r[0]) for r in rows)
+    w1 = max(len(r[1]) for r in rows)
+    w2 = max(len(r[2]) for r in rows)
+    for cat, item, change, result in rows:
+        print(f"  {cat.ljust(w0)}  {item.ljust(w1)}  {change.ljust(w2)}  {result}")
+    print("═" * 72)
 
 
 # ── entry point ────────────────────────────────────────────────────────────────
@@ -632,7 +662,11 @@ def main() -> None:
             return
 
     if total == 0:
-        _update_remote_hosts()
+        remote_ok, remote_failed = _update_remote_hosts()
+        _print_change_table(
+            [("remote", h, "pull && up -d && prune", "ok") for h in remote_ok]
+            + [("remote", h, "pull && up -d && prune", "FAILED") for h in remote_failed]
+        )
         return
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
@@ -713,19 +747,49 @@ def main() -> None:
     _run(["docker", "system", "prune", "-f"])
 
     # ── 6. commit + push the compose tag bumps ────────────────────────────────
-    if not args.no_commit:
-        failed_refs = {(name, new_tag) for _, _, name, _, new_tag in pull_failed}
-        applied_bumps = [
-            (name, old_tag, new_tag)
-            for items in semver_by_file.values()
-            for _, name, old_tag, new_tag in items
-            if (name, new_tag) not in failed_refs
-        ]
-        _autocommit_compose(applied_bumps)
+    failed_refs = {(name, new_tag) for _, _, name, _, new_tag in pull_failed}
+    applied_bumps = [
+        (name, old_tag, new_tag)
+        for items in semver_by_file.values()
+        for _, name, old_tag, new_tag in items
+        if (name, new_tag) not in failed_refs
+    ]
+    if args.no_commit:
+        git_row = ("--no-commit", "skipped")
+    else:
+        git_row = _autocommit_compose(applied_bumps)
 
-    if args.all:
-        _update_remote_hosts()
+    # ── 7. remote hosts ──────────────────────────────────────────────────────
+    remote_ok, remote_failed = _update_remote_hosts() if args.all else ([], [])
 
+    # ── 8. summary table ─────────────────────────────────────────────────────
+    rows: list = []
+    for cf, items in semver_by_file.items():
+        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
+        for _, name, old, new in items:
+            reverted = (name, new) in failed_refs
+            rows.append(("image", name.rsplit("/", 1)[-1] + scope, f"{old} → {new}",
+                         "REVERTED (pull failed)" if reverted else "updated"))
+    for cf, svc, ref in rolling_stale:
+        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
+        rows.append(("rolling", svc + scope, ref.rsplit("/", 1)[-1],
+                     "pulled" if ref in pulled else "PULL FAILED (kept old)"))
+    for cf, svc, _ in build_stale:
+        changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
+        rows.append(("rebuild", svc, "base: " + ", ".join(changed), "rebuilt"))
+    rows.append(("deploy", "main stack", "dc.sh up -d", "ok"))
+    if edge_changed:
+        rows.append(("deploy", "edge pair", "blue/green promotion", "ok"))
+    if openbao_changed:
+        rows.append(("deploy", "openbao stack", "compose up -d", "ok"))
+    if git_row:
+        rows.append(("git", "compose files", git_row[0], git_row[1]))
+    for h in remote_ok:
+        rows.append(("remote", h, "pull && up -d && prune", "ok"))
+    for h in remote_failed:
+        rows.append(("remote", h, "pull && up -d && prune", "FAILED"))
+
+    _print_change_table(rows)
     print("\nDone.")
 
 
