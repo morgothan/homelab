@@ -12,6 +12,11 @@ Usage:
   bin/update-images --yes        # skip confirmation prompt
   bin/update-images --all        # also update beszel/whisper/spark/hermes/sketchy-nas over SSH
   bin/update-images --edge-gateway  # include HAProxy (brief direct-LAN interruption)
+  bin/update-images --no-commit  # skip the automatic git commit + push of tag bumps
+
+After a successful deploy the compose-file tag bumps are committed and pushed
+automatically, unless the diff contains a leak marker (see LEAK_MARKERS) or
+--no-commit is given.
 """
 
 import argparse
@@ -461,6 +466,64 @@ def _run(cmd: list, check: bool = True) -> int:
     return result.returncode
 
 
+# ── auto-commit compose tag bumps ─────────────────────────────────────────────
+
+# Substrings that must never appear in a pushed compose diff. Compose files use
+# ${DOMAIN}/${LOCAL} vars, so a literal internal name in a diff means something
+# leaked. Matched case-insensitively against added ("+") lines.
+LEAK_MARKERS = ("lan", "example")
+
+
+def _git(args: list) -> subprocess.CompletedProcess:
+    return subprocess.run(["git", "-C", str(REPO_ROOT), *args],
+                          capture_output=True, text=True)
+
+
+def _autocommit_compose(applied_bumps: list) -> None:
+    """Commit changed compose files and push — unless the diff trips a leak marker.
+
+    applied_bumps: [(image_name, old_tag, new_tag), ...] used only for the message.
+    A push failure is non-fatal (the commit stays local).
+    """
+    if _git(["rev-parse", "--is-inside-work-tree"]).returncode != 0:
+        return
+    rel = [str(p.relative_to(REPO_ROOT)) for p in COMPOSE_FILES if p.exists()]
+    if _git(["diff", "--quiet", "--", *rel]).returncode == 0:
+        return  # no file changes (e.g. only rolling-tag pulls)
+
+    diff = _git(["diff", "--", *rel]).stdout
+    added = [ln for ln in diff.splitlines()
+             if ln.startswith("+") and not ln.startswith("+++")]
+    hits = sorted({m for m in LEAK_MARKERS
+                   for ln in added if m.lower() in ln.lower()})
+    if hits:
+        print(f"\n[!] Auto-commit skipped — diff adds {', '.join(hits)}; "
+              f"review and commit manually.", file=sys.stderr)
+        return
+
+    if applied_bumps:
+        summary = ", ".join(f"{name.rsplit('/', 1)[-1]} {old}→{new}"
+                            for name, old, new in applied_bumps)
+    else:
+        summary = "update pinned image tags"
+    msg = f"chore(images): {summary}"
+    if len(msg) > 72:
+        msg = f"chore(images): bump {len(applied_bumps)} image tag(s)"
+
+    _git(["add", "--", *rel])
+    commit = _git(["commit", "-m", msg])
+    if commit.returncode != 0:
+        print(f"\n[!] git commit failed:\n{commit.stderr.strip()}", file=sys.stderr)
+        return
+    print(f"\n+ git commit -m {msg!r}")
+    push = _git(["push"])
+    if push.returncode != 0:
+        print(f"[!] git push failed (commit is local):\n{push.stderr.strip()}",
+              file=sys.stderr)
+    else:
+        print("+ git push")
+
+
 # ── remote hosts (--all) ───────────────────────────────────────────────────────
 
 def _update_remote_hosts() -> None:
@@ -491,6 +554,8 @@ def main() -> None:
                         help="also update beszel/whisper/spark/hermes/sketchy-nas over SSH")
     parser.add_argument("--edge-gateway", action="store_true",
                         help="also check/update HAProxy; briefly interrupts direct LAN/host-port traffic")
+    parser.add_argument("--no-commit", action="store_true",
+                        help="skip the automatic git commit + push of compose tag bumps")
     args = parser.parse_args()
 
     results        = asyncio.run(_check_all(include_edge_gateway=args.edge_gateway))
@@ -637,6 +702,17 @@ def main() -> None:
     # aren't referenced by running containers, causing false-positive stale
     # detection on the next run.
     _run(["docker", "system", "prune", "-f"])
+
+    # ── 6. commit + push the compose tag bumps ────────────────────────────────
+    if not args.no_commit:
+        failed_refs = {(name, new_tag) for _, _, name, _, new_tag in pull_failed}
+        applied_bumps = [
+            (name, old_tag, new_tag)
+            for items in semver_by_file.values()
+            for _, name, old_tag, new_tag in items
+            if (name, new_tag) not in failed_refs
+        ]
+        _autocommit_compose(applied_bumps)
 
     if args.all:
         _update_remote_hosts()
