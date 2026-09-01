@@ -3941,7 +3941,7 @@ _SOURCE_HOWTO = {
                         f"model deepseek-v4-flash-0731). Update the sparkrun CLI: SSH to spark.{LOCAL} "
                         f"(and the docker host): sparkrun setup update. Swap the vLLM build / model: "
                         f"pick a newer recipe (sparkrun search / sparkrun show @spark-arena/<id>), then "
-                        f"sparkrun export systemd <recipe> --cluster lan-2x --port 8000 "
+                        f"sparkrun export systemd <recipe> --cluster <spark-cluster> --port 8000 "
                         f"--served-model-name <name> --service-name sparkrun-deepseek --install, and "
                         f"sudo systemctl restart sparkrun-deepseek. Rollback to single-node Qwen3.6: "
                         f"sudo systemctl disable --now sparkrun-deepseek && systemctl --user enable --now vllm.",
