@@ -118,6 +118,16 @@ class SemverTagTests(unittest.TestCase):
     def test_sort_key_ignores_suffix(self):
         self.assertEqual(lib._semver_sort_key("3.4.4-alpine"), (3, 4, 4))
 
+    def test_alpine_revision_suffix_is_ordered(self):
+        # '-rN' is an Alpine package revision, not a variant: it must be
+        # comparable across revisions and patch levels (regression: nut-upsd).
+        self.assertEqual(lib._semver_sort_key("2.8.5-r1"), (2, 8, 5, 1))
+        tags = ["2.8.3-r2", "2.8.3-r4", "2.8.5-r1", "2.8.2-r0", "latest"]
+        self.assertEqual(self._best("2.8.3-r4", tags), "2.8.5-r1")
+        self.assertIsNone(self._best("2.8.5-r1", tags))
+        # a bare '2.8.5' is still a different image, not a match for '-rN'
+        self.assertIsNone(self._best("2.8.3-r4", ["2.8.3-r4", "2.8.9"]))
+
 
 class RuntimeTests(unittest.TestCase):
     def test_nonpositive_interval_is_rejected(self):

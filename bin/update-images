@@ -73,25 +73,26 @@ SKETCHY_NAS_CMD = "~/docker-update.sh"
 # ── sort / pattern helpers ─────────────────────────────────────────────────────
 
 def _sort_key(tag: str) -> tuple:
-    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", tag)
+    # Trailing '-rN' (Alpine package revision) is an ordered version part:
+    # '2.8.5-r1' -> (2, 8, 5, 1). Any other suffix is ignored.
+    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-r(\d+))?", tag)
     if not match:
         return (0,)
     return tuple(int(x) for x in match.groups() if x is not None)
 
 
 def _tag_pattern(tag: str) -> Optional[re.Pattern]:
-    """Regex matching tags with the same format (component count, v-prefix) as tag."""
+    """Regex matching tags with the same format (component count, v-prefix, suffix)
+    as tag. A '-rN' Alpine revision suffix matches any '-rN' so later revisions are
+    comparable; every other suffix ('-alpine', …) must match verbatim."""
     match = re.match(r"^(v?)(\d+)\.(\d+)(?:\.(\d+))?(.*)$", tag)
     if not match:
         return None
     prefix, _, _, patch, suffix = match.groups()
     n = r"\d+"
-    escaped_suffix = re.escape(suffix)
-    if patch is not None:
-        pat = rf"^{prefix}{n}\.{n}\.{n}{escaped_suffix}$"
-    else:
-        pat = rf"^{prefix}{n}\.{n}{escaped_suffix}$"
-    return re.compile(pat)
+    suffix_pat = r"-r\d+" if re.fullmatch(r"-r\d+", suffix) else re.escape(suffix)
+    core = rf"{n}\.{n}\.{n}" if patch is not None else rf"{n}\.{n}"
+    return re.compile(rf"^{prefix}{core}{suffix_pat}$")
 
 
 # ── skopeo wrappers ────────────────────────────────────────────────────────────
