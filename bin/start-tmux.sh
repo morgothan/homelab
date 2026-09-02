@@ -27,4 +27,4 @@ if [ $? != 0 ]; then
        tmux set -g pane-border-status bottom
 fi
 
-tmux attach-session -t $SESS
+tmux attach-session -d -t $SESS
