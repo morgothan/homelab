@@ -3222,24 +3222,28 @@ async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str], O
 
 
 def _semver_sort_key(tag: str) -> tuple:
-    try:
-        return tuple(int(x) for x in tag.lstrip("v").split("."))
-    except ValueError:
+    """Numeric sort key from the leading vX.Y[.Z] of a tag, ignoring any suffix
+    (e.g. '3.4.4-alpine' -> (3, 4, 4)). Non-semver tags sort lowest."""
+    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", tag)
+    if not match:
         return (0,)
+    return tuple(int(x) for x in match.groups() if x is not None)
 
 
 def _semver_tag_pattern(tag: str) -> Optional[re.Pattern]:
-    """Regex matching tags with the same format (component count, v-prefix) as tag."""
-    clean = tag.lstrip("v")
-    parts = clean.split(".")
-    prefix = "v" if tag.startswith("v") else ""
-    n = r"\d+"
-    if len(parts) == 3:
-        pat = rf"^{prefix}{n}\.{n}\.{n}$"
-    elif len(parts) == 2:
-        pat = rf"^{prefix}{n}\.{n}$"
-    else:
+    """Regex matching tags with the same shape as `tag` — component count, v-prefix,
+    AND any trailing suffix. '3.4.4-alpine' only matches other '-alpine' patch tags,
+    never the bare '3.4.4' variant (which is a different image, not a newer version)."""
+    match = re.match(r"^(v?)(\d+)\.(\d+)(?:\.(\d+))?(.*)$", tag)
+    if not match:
         return None
+    prefix, _, _, patch, suffix = match.groups()
+    n = r"\d+"
+    escaped_suffix = re.escape(suffix)
+    if patch is not None:
+        pat = rf"^{prefix}{n}\.{n}\.{n}{escaped_suffix}$"
+    else:
+        pat = rf"^{prefix}{n}\.{n}{escaped_suffix}$"
     return re.compile(pat)
 
 

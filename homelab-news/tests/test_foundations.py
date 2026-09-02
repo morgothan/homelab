@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, patch
 
 import articles
 import config
+import lib
 import runtime
 import storage
 from homelab_news.capabilities import configured_capabilities
@@ -85,6 +86,37 @@ class ArticleContractTests(unittest.TestCase):
             '```json\n[{"headline":"Status","blurb":"Good"}]\n```'
         )
         self.assertEqual(parsed[0]["headline"], "Status")
+
+
+class SemverTagTests(unittest.TestCase):
+    """A tag with a non-numeric suffix ('3.4.4-alpine') must only ever be
+    compared against tags carrying the same suffix — the bare '3.4.4' variant
+    is a different image, not a downgrade or upgrade. Regression: edge-gateway's
+    haproxy:3.4.4-alpine was reported as an update to '3.4.4' every hour."""
+
+    def _best(self, current, tags):
+        pat = lib._semver_tag_pattern(current)
+        matching = [t for t in tags if pat and pat.match(t)]
+        if not matching:
+            return None
+        best = max(matching, key=lib._semver_sort_key)
+        return best if lib._semver_sort_key(best) > lib._semver_sort_key(current) else None
+
+    def test_suffix_tag_ignores_bare_variant(self):
+        self.assertIsNone(self._best("3.4.4-alpine", ["3.4.4", "3.4.4-alpine", "3.0.5"]))
+
+    def test_suffix_tag_tracks_same_suffix_bump(self):
+        self.assertEqual(
+            self._best("3.4.4-alpine", ["3.4.4", "3.4.5-alpine", "3.4.4-alpine"]),
+            "3.4.5-alpine",
+        )
+
+    def test_plain_semver_still_bumps(self):
+        self.assertEqual(self._best("v3.4.4", ["v3.4.4", "v3.5.0", "latest"]), "v3.5.0")
+        self.assertIsNone(self._best("v3.5.0", ["v3.4.4", "v3.5.0"]))
+
+    def test_sort_key_ignores_suffix(self):
+        self.assertEqual(lib._semver_sort_key("3.4.4-alpine"), (3, 4, 4))
 
 
 class RuntimeTests(unittest.TestCase):
