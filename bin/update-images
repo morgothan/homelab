@@ -19,7 +19,8 @@ automatically, unless --no-commit is given or the diff contains a private
 hostname/domain (LEAK_MARKERS, derived from OpenBao).
 
 Every run ends with a "WHAT CHANGED" table summarising the image updates,
-rebuilds, redeploys, git commit/push, and remote-host results.
+rebuilds, redeploys, git commit/push, and remote-host results — including which
+images actually changed on each --all remote host (image-ID snapshot diff).
 """
 
 import argparse
@@ -52,7 +53,20 @@ LOCAL = _SECRETS.get("LOCAL", "")
 
 # Remote hosts with their own ~/docker/dc.sh stack — updated via `--all`
 REMOTE_DC_HOSTS = [f"beszel.{LOCAL}", f"whisper.{LOCAL}", f"spark.{LOCAL}", f"spark2.{LOCAL}", f"hermes.{LOCAL}"]
-REMOTE_DC_CMD = "cd ~/docker && ./dc.sh pull && ./dc.sh up -d && docker system prune -fa"
+# Snapshot every non-dangling image (repo:tag + short ID) before and after the
+# pull; `comm -13` then yields exactly the refs whose ID changed. Emitted between
+# markers so _parse_img_updates can lift it out of the captured SSH output.
+_IMG_SNAP = ("docker image ls --format '{{.Repository}}:{{.Tag}} {{.ID}}' "
+             "| { grep -v '^<none>' || true; } | sort -u")
+REMOTE_DC_CMD = (
+    "cd ~/docker && "
+    f"{_IMG_SNAP} > /tmp/ui-img-before && "
+    "./dc.sh pull && ./dc.sh up -d && "
+    f"{_IMG_SNAP} > /tmp/ui-img-after && "
+    "echo __IMG_UPDATED__ && comm -13 /tmp/ui-img-before /tmp/ui-img-after && echo __IMG_END__ && "
+    "rm -f /tmp/ui-img-before /tmp/ui-img-after && "
+    "docker system prune -fa"
+)
 SKETCHY_NAS_HOST = f"sketchy-nas.{LOCAL}"
 SKETCHY_NAS_CMD = "~/docker-update.sh"
 
@@ -469,6 +483,22 @@ def _run(cmd: list, check: bool = True) -> int:
     return result.returncode
 
 
+def _run_capture(cmd: list) -> tuple[int, str]:
+    """Like _run (non-fatal), but tee: stream output live AND return it for parsing."""
+    print(f"\n+ {' '.join(str(c) for c in cmd)}")
+    proc = subprocess.Popen(
+        cmd, cwd=REPO_ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    chunks: list = []
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        sys.stdout.write(line)
+        chunks.append(line)
+    proc.wait()
+    return proc.returncode, "".join(chunks)
+
+
 # ── auto-commit compose tag bumps ─────────────────────────────────────────────
 
 # Substrings that must never appear in a pushed compose diff — the private LAN /
@@ -542,19 +572,49 @@ def _autocommit_compose(applied_bumps: list) -> Optional[tuple]:
 
 # ── remote hosts (--all) ───────────────────────────────────────────────────────
 
+def _parse_img_updates(output: str) -> list[str]:
+    """Lift the repo:tag list emitted between the snapshot markers by REMOTE_DC_CMD."""
+    m = re.search(r"^__IMG_UPDATED__$(.*?)^__IMG_END__$", output, re.S | re.M)
+    if not m:
+        return []
+    return [ln.split()[0] for ln in m.group(1).splitlines() if ln.strip()]
+
+
 def _update_remote_hosts() -> tuple:
     """SSH into each remote host and run its own pull/up/prune (or update script).
 
-    Returns (ok_hosts, failed_hosts) for the summary table.
+    Returns (host_updates, failed): host_updates maps each host that succeeded to
+    the list of image refs whose ID changed (empty list = nothing new pulled).
+    Every host emits the __IMG_UPDATED__ block — the dc.sh hosts via REMOTE_DC_CMD,
+    sketchy-nas via its own ~/docker-update.sh.
     """
-    ok, failed = [], []
+    host_updates: dict = {}
+    failed: list = []
     for host in [*REMOTE_DC_HOSTS, SKETCHY_NAS_HOST]:
         cmd = SKETCHY_NAS_CMD if host == SKETCHY_NAS_HOST else REMOTE_DC_CMD
         print(f"\n=== {host} ===")
-        (ok if _run(["ssh", f"nat@{host}", cmd], check=False) == 0 else failed).append(host)
+        rc, out = _run_capture(["ssh", f"nat@{host}", cmd])
+        if rc == 0:
+            host_updates[host] = _parse_img_updates(out)
+        else:
+            failed.append(host)
     if failed:
         print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
-    return ok, failed
+    return host_updates, failed
+
+
+def _remote_rows(host_updates: dict, failed: list) -> list:
+    """Summary-table rows for the remote pass: one row per updated image on each
+    host, a single plain 'ok' row for a host with no image changes, one per failure."""
+    rows: list = []
+    for host, imgs in host_updates.items():
+        for img in imgs:
+            rows.append(("remote", host, img.rsplit("/", 1)[-1], "image updated"))
+        if not imgs:
+            rows.append(("remote", host, "pull && up -d && prune", "ok"))
+    for host in failed:
+        rows.append(("remote", host, "pull && up -d && prune", "FAILED"))
+    return rows
 
 
 # ── end-of-run summary ────────────────────────────────────────────────────────
@@ -662,11 +722,8 @@ def main() -> None:
             return
 
     if total == 0:
-        remote_ok, remote_failed = _update_remote_hosts()
-        _print_change_table(
-            [("remote", h, "pull && up -d && prune", "ok") for h in remote_ok]
-            + [("remote", h, "pull && up -d && prune", "FAILED") for h in remote_failed]
-        )
+        host_updates, remote_failed = _update_remote_hosts()
+        _print_change_table(_remote_rows(host_updates, remote_failed))
         return
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
@@ -760,7 +817,7 @@ def main() -> None:
         git_row = _autocommit_compose(applied_bumps)
 
     # ── 7. remote hosts ──────────────────────────────────────────────────────
-    remote_ok, remote_failed = _update_remote_hosts() if args.all else ([], [])
+    host_updates, remote_failed = _update_remote_hosts() if args.all else ({}, [])
 
     # ── 8. summary table ─────────────────────────────────────────────────────
     rows: list = []
@@ -784,10 +841,7 @@ def main() -> None:
         rows.append(("deploy", "openbao stack", "compose up -d", "ok"))
     if git_row:
         rows.append(("git", "compose files", git_row[0], git_row[1]))
-    for h in remote_ok:
-        rows.append(("remote", h, "pull && up -d && prune", "ok"))
-    for h in remote_failed:
-        rows.append(("remote", h, "pull && up -d && prune", "FAILED"))
+    rows += _remote_rows(host_updates, remote_failed)
 
     _print_change_table(rows)
     print("\nDone.")
