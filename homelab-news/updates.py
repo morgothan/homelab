@@ -709,10 +709,17 @@ async def run() -> None:
             if not release:
                 continue
             tag, notes = release
-            if tag:
+            # A monorepo's releases/latest can be an unrelated component — e.g.
+            # instantlinux/docker-tools ships nut-upsd but its latest release is a
+            # Helm chart tag ("chart-wordpress-0.1.2"). Only trust the tag as a
+            # version when it looks like one; otherwise keep whatever the registry
+            # check gave us and skip the changelog (the notes are for the wrong thing).
+            if not _SEMVER_TAG_RE.match(tag or ""):
+                continue
+            if not r.get("new_version"):
                 r["new_version"] = tag
-            raw = await llm_changelog_analysis(r["container"], r["image"], tag, notes)
-            r["changelog_analysis"] = raw.strip() if raw and raw.strip() else f"Updated to {tag}."
+            raw = await llm_changelog_analysis(r["container"], r["image"], r["new_version"], notes)
+            r["changelog_analysis"] = raw.strip() if raw and raw.strip() else f"Updated to {r['new_version']}."
             log.info("Changelog %s/%s: %s", label, r["container"], r["changelog_analysis"][:80])
 
     # Changelog LLM for non-Docker updates (where GitHub URL is known)

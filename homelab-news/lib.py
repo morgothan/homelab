@@ -3222,9 +3222,10 @@ async def remote_digest(image_ref: str) -> tuple[Optional[str], Optional[str], O
 
 
 def _semver_sort_key(tag: str) -> tuple:
-    """Numeric sort key from the leading vX.Y[.Z] of a tag, ignoring any suffix
-    (e.g. '3.4.4-alpine' -> (3, 4, 4)). Non-semver tags sort lowest."""
-    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?", tag)
+    """Numeric sort key from the leading vX.Y[.Z] of a tag, plus a trailing Alpine
+    package revision if present ('2.8.5-r1' -> (2, 8, 5, 1)). Any other suffix is
+    ignored ('3.4.4-alpine' -> (3, 4, 4)). Non-semver tags sort lowest."""
+    match = re.match(r"^v?(\d+)\.(\d+)(?:\.(\d+))?(?:-r(\d+))?", tag)
     if not match:
         return (0,)
     return tuple(int(x) for x in match.groups() if x is not None)
@@ -3233,18 +3234,17 @@ def _semver_sort_key(tag: str) -> tuple:
 def _semver_tag_pattern(tag: str) -> Optional[re.Pattern]:
     """Regex matching tags with the same shape as `tag` — component count, v-prefix,
     AND any trailing suffix. '3.4.4-alpine' only matches other '-alpine' patch tags,
-    never the bare '3.4.4' variant (which is a different image, not a newer version)."""
+    never the bare '3.4.4' variant (a different image, not a newer version). Exception:
+    an Alpine package-revision suffix ('-r1') is an ordered version part, not a
+    variant, so '2.8.3-r4' matches any 'X.Y.Z-rN' and tracks later revisions."""
     match = re.match(r"^(v?)(\d+)\.(\d+)(?:\.(\d+))?(.*)$", tag)
     if not match:
         return None
     prefix, _, _, patch, suffix = match.groups()
     n = r"\d+"
-    escaped_suffix = re.escape(suffix)
-    if patch is not None:
-        pat = rf"^{prefix}{n}\.{n}\.{n}{escaped_suffix}$"
-    else:
-        pat = rf"^{prefix}{n}\.{n}{escaped_suffix}$"
-    return re.compile(pat)
+    suffix_pat = r"-r\d+" if re.fullmatch(r"-r\d+", suffix) else re.escape(suffix)
+    core = rf"{n}\.{n}\.{n}" if patch is not None else rf"{n}\.{n}"
+    return re.compile(rf"^{prefix}{core}{suffix_pat}$")
 
 
 async def _skopeo_list_tags(image: str) -> list[str]:
