@@ -697,7 +697,7 @@ services:
 # Network UPS Tools daemon — monitors UPS and exposes data over TCP on :3493 to LAN
   nut:
     container_name: nut
-    image: instantlinux/nut-upsd:latest
+    image: instantlinux/nut-upsd:2.8.5-r1
     restart: unless-stopped
     logging: *logging
     healthcheck:
