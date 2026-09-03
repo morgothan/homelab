@@ -173,7 +173,7 @@ services:
       - '--storage.tsdb.retention.time=30d'
     networks:
       - ${DOCKERNET}
-    restart: unless-stopped
+    restart: always
     logging: *logging
     volumes:
       - ${DOCKERDIR}/prometheus/etc:/etc/prometheus
@@ -414,7 +414,7 @@ services:
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
   authelia:
     container_name: authelia
-    image: authelia/authelia:4.39.20
+    image: authelia/authelia:4.39.22
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"]
       interval: 30s
@@ -1035,7 +1035,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.24.0 #
+    image: ghcr.io/mealie-recipes/mealie:v3.25.0 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
