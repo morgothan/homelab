@@ -1035,7 +1035,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.25.0 #
+    image: ghcr.io/mealie-recipes/mealie:v3.25.1 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
