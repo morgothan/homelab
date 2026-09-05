@@ -75,7 +75,7 @@ services:
 
   traefik-blue:
     <<: *traefik-common
-    image: traefik:v3.7.12
+    image: traefik:v3.7.13
     container_name: traefik-blue
     profiles: [blue]
     networks:
@@ -123,7 +123,7 @@ services:
 
   traefik-green:
     <<: *traefik-common
-    image: traefik:v3.7.12
+    image: traefik:v3.7.13
     container_name: traefik-green
     profiles: [green]
     networks:
