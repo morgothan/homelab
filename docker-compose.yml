@@ -318,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v10.9.2
+    image: amir20/dozzle:v10.10.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -623,7 +623,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.90.0
+    image: oliver006/redis_exporter:v1.91.0
     container_name: redis-exporter
     depends_on:
       - redis
