@@ -1,0 +1,66 @@
+# NOT DEPLOYED. Seed for the Option B experiment (NVFP4 *weights*). See README.md.
+# This baseline omits DSpark. Running DSpark on NVFP4 weights needs a different
+# vLLM base (jasl/vllm sm120 PR-41834) + a draft-routing patch; validate before
+# wiring anything to this.
+recipe_version: '2'
+model: nvidia/DeepSeek-V4-Flash-0731-NVFP4
+runtime: vllm
+builder: eugr
+min_nodes: 2
+max_nodes: 2
+container: ghcr.io/spark-arena/dgx-vllm-eugr-nightly:latest
+metadata:
+  description: >-
+    Experimental NVIDIA ModelOpt NVFP4 DeepSeek V4 Flash 0731 on two DGX
+    Sparks. Baseline configuration intentionally omits DSpark speculative
+    decoding until checkpoint compatibility and output quality are verified.
+  category: agent
+  kv_dtype: fp8
+  model_dtype: nvfp4
+  quantization: nvfp4
+  quant_bits: 4
+  model_type: deepseek_v4
+defaults:
+  port: 8000
+  host: 0.0.0.0
+  tensor_parallel: 2
+  pipeline_parallel: 1
+  gpu_memory_utilization: 0.78
+  max_model_len: 393216
+  max_num_batched_tokens: 8192
+  max_num_seqs: 8
+  served_model_name: deepseek-v4-flash-0731-nvfp4
+  kv_cache_dtype: fp8
+  block_size: 256
+  tokenizer_mode: deepseek_v4
+  tool_call_parser: deepseek_v4
+  reasoning_parser: deepseek_v4
+env:
+  PYTHONUNBUFFERED: '1'
+  VLLM_ALLOW_LONG_MAX_MODEL_LEN: '1'
+  HF_HUB_DISABLE_XET: '1'
+command: |-
+  vllm serve {model} \
+    --served-model-name {served_model_name} \
+    --host {host} \
+    --port {port} \
+    --trust-remote-code \
+    --tensor-parallel-size {tensor_parallel} \
+    --pipeline-parallel-size {pipeline_parallel} \
+    --enable-expert-parallel \
+    --kv-cache-dtype {kv_cache_dtype} \
+    --block-size {block_size} \
+    --max-model-len {max_model_len} \
+    --max-num-seqs {max_num_seqs} \
+    --max-num-batched-tokens {max_num_batched_tokens} \
+    --gpu-memory-utilization {gpu_memory_utilization} \
+    --enable-prefix-caching \
+    --enable-chunked-prefill \
+    --no-enable-flashinfer-autotune \
+    --tokenizer-mode {tokenizer_mode} \
+    --distributed-executor-backend mp \
+    --tool-call-parser {tool_call_parser} \
+    --enable-auto-tool-choice \
+    --reasoning-parser {reasoning_parser} \
+    --reasoning-config '{"reasoning_parser":"deepseek_v4","reasoning_start_str":"","reasoning_end_str":""}' \
+    --generation-config vllm
