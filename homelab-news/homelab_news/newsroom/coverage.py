@@ -23,6 +23,7 @@ _HIGH_VOLUME_ESCALATION_RULES: tuple[tuple[str, re.Pattern, int], ...] = (
 )
 _BENIGN_LOG_NOISE = re.compile(
     r"(?i)\bnot an error\b"
+    r"|\[session\.token\.rotate\]\s+token needs to be rotated"
     r"|STA_ASSOC_TRACKER.*\bsoft failure\b"
     r"|collector failed.*name=thermal_zone"
     # fwupd emits these at warning level while inventorying devices that either

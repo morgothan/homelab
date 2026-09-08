@@ -1075,6 +1075,10 @@ NOISE = re.compile(
     r'|New session.*of user'
     r'|Removed session'
     r'|Log statistics'
+    # Grafana returns this while refreshing an active user's short-lived session
+    # cookie. Dashboard panels can emit several of these before the browser
+    # completes the rotation; it is not a rejected login or credential failure.
+    r'|\[session\.token\.rotate\]\s+token needs to be rotated'
     # cloudflared emits two ERR lines when an incoming client abandons a request.
     # This is client lifecycle noise, not a tunnel or origin connectivity failure.
     r'|Incoming request ended abruptly: context canceled'

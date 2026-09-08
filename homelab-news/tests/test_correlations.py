@@ -35,6 +35,17 @@ def _evt(service: str, observed_at: str, event_type: str = "security.ban_started
 
 
 class CorrelationTests(unittest.TestCase):
+    def test_grafana_session_rotation_is_noise(self):
+        message = (
+            'logger=authn.service level=warn msg="Failed to authenticate request" '
+            'client=auth.client.session error="[session.token.rotate] '
+            'token needs to be rotated"'
+        )
+
+        issues, _ = lib._collect_issues("grafana", [message])
+
+        self.assertEqual(issues, [])
+
     def test_cloudflared_client_cancellation_is_noise(self):
         messages = [
             'ERR error="Incoming request ended abruptly: context canceled" '
