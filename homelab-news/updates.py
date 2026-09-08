@@ -23,7 +23,7 @@ from runtime import run_loop
 from storage import load_json, save_json
 
 from lib import (
-    remote_digest, parse_image_ref, latest_semver_tag,
+    remote_digest, parse_image_ref, latest_semver_tag, _semver_sort_key,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
     fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
 )
@@ -300,7 +300,7 @@ async def check_jellyfin_update() -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
                 f"{JELLYFIN_URL}/System/Info",
-                headers={"X-Emby-Token": JELLYFIN_KEY},
+                headers={"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'},
             )
             r.raise_for_status()
             current_version = r.json().get("Version", "")
@@ -313,7 +313,8 @@ async def check_jellyfin_update() -> dict:
     new_version = (latest_tag or "").lstrip("v")
 
     updates = []
-    if new_version and new_version != current_version.lstrip("v"):
+    # Release tag '12.0' and API-reported '12.0.0' are the same version — compare numerically.
+    if new_version and _semver_sort_key(new_version) > _semver_sort_key(current_version):
         updates.append({
             "app":             "jellyfin",
             "current_version": current_version,
