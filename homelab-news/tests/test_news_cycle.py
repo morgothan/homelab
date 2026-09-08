@@ -113,6 +113,20 @@ class IssueCoverageTests(unittest.TestCase):
                   "message": "upstream lookup failed"}
         self.assertEqual(select_news_issues([noise, useful], limit=1), [useful])
 
+    def test_grafana_session_rotation_is_not_selected(self):
+        noise = {
+            "source": "grafana",
+            "level": "warn",
+            "count": 65,
+            "message": (
+                'Failed to authenticate request client=auth.client.session '
+                'error="[session.token.rotate] token needs to be rotated"'
+            ),
+        }
+
+        self.assertEqual(select_news_issues([noise]), [])
+        self.assertFalse(noise["selected_for_news"])
+
     def test_fwupd_no_upgrade_warnings_are_not_selected(self):
         issues = [
             {"source": host, "level": "error", "count": 1,
