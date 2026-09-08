@@ -626,7 +626,7 @@ async def _fetch_recent_jellyfin_media(since: datetime) -> list[dict]:
         return load_media_events(since)
 
     since_utc = since.astimezone(timezone.utc)
-    headers = {"X-Emby-Token": JELLYFIN_KEY}
+    headers = {"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}
     params = {
         "Recursive": "true",
         "IncludeItemTypes": "Movie,Episode",
@@ -917,7 +917,7 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
     if not unresolved:
         return links
 
-    headers = {"X-Emby-Token": JELLYFIN_KEY}
+    headers = {"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             info_response = await client.get(f"{JELLYFIN_URL}/System/Info", headers=headers)
@@ -2387,7 +2387,7 @@ async def check_jellystat() -> dict:
             coros = []
             if JELLYFIN_KEY:
                 coros.append(client.get(f"{JELLYFIN_URL}/Sessions",
-                                        headers={"X-Emby-Token": JELLYFIN_KEY}))
+                                        headers={"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}))
             if JELLYSTAT_KEY:
                 coros.append(client.get(f"{JELLYSTAT_URL}/stats/getViewsByLibraryType",
                                         params={"days": 7},
