@@ -35,6 +35,7 @@ class FeatureSettings:
     media: bool = True
     updates: bool = True
     trend_intelligence: bool = True
+    investigations: bool = True
 
 
 @dataclass(frozen=True)
