@@ -5,28 +5,34 @@ vLLM inference recipes for the `spark1` + `spark2` DGX Spark cluster. These are
 
 ## Deployed
 
-**`deepseek-v4-flash-vision-exp-dspark.yaml`** — the recipe the homelab's sole
-inference backend runs, since **2026-09-10**. DeepSeek V4 Flash **Vision-Exp**
-(native image input), DSpark spec-decode (k=5), 1M context, TP=2, B12X MoE,
-`nvfp4_ds_mla` KV @ gmu 0.85. Served at `spark.hirschnet:8000/v1` as
-`deepseek-v4-flash-vision-exp`. It replaced the 0731 text recipe (below, now the
-rollback target). Full detail: the "Vision-Exp migration" section further down —
-that is where the vendor provenance, the 3 local deltas, and the deploy /
-rollback / consumer steps live.
+**`deepseek-v4-flash-0731-dspark-nvfp4kv.yaml`** — the recipe the homelab's sole
+inference backend runs. DeepSeek V4 Flash 0731 (text only), DSpark spec-decode
+(k=5), 1M context, TP=2, B12X MoE, `fp8` KV @ gmu 0.78. Served at
+`spark.hirschnet:8000/v1` as `deepseek-v4-flash-0731`.
 
-It is **vendored** (not verbatim — 3 local deltas) from tonyd2wild's repo. The
-live copy on spark1 at `~/.config/sparkrun/services/sparkrun-deepseek/recipe.yaml`
-is what `sparkrun-deepseek.service` (systemd, system scope) actually loads; this
-file is the version-controlled mirror. Keep them in sync by hand.
+It is **vendored verbatim** from the live copy on spark1 at
+`~/.config/sparkrun/services/sparkrun-deepseek/recipe.yaml`, which is what
+`sparkrun-deepseek.service` (systemd, system scope) actually loads. This file is
+the version-controlled mirror — spark1 is the runtime source of truth. Keep the
+two in sync by hand. sha of the vendored/deployed pair: `924d5a3f…`.
 
-### Rollback target — `deepseek-v4-flash-0731-dspark-nvfp4kv.yaml`
+> **2026-09-10 — a migration to `deepseek-v4-flash-vision-exp-dspark.yaml` was
+> deployed and then rolled back the same day.** Vision-Exp OOM'd spark1 into a
+> hard halt ~50 min after going live under real traffic (gmu 0.85 + `nvfp4_ds_mla`
+> KV + a resident vision port exceeded the 128 GB unified pool). Full detail in
+> the "Vision-Exp migration + rollback" section below. That recipe stays in the
+> repo but **must not be redeployed without dropping the memory footprint and
+> load-testing.**
 
-The previous deployed recipe: DeepSeek V4 Flash 0731 (text only), DSpark k=5, 1M
-context, `fp8` KV @ gmu 0.78, served as `deepseek-v4-flash-0731`. Still
-**vendored verbatim** from the pre-migration live copy. To roll back: restore
-this onto spark1's `recipe.yaml` (a `recipe.yaml.bak-*` from 2026-09-10 is the
-same content), revert the `served_model_name` change across consumers (see the
-migration section's consumer list), `systemctl restart sparkrun-deepseek`.
+### Delta from the 2026-08-27 original export
+
+- `num_speculative_tokens` 3 → 5 — upstream retracted all k=3 guidance.
+- `pre_exec` step 3 applies tonyd2wild **Patch 5**
+  (`0005-suppress-stops-in-reasoning.patch` @ `0fec8084`) via `git apply` inside
+  the container, pinned to the container's vllm tree (0.21.1-dev). Idempotent;
+  non-fatal if it fails to apply (server still serves, reasoning replies can be
+  truncated when a client sends stop strings). Verified with `git apply --check`
+  against the pinned image before shipping.
 
 ### Delta from the 2026-08-27 original export
 
@@ -76,14 +82,26 @@ ssh nat@spark.hirschnet 'sudo systemctl restart sparkrun-deepseek'
   a `mods:` dir. Left as-is to match the existing recipe; revisit if the
   pre_exec grows further.
 
-## Vision-Exp migration (done 2026-09-10)
+## Vision-Exp migration + rollback (2026-09-10)
 
-**`deepseek-v4-flash-vision-exp-dspark.yaml`** — now the deployed recipe (see
-top). Serves `deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`: native image input, plus
-a few points on the text agent evals vs 0731 (DeepSWE +4.9, Toolathlon +5.6,
-DSBench-Hard +4.0 — HF model card). Same digest-pinned base image as the 0731
-recipe; the DSpark stage-c runtime and a ViT+aligner vision port are rebuilt
-in-container by `pre_exec`, fetched pinned from tonyd2wild's repo. No image build.
+> ⚠️ **DEPLOYED AND ROLLED BACK THE SAME DAY. Do not redeploy `deepseek-v4-flash-vision-exp-dspark.yaml` as-is.**
+> It went live at ~13:42, passed every smoke test (text, tool-call, 57K-ctx needle,
+> native image), then **OOM'd spark1 into a hard halt at ~14:30** under real
+> traffic. spark2 `dmesg` had logged `NVRM: … Out of memory [NV_ERR_NO_MEMORY]`
+> at cluster boot (13:43). Cause: `gpu_memory_utilization` 0.85 + `nvfp4_ds_mla`
+> KV + a ViT+aligner resident on both ranks exceeded the 128 GB unified pool
+> (spark1/spark2 already sit ~104/121 GB with plain 0731). Recovered by
+> power-cycling spark1 (UniFi PDU outlet 12 — the UniFi MCP tools can't drive the
+> USP-PDU-Pro) and restoring the 0731 recipe + all consumers.
+> **If retried:** drop `gpu_memory_utilization` toward 0.75–0.78, reconsider
+> `nvfp4_ds_mla` → `fp8` KV, and **load-test, not just smoke-test.**
+
+**`deepseek-v4-flash-vision-exp-dspark.yaml`** — serves
+`deepseek-ai/DeepSeek-V4-Flash-Vision-Exp`: native image input, plus a few points
+on the text agent evals vs 0731 (DeepSWE +4.9, Toolathlon +5.6, DSBench-Hard
++4.0 — HF model card). Same digest-pinned base image as the 0731 recipe; the
+DSpark stage-c runtime and a ViT+aligner vision port are rebuilt in-container by
+`pre_exec`, fetched pinned from tonyd2wild's repo. No image build.
 
 Vendored from `tonyd2wild/DeepSeek-v4-Flash-Vision-Exp-DSpark-1M-NVFP4-KV-2x-DGX-Spark`,
 file `sparkrun/deepseek-v4-flash-vision-exp-dspark-nvfp4-1m-vllm.yaml` @ `43201d1c`.
@@ -143,42 +161,45 @@ curl -s http://spark.hirschnet:8000/v1/models   # expect id deepseek-v4-flash-vi
 Smoke test before touching consumers: a text chat completion + a tool call, a
 long-context prompt, and one `image_url` (base64) request.
 
-### Consumers — `deepseek-v4-flash-0731` → `deepseek-v4-flash-vision-exp`
+### Consumers — moved to `deepseek-v4-flash-vision-exp`, then **reverted to `deepseek-v4-flash-0731`** on rollback
 
-Done 2026-09-10 except Home Assistant (see below):
+Both directions done 2026-09-10. Home Assistant was never moved (no revert
+needed). Current state = everything back on `deepseek-v4-flash-0731`:
 
-- ✅ OpenBao `kv/docker/misc:VLLM_MODEL` (via the admin root-token process —
-  see the OpenBao Admin Process memory)
-- ✅ OpenBao `kv/hermes/hindsight:REFLECT_VLLM_MODEL` + `CONSOLIDATION_VLLM_MODEL`
-- ✅ Hermes `~/.hermes/config.yaml` (8 keys), `~/.hermes/profiles/fast/config.yaml`,
-  `~/.hermes/hindsight/config.json` — `sed -i` + restart `hermes-gateway`.
-  Backup: `~/.hermes/_model-swap-bak-20260910-180948/` on hermes.
-- ✅ Recreated `lab-monitor` (traefik) + `hindsight` (hermes) with
-  `./dc.sh up -d --force-recreate`. Hindsight log confirms
-  `model=deepseek-v4-flash-vision-exp` for base/reflect/consolidation.
-- ✅ Open WebUI auto-discovered via `/v1/models` — no change needed.
-- ⏳ **Home Assistant** OpenAI-conversation integration — still on the old name.
-  Change it in the HA UI: Settings → Devices & Services → the OpenAI conversation
-  integration → Configure → model field → `deepseek-v4-flash-vision-exp`.
+- OpenBao `kv/docker/misc:VLLM_MODEL` — via the admin root-token process (see the
+  OpenBao Admin Process memory); config re-locked after, `generate-root` → 405.
+- OpenBao `kv/hermes/hindsight:REFLECT_VLLM_MODEL` + `CONSOLIDATION_VLLM_MODEL` —
+  same process.
+- Hermes `~/.hermes/config.yaml` (8 keys), `~/.hermes/profiles/fast/config.yaml`,
+  `~/.hermes/hindsight/config.json` — restored from
+  `~/.hermes/_model-swap-bak-20260910-180948/` + `hermes-gateway` restart.
+- `lab-monitor` (traefik) + `hindsight` (hermes) — `./dc.sh up -d --force-recreate`.
+  hindsight log confirms `model=deepseek-v4-flash-0731`; lab-monitor confirmed a
+  real `POST /v1/chat/completions → 200`.
+- Open WebUI auto-discovers via `/v1/models` — no change.
+- Home Assistant OpenAI-conversation integration — untouched (never moved).
 
-### Rollback
+### Rollback (this is what was executed on 2026-09-10)
 
-Restore a `recipe.yaml.bak-*` from 2026-09-10 (== `deepseek-v4-flash-0731-dspark-
-nvfp4kv.yaml`) onto spark1's `recipe.yaml`, fix the unit `Description=` back,
-`systemctl restart sparkrun-deepseek`. Port stayed 8000 throughout. Then revert
-the consumers: OpenBao needs the admin root-token process again for the two
-paths; Hermes `sed -i` the reverse (or restore the `_model-swap-bak-*` dir);
-recreate `lab-monitor` + `hindsight`; restart `hermes-gateway`; HA UI. Deeper
-fallback: the disabled single-node `vllm.service` (Qwen3.6) on spark1.
+1. Catch `sparkrun-deepseek` on spark1 boot (`enabled`, auto-starts) and
+   `systemctl stop` it before containers spawn.
+2. Restore `deepseek-v4-flash-0731-dspark-nvfp4kv.yaml` (sha `924d5a3f`, ==
+   `recipe.yaml.bak-20260910-131453` on spark1) onto `recipe.yaml`, fix the unit
+   `Description=` back to the 0731 text, `daemon-reload`, `systemctl start`.
+   Port stayed 8000 throughout — inference is restored at this point.
+3. Remove any stale worker container left on spark2 (`docker rm -f
+   sparkrun_<oldjob>_…_node_1`).
+4. Revert consumers (list above).
+
+Deeper fallback: the disabled single-node `vllm.service` (Qwen3.6) on spark1.
 
 ### Known lint (`sparkrun recipe validate`)
 
 Same `managed-cache-env` warning + `inline-script` suggestions as the 0731
 recipe, plus two more `inline-script` hits for the vision-port and torch-aotcache
-`pre_exec` blocks. `VLLM_CACHE_ROOT` points at `/cache/runtime` by upstream's
-choice (an NFS-race guard that doesn't bite us — our HF caches are node-local —
-but harmless; costs a torch.compile rebuild per warm boot). Left as-is to stay
-close to the upstream validated file.
+`pre_exec` blocks. Cache env in this recipe was repointed to
+`/cache/huggingface/sr-cache/*` (local delta #3 — upstream's `/cache/runtime` is
+not container-writable on spark1/spark2, which crash-looped the first boot).
 
 ## Not deployed
 
