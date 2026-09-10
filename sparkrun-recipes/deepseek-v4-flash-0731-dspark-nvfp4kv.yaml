@@ -7,6 +7,14 @@
 #   - num_speculative_tokens 3 -> 5   (upstream retracted all k=3 guidance)
 #   - pre_exec step 3 added: applies tonyd2wild Patch 5 (0005-suppress-stops-in-
 #     reasoning) so client stop strings can't truncate a response mid-<think>.
+#   - 2026-09-10: Patch 5 pin bumped 0fec8084 -> 43201d1c (OUTPUT-SIDE ARMING
+#     revision, "Extended-by: Mcray4"). The old pin only armed when <think> was
+#     in the PROMPT; the model can also open <think> as its first OUTPUT token
+#     (templates that ignore the thinking kwarg), and the old guard missed that
+#     -- upstream measured a 0731 derivative dying at 90 tokens with empty
+#     content+reasoning on a stop-string request. New version is a strict
+#     superset. Sentinel grep tightened to `_reasoning_pending` (output-side
+#     specific) so it doesn't false-positive on the old prompt-side patch.
 #
 # ponytail: kv_cache_dtype stays fp8 even though the recipe name / metadata say
 # nvfp4. Prod deliberately runs fp8 KV. Flip to nvfp4_ds_mla only if you hit 1M
@@ -188,10 +196,10 @@ pre_exec:
   set -eu
   VLLM_ROOT=/opt/env/lib/python3.12/site-packages/vllm
   DETOK="$VLLM_ROOT/v1/engine/detokenizer.py"
-  COMMIT=0fec8084979040298fe2a3d4ee89abc640e6bc12
+  COMMIT=43201d1c2f281d238b8fd65f0f7168118f83169c
   MARK="$VLLM_ROOT/.sparkrun-patch5-$COMMIT"
-  if [ -e "$MARK" ] || grep -q "_reasoning_stop_guard" "$DETOK" 2>/dev/null; then
-    echo "[patch5] stop-in-reasoning guard already present, skipping"
+  if [ -e "$MARK" ] || grep -q "_reasoning_pending" "$DETOK" 2>/dev/null; then
+    echo "[patch5] output-side-arming stop-in-reasoning guard already present, skipping"
     exit 0
   fi
   echo "[patch5] fetching 0005-suppress-stops-in-reasoning.patch @ $COMMIT"
@@ -201,9 +209,9 @@ pre_exec:
   if ( cd "$VLLM_ROOT/.." && /opt/env/bin/git apply -p1 --verbose /tmp/patch5.patch ); then
     find "$VLLM_ROOT/v1/engine" -name __pycache__ -type d -prune -exec rm -rf {} + || true
     /opt/env/bin/python -m py_compile "$DETOK"
-    grep -q "_reasoning_stop_guard" "$DETOK" || { echo "[patch5] FATAL: applied but sentinel absent"; exit 1; }
+    grep -q "_reasoning_pending" "$DETOK" || { echo "[patch5] FATAL: applied but output-side sentinel absent"; exit 1; }
     touch "$MARK"
-    echo "[patch5] applied: client stop strings now dormant inside <think>"
+    echo "[patch5] applied: client stop strings now dormant inside <think> (prompt-side AND output-side)"
   else
     echo "[patch5] WARNING: patch did not apply against this vllm tree -- shipping WITHOUT Patch 5"
   fi
