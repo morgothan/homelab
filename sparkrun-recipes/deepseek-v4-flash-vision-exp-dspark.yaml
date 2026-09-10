@@ -5,13 +5,18 @@
 # (deepseek-v4-flash-0731-dspark-nvfp4kv.yaml). Not yet live on spark1 — deploy
 # and rollback steps are in README.md.
 #
-# Deltas from the upstream file (only two):
+# Deltas from the upstream file (three):
 #   1. port 8888 -> 8000    — our consumers all hit spark.hirschnet:8000.
 #   2. pre_exec: added Patch 5 (suppress-stops-in-reasoning), OUTPUT-SIDE-ARMING
 #      revision, pinned to main @ 43201d1c. Parity with our text prod recipe.
 #      Vision-Exp ships no chat template, so the model opens <think> as its first
 #      OUTPUT token — the prompt-side-only guard the text recipe carries would
 #      never arm here, hence the newer revision.
+#   3. JIT/compile cache env: repointed from /cache/runtime/* to
+#      /cache/huggingface/sr-cache/* (the text prod recipe's set). /cache/runtime
+#      is not container-writable on spark1/spark2 — FlashInfer's JIT logger got
+#      EPERM and model inspection failed. Our HF caches are node-local so the
+#      NFS race upstream's /cache/runtime guards against cannot occur here.
 #
 # Deltas from the DEPLOYED 0731 recipe you should know about before cutover:
 #   * model: DeepSeek-V4-Flash-Vision-Exp (adds native image input; text evals up
@@ -151,19 +156,23 @@ env:
   VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: "256"
   VLLM_MEMORY_PROFILER_ESTIMATE_CUDAGRAPHS: "0"
   VLLM_SKIP_INIT_MEMORY_CHECK: "1"
-  # The compile/JIT caches MUST be node-LOCAL. If the HF cache is shared between the two
-  # nodes over NFS (to avoid downloading 167 GB twice), BOTH TP ranks JIT into the same
-  # directories and you get, in order: a torch.compile makedirs race, DeepGEMM
-  # "runtime != nullptr" from half-written cubins, and an ABI-mismatched FlashInfer
-  # sampling.so (silent because FLASHINFER_DISABLE_VERSION_CHECK=1). The text recipe
-  # points VLLM_CACHE_ROOT into the HF cache and documents overriding all SEVEN onto a
-  # node-local path in that case. Here we point them at sparkrun's node-local runtime
-  # cache (/cache/runtime, bind of ~/.cache/sparkrun/runtime-cache on each host) so the
-  # vision port is safe regardless of how the HF cache is mounted. If /cache/runtime is
-  # not node-local on your fleet, repoint the seven vars below.
-  VLLM_CACHE_ROOT: /cache/runtime/vllm-cache
-  DG_JIT_CACHE_DIR: /cache/runtime/deepgemm-cache
-  TILELANG_CACHE_DIR: /cache/runtime/tilelang
+  # HOMELAB: upstream points these at /cache/runtime (a bind of
+  # ~/.cache/sparkrun/runtime-cache) as an NFS-race guard. On spark1/spark2 that
+  # path is NOT reliably writable by the container — FlashInfer's JIT logger hits
+  # `PermissionError: /cache/runtime/flashinfer/.cache/.../flashinfer_jit.log` and
+  # the model-class inspection fails ("architectures ['DeepseekV4VForConditional
+  # Generation'] failed to be inspected"). Our HF caches are node-local (not NFS),
+  # so the race upstream worries about can't happen here. Point ALL the JIT/compile
+  # caches at /cache/huggingface/sr-cache/* — the exact set the text prod recipe
+  # uses, on a mount sparkrun definitely provides and that is known-writable.
+  VLLM_CACHE_ROOT: /cache/huggingface/sr-cache/vllm
+  FLASHINFER_WORKSPACE_BASE: /cache/huggingface/sr-cache/vllm
+  FLASHINFER_CUBIN_DIR: /cache/huggingface/sr-cache/flashinfer-cubin
+  DG_JIT_CACHE_DIR: /cache/huggingface/sr-cache/deepgemm
+  TILELANG_CACHE_DIR: /cache/huggingface/sr-cache/tilelang
+  TORCHINDUCTOR_CACHE_DIR: /cache/huggingface/sr-cache/inductor
+  TRITON_CACHE_DIR: /cache/huggingface/sr-cache/triton
+  TORCH_EXTENSIONS_DIR: /cache/huggingface/sr-cache/torch-ext
   HF_HUB_DISABLE_XET: "1"
   VLLM_USE_FLASHINFER_SAMPLER: "1"
   VLLM_USE_B12X_MOE: "1"
