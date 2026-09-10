@@ -86,6 +86,7 @@ def snapshot(date_str: str) -> "dict | None":
         "loki_analysis":   today.get("loki_analysis"),
         "bans":            today.get("bans") or [],
         "newspaper":       newspaper,
+        "investigations":  today.get("investigations") or [],
         "generation_status": today.get("generation_status", "ok" if newspaper else "empty"),
         "capabilities":    today.get("capabilities") or {},
         "configuration":   today.get("configuration") or {},

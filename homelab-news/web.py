@@ -47,6 +47,39 @@ _blotter_cache: Optional[tuple[list, list, float]] = None  # (bans, probes, ts)
 BLOTTER_TTL = 60
 
 
+def _investigations_html(reports: list[dict]) -> str:
+    """Render completed read-only investigations beneath an edition."""
+    if not reports:
+        return ""
+    cards = []
+    for report in reports:
+        confidence = _h(str(report.get("confidence") or "low").title())
+        evidence = report.get("evidence") if isinstance(report.get("evidence"), list) else []
+        alternatives = report.get("alternatives") if isinstance(report.get("alternatives"), list) else []
+        next_checks = report.get("next_checks") if isinstance(report.get("next_checks"), list) else []
+
+        def items(values: list) -> str:
+            return "<ul>" + "".join(f"<li>{_h(str(value))}</li>" for value in values) + "</ul>" if values else ""
+
+        cards.append(
+            '<details class="card"><summary>'
+            f'<span class="card-title">{_h(str(report.get("headline") or "Investigation"))}</span>'
+            f'<span class="card-meta">{confidence} confidence</span></summary>'
+            f'<p>{_h(str(report.get("finding") or "No finding returned."))}</p>'
+            + (f'<p><strong>Impact:</strong> {_h(str(report.get("impact")))}</p>' if report.get("impact") else "")
+            + (f'<p><strong>Why investigated:</strong> {_h(str(report.get("triage_reason")))}</p>' if report.get("triage_reason") else "")
+            + ("<strong>Evidence</strong>" + items(evidence) if evidence else "")
+            + ("<strong>Alternatives</strong>" + items(alternatives) if alternatives else "")
+            + ("<strong>Read-only next checks</strong>" + items(next_checks) if next_checks else "")
+            + (f'<p><strong>Limitations:</strong> {_h(str(report.get("limitations")))}</p>' if report.get("limitations") else "")
+            + "</details>"
+        )
+    return (
+        '<details class="np-section" open><summary class="np-dispatch-head">Investigation Desk</summary>'
+        '<div class="grid" style="margin-top:16px">' + "".join(cards) + "</div></details>"
+    )
+
+
 def _init_page() -> str:
     body = (
         '<header class="mast"><hr class="rule-dbl">'
@@ -197,6 +230,7 @@ async def index():
         masthead_today(_built_at_text(today), stale=stale)
         + nav_bar("front")
         + articles_html
+        + _investigations_html(today.get("investigations") or [])
         + status
     )
     return Response(content=page_wrap(body, refresh=page_refresh),
@@ -240,6 +274,7 @@ async def current_events():
         masthead_rolling(now_str, stale=stale)
         + nav_bar("current")
         + articles_html
+        + _investigations_html(rolling.get("investigations") or [])
         + '<details class="np-section" open>'
         + '<summary class="np-dispatch-head">Field Dispatches</summary>'
         + '<div class="grid" style="margin-top:16px">'
@@ -521,6 +556,7 @@ async def archive_day(date_str: str):
         masthead_archive(date_str)
         + nav_bar("archive-day")
         + articles_html
+        + _investigations_html(rec.get("investigations") or [])
         + render_blotter_html(bans, collapsed=True)
         + '<div class="grid" style="margin-top:24px">'
         + log_card("Docker Container Logs", f"Full day &mdash; {_h(date_str)}",

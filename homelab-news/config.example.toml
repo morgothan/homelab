@@ -12,3 +12,4 @@ host_monitoring = true
 media = true
 updates = true
 trend_intelligence = true
+investigations = true

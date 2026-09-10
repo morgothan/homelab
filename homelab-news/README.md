@@ -36,6 +36,13 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Service timeline** (`/service/{name}`) | One service's chronological events from the 90-day ledger | Live from the event ledger |
 | **Search** (`/search`) | Full-text search over article headlines/blurbs across today, Current Events, and the archive | Live query |
 
+Operational editions also run an automatic Investigation Desk. A low-cost LLM
+triage pass asks whether each substantive incident has a realistically established
+cause and whether further analysis would be useful. At most two unresolved incidents
+per edition receive a deeper, read-only analysis of the collected log observations,
+event history, and timing correlations. Results are cached for 24 hours; the
+investigator cannot execute commands or make infrastructure changes.
+
 Generated articles use newspaper-style sections such as **City Hall**, **Public Safety**, **Weather**, **City Archives**, **Arts & Entertainment**, and **Public Works**. The most important item can be promoted to a lead story.
 
 ## Architecture
@@ -102,6 +109,7 @@ data/
   media_events.json       # retained Seerr request and availability events
   recent_media.json       # hourly seven-day media list and resolved Jellyfin links
   search_index.db         # SQLite FTS5 index of archived article text, rebuilt when stale
+  investigations.json    # cached automatic read-only incident investigations
   archive/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day

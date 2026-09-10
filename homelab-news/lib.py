@@ -3044,6 +3044,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
         "correlations":    correlations,
+        "investigations":  existing.get("investigations") or [],
         "capabilities":    capabilities,
         "configuration":   APP_SETTINGS.public_dict(),
     })
@@ -3081,6 +3082,22 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         generation_error = "LLM generation unavailable"
         log.warning("News generation unavailable; preserving previous edition in %s", target_file)
 
+    investigations = existing.get("investigations") or []
+    if getattr(features, "investigations", True) and newspaper:
+        from investigations import investigate_edition
+
+        investigations = await investigate_edition(
+            articles=articles,
+            docker_issues=docker_issues,
+            loki_issues=loki_issues,
+            events=ledger[:1000],
+            correlations=correlations,
+            cache_path=INVESTIGATIONS_FILE,
+            llm_url=VLLM_URL,
+            llm_model=VLLM_MODEL,
+            llm_timeout=OLLAMA_TIMEOUT,
+        )
+
     result = {
         "built_at":        built_at,
         "last_attempt_at": attempt_at,
@@ -3095,6 +3112,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
         "asn_suggestions": asn_suggestions,
         "media_events":    media_events,
         "correlations":    correlations,
+        "investigations":  investigations,
         "capabilities":    capabilities,
         "configuration":   APP_SETTINGS.public_dict(),
     }
