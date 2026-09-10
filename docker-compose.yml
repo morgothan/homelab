@@ -414,7 +414,7 @@ services:
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
   authelia:
     container_name: authelia
-    image: authelia/authelia:4.39.24
+    image: authelia/authelia:4.39.25
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"]
       interval: 30s
