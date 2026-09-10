@@ -112,7 +112,7 @@ services:
 
   tunnel-blue:
     <<: *tunnel-common
-    image: cloudflare/cloudflared:2026.8.3
+    image: cloudflare/cloudflared:2026.9.0
     container_name: cf-tunnel-blue
     profiles: [blue]
     depends_on:
@@ -145,7 +145,7 @@ services:
 
   tunnel-green:
     <<: *tunnel-common
-    image: cloudflare/cloudflared:2026.8.3
+    image: cloudflare/cloudflared:2026.9.0
     container_name: cf-tunnel-green
     profiles: [green]
     depends_on:
