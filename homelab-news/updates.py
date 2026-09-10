@@ -18,6 +18,7 @@ from config import (
     SPARK2_SSH_HOST,
     SSH_KEY, TRUENAS_SSH_HOST, UPDATE_INTERVAL, UPDATES_FILE,
 )
+from homelab_news.jellyfin import authorization_headers as jellyfin_auth_headers
 from config import APP_SETTINGS
 from runtime import run_loop
 from storage import load_json, save_json
@@ -300,7 +301,7 @@ async def check_jellyfin_update() -> dict:
         async with httpx.AsyncClient(timeout=10) as client:
             r = await client.get(
                 f"{JELLYFIN_URL}/System/Info",
-                headers={"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'},
+                headers=jellyfin_auth_headers(JELLYFIN_KEY),
             )
             r.raise_for_status()
             current_version = r.json().get("Version", "")

@@ -23,6 +23,7 @@ import tiktoken
 
 from homelab_news.collectors.loki import LokiCollector
 from homelab_news.capabilities import configured_capabilities
+from homelab_news.jellyfin import authorization_headers as jellyfin_auth_headers
 from operational_coverage import build_operational_alerts_article, select_news_issues
 
 log = logging.getLogger(__name__)
@@ -626,7 +627,7 @@ async def _fetch_recent_jellyfin_media(since: datetime) -> list[dict]:
         return load_media_events(since)
 
     since_utc = since.astimezone(timezone.utc)
-    headers = {"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}
+    headers = jellyfin_auth_headers(JELLYFIN_KEY)
     params = {
         "Recursive": "true",
         "IncludeItemTypes": "Movie,Episode",
@@ -917,7 +918,7 @@ async def resolve_jellyfin_links(media_events: list[dict]) -> dict[str, str]:
     if not unresolved:
         return links
 
-    headers = {"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}
+    headers = jellyfin_auth_headers(JELLYFIN_KEY)
     try:
         async with httpx.AsyncClient(timeout=10) as client:
             info_response = await client.get(f"{JELLYFIN_URL}/System/Info", headers=headers)
@@ -2387,7 +2388,7 @@ async def check_jellystat() -> dict:
             coros = []
             if JELLYFIN_KEY:
                 coros.append(client.get(f"{JELLYFIN_URL}/Sessions",
-                                        headers={"Authorization": f'MediaBrowser Token="{JELLYFIN_KEY}"'}))
+                                        headers=jellyfin_auth_headers(JELLYFIN_KEY)))
             if JELLYSTAT_KEY:
                 coros.append(client.get(f"{JELLYSTAT_URL}/stats/getViewsByLibraryType",
                                         params={"days": 7},
