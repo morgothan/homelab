@@ -13,6 +13,15 @@ import runtime
 import storage
 from homelab_news.capabilities import configured_capabilities
 from homelab_news.configuration import load_settings
+from homelab_news.jellyfin import authorization_headers
+
+
+class JellyfinAuthenticationTests(unittest.TestCase):
+    def test_api_key_uses_current_authorization_scheme(self):
+        headers = authorization_headers("example-key")
+        self.assertNotIn("X-Emby-Token", headers)
+        self.assertIn('MediaBrowser Token="example-key"', headers["Authorization"])
+        self.assertIn('Client="Homelab News"', headers["Authorization"])
 
 
 class ConfigurationTests(unittest.TestCase):
