@@ -343,7 +343,8 @@ services:
         #- traefik.http.routers.dozzle-http.middlewares=chain-authelia@file
       # chain-authelia-nowaf minus test-errors: Dozzle returns 404 on /api/cloud/config
       # intentionally; test-errors would replace it with HTML breaking the Vue frontend.
-      - traefik.http.routers.dozzle-http.middlewares=realip@file,robotstxt@file,middlewares-rate-limit@file,middlewares-secure-headers@file,fail2ban@file,middlewares-authelia@file
+      # Fail2ban v0.9.0 stalls Dozzle SSE streams, even with immediate flushing.
+      - traefik.http.routers.dozzle-http.middlewares=realip@file,robotstxt@file,middlewares-rate-limit@file,middlewares-secure-headers@file,middlewares-authelia@file
       - traefik.http.routers.dozzle-http.service=dozzle
       - traefik.http.routers.dozzle-http.tls.certresolver=letsencrypt
       - traefik.http.routers.dozzle-http.tls.domains[0].main=${DOMAIN}
