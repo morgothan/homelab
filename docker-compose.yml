@@ -202,7 +202,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.2.1
+    image: grafana/grafana:13.2.2
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -318,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.0.1
+    image: amir20/dozzle:v11.1.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -414,7 +414,7 @@ services:
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
   authelia:
     container_name: authelia
-    image: authelia/authelia:4.39.26
+    image: authelia/authelia:4.39.27
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9091/api/health || exit 1"]
       interval: 30s
