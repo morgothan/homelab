@@ -318,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.1.0
+    image: amir20/dozzle:v11.1.1
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -546,7 +546,7 @@ services:
 ########## Tdarr Exporter
 # Exports Tdarr media transcoding metrics to Prometheus
   tdarr-exporter:
-    image: homeylab/tdarr-exporter:3.0.0
+    image: homeylab/tdarr-exporter:3.1.0
     container_name: tdarr-exporter
     restart: unless-stopped
     logging: *logging
@@ -589,7 +589,7 @@ services:
 ########## Redis
 # Shared session store for Authelia (db 0) and Traefik (db 1), exposed to LAN on :6379
   redis:
-    image: redis:8.10.1
+    image: redis:8.10.2
       #image: docker.io/valkey/valkey:latest
     container_name: redis
     healthcheck:
@@ -624,7 +624,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.91.1
+    image: oliver006/redis_exporter:v1.92.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -875,7 +875,7 @@ services:
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
-    image: henrygd/beszel-agent:0.19.0
+    image: henrygd/beszel-agent:0.20.0
     container_name: "beszel-agent"
     restart: unless-stopped
     logging: *logging
@@ -1285,7 +1285,11 @@ services:
 ########## CrowdSec Cloudflare Bouncer
 # Syncs CrowdSec decisions (community blocklist + local detections) to a Cloudflare IP List
   crowdsec-cloudflare-bouncer:
-    image: ghcr.io/crowdsecurity/cloudflare-bouncer:latest
+    # Upstream v0.3.0 uses the retired Firewall Rules API. Local compatibility
+    # build uses Rulesets API without replacing unrelated zone rules.
+    build: ./crowdsec/cloudflare-bouncer
+    image: crowdsec-cloudflare-bouncer:0.3.0-rulesets.1
+    pull_policy: never
     container_name: crowdsec-cloudflare-bouncer
     restart: unless-stopped
     logging: *logging
@@ -1298,6 +1302,8 @@ services:
       - CF_ACCOUNT_ID=${CF_ACCOUNT_ID}
       - CF_ZONE_ID=${CF_ZONE_ID}
       - CF_CROWDSEC_TOKEN=${CF_CROWDSEC_TOKEN}
+      # Existing WAF-capable token; list operations retain their own credential.
+      - CF_CROWDSEC_WAF_TOKEN=${CF_FAIL2BAN_TOKEN}
     networks:
       - ${DOCKERNET}
     labels:

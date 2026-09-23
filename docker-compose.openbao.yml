@@ -43,7 +43,7 @@ services:
       - bao-internal
 
   openbao-unsealer:
-    image: alpine:3.24.1
+    image: alpine:3.24.2
     container_name: openbao-unsealer
     restart: unless-stopped
     logging: *logging
