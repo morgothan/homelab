@@ -4,6 +4,7 @@ import json
 import logging
 import os
 from typing import Any
+from privacy import redact_data
 
 
 log = logging.getLogger(__name__)
@@ -34,7 +35,7 @@ def save_json(path: str, data: Any) -> None:
         if parent:
             os.makedirs(parent, exist_ok=True)
         with open(temporary_path, "w", encoding="utf-8") as destination:
-            json.dump(data, destination, ensure_ascii=False)
+            json.dump(redact_data(data), destination, ensure_ascii=False)
             destination.flush()
             os.fsync(destination.fileno())
         os.replace(temporary_path, path)

@@ -25,7 +25,7 @@ from config import (
 from config import APP_SETTINGS
 from articles import parse_llm_json
 from correlations import events_since
-from lib import _sanitize_for_llm
+from llm import _sanitize_for_llm
 from runtime import run_loop
 from storage import load_json, save_json
 

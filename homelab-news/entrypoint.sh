@@ -7,6 +7,8 @@ install -d -m 0700 -o appuser -g appuser /home/appuser/.ssh /home/appuser/.docke
 install -m 0400 -o appuser -g appuser \
     /run/secrets/monitoring_ssh_key /home/appuser/.ssh/id_ed25519
 install -m 0400 -o appuser -g appuser \
+    /run/secrets/monitoring_known_hosts /home/appuser/.ssh/known_hosts
+install -m 0400 -o appuser -g appuser \
     /run/secrets/docker_config.json /home/appuser/.docker/config.json
 
 # Docker creates the inherited log pipes as root. Supervisor reopens them for

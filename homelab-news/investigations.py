@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 
 from storage import load_json, save_json
+from privacy import redact_data
 
 log = logging.getLogger(__name__)
 
@@ -75,7 +76,7 @@ async def _complete(*, url: str, model: str, timeout: int, system: str,
                     "model": model,
                     "messages": [
                         {"role": "system", "content": system},
-                        {"role": "user", "content": json.dumps(payload, ensure_ascii=False)},
+                        {"role": "user", "content": json.dumps(redact_data(payload), ensure_ascii=False)},
                     ],
                     "stream": False,
                     "temperature": 0.1,

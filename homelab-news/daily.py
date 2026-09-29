@@ -10,7 +10,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from config import ARCHIVE_DIR, ARCHIVE_FILE, ARCHIVE_INDEX, TODAY_FILE
-from lib import hindsight_retain_newspaper
+from hindsight import hindsight_retain_newspaper
 from storage import load_json, save_json
 
 _ET = ZoneInfo("America/New_York")

@@ -1086,6 +1086,24 @@ services:
 
 ########## Homelab Monitor
 # Plain-text status page — container health, image updates, Docker + syslog analysis
+  lab-monitor-docker-api:
+    image: haproxy:3.4.6-alpine
+    container_name: lab-monitor-docker-api
+    restart: unless-stopped
+    user: "65534:996"
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    networks:
+      - news-docker-api
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./homelab-news/docker-api-proxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+    labels:
+      - traefik.enable=false
+
   lab-monitor:
     build: ./homelab-news
     container_name: lab-monitor
@@ -1099,10 +1117,13 @@ services:
       - SYS_ADMIN
     networks:
       - ${DOCKERNET}
+      - news-docker-api
+    depends_on:
+      - lab-monitor-docker-api
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
       - ${USERDIR}/.docker/config.json:/run/secrets/docker_config.json:ro
       - ${USERDIR}/.ssh/id_ed25519:/run/secrets/monitoring_ssh_key:ro
+      - ${USERDIR}/.ssh/known_hosts:/run/secrets/monitoring_known_hosts:ro
       - ${USERDIR}/docker/homelab-news/data:/data
       - ${USERDIR}/docker/jellyseerr/settings.json:/seerr/settings.json:ro
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
@@ -1116,6 +1137,7 @@ services:
       - HINDSIGHT_URL=${HINDSIGHT_URL}    # optional: enables memory recall/retain for wire report + log analysis
       - HINDSIGHT_BANK=${HINDSIGHT_BANK}
       - REMOTE_DOCKER_HOSTS=${REMOTE_DOCKER_HOSTS}
+      - DOCKER_HOST=tcp://lab-monitor-docker-api:2375
       - DOCKER_AUTH_FILE=/home/appuser/.docker/config.json
       - SSH_KEY=/home/appuser/.ssh/id_ed25519
       - PROMETHEUS_URL=http://prometheus:9090
@@ -1357,6 +1379,8 @@ services:
       - traefik.enable=false
 
 networks:
+  news-docker-api:
+    internal: true
   proxy:  #create with docker network create proxy
     external: {}
   dmz:          # Isolated network for public-facing containers with no auth (heyshutup, steph)
