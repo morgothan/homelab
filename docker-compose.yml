@@ -160,7 +160,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:v3.14.0
+    image: prom/prometheus:v3.15.0
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -202,7 +202,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.2.2
+    image: grafana/grafana:13.2.3
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -318,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.1.1
+    image: amir20/dozzle:v11.1.2
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -624,7 +624,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.92.0
+    image: oliver006/redis_exporter:v1.92.1
     container_name: redis-exporter
     depends_on:
       - redis
@@ -787,7 +787,7 @@ services:
 # Media request management for Jellyfin — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
-    image: ghcr.io/seerr-team/seerr:v3.4.1
+    image: ghcr.io/seerr-team/seerr:v3.5.0
     init: true
     container_name: overseerr
     environment:
