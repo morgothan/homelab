@@ -11,6 +11,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import lib
+import hindsight
 from correlations import (
     append_events,
     build_cycle_events,
@@ -346,13 +347,35 @@ class GroupByIpTests(unittest.TestCase):
         # Grandstream DECT base: [MAC][firmware-version][pid] prefix. The 1.0.3.25
         # is the firmware version, not a source IP — it must not be aggregated on.
         issues = [
-            self._issue(f"USER.ERROR [ec:74:d7:aa:bf:b4][1.0.3.25][{pid}] "
+            self._issue(f"USER.ERROR [02:00:00:00:00:01][1.0.3.25][{pid}] "
                         "could not download https://fm.grandstream.com/gs/dp755fw.bin (No error)")
             for pid in (111, 222, 333, 444)
         ]
         grouped = lib._group_by_ip(issues)
         self.assertEqual(len(grouped), 4)
         self.assertFalse(any("patterns from 1.0.3.25" in i["message"] for i in grouped))
+
+    def test_sip_phone_prefix_without_pid_is_not_treated_as_an_ip(self):
+        # Some Grandstream messages omit the PID field entirely. These were the
+        # form that escaped the original prefix handling in production.
+        issues = [
+            self._issue("USER.ERROR [02:00:00:00:00:01][1.0.3.25] "
+                        f"could not download https://fm.grandstream.com/config-{n}.xml (No error)")
+            for n in range(4)
+        ]
+        grouped = lib._group_by_ip(issues)
+        self.assertEqual(len(grouped), 4)
+        self.assertFalse(any("patterns from 1.0.3.25" in i["message"] for i in grouped))
+
+    def test_sip_phone_prefix_is_labeled_for_llm(self):
+        without_pid = lib._label_sip_phone_prefix(
+            "USER.ERROR [02:00:00:00:00:01][1.0.3.25] unable to download config data"
+        )
+        with_pid = lib._label_sip_phone_prefix(
+            "USER.ERROR [02:00:00:00:00:01][1.0.3.25][831509568] transport error"
+        )
+        self.assertIn("[device 02:00:00:00:00:01][firmware 1.0.3.25]", without_pid)
+        self.assertIn("[firmware 1.0.3.25][pid 831509568]", with_pid)
 
     def test_real_lan_ip_still_aggregates(self):
         issues = [self._issue(f"denied connection from 192.168.1.50 attempt {n}") for n in range(4)]
@@ -364,11 +387,11 @@ class GroupByIpTests(unittest.TestCase):
 
 class TargetedRecallTests(unittest.TestCase):
     def test_targeted_recall_deduplicates_and_caches_queries(self):
-        lib._TARGETED_RECALL_CACHE.clear()
+        hindsight._TARGETED_RECALL_CACHE.clear()
         recall = AsyncMock(side_effect=["first", "second"])
-        with patch.object(lib, "hindsight_recall", recall):
-            result = asyncio.run(lib.hindsight_targeted_recall(["traefik", "traefik", "loki"]))
-            cached = asyncio.run(lib.hindsight_targeted_recall(["traefik", "loki"]))
+        with patch.object(hindsight, "hindsight_recall", recall):
+            result = asyncio.run(hindsight.hindsight_targeted_recall(["traefik", "traefik", "loki"]))
+            cached = asyncio.run(hindsight.hindsight_targeted_recall(["traefik", "loki"]))
 
         self.assertEqual(result, "first\nsecond")
         self.assertEqual(cached, result)

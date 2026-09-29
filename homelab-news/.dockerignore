@@ -1,0 +1,7 @@
+data/
+tests/
+__pycache__/
+**/__pycache__/
+*.pyc
+.env*
+REFACTOR_REVIEW.md

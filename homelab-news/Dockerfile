@@ -4,12 +4,14 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends gosu skopeo openssh-client \
     && rm -rf /var/lib/apt/lists/* \
     && groupadd -r -g 1001 appuser \
-    && groupadd -r -g 996 docker \
-    && useradd -r -u 1001 -g appuser -G docker -m -d /home/appuser appuser
+    && useradd -r -u 1001 -g appuser -m -d /home/appuser appuser
 
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+ENV TIKTOKEN_CACHE_DIR=/opt/tiktoken-cache
+RUN python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base"); tiktoken.get_encoding("o200k_base")' \
+    && chmod -R a+rX /opt/tiktoken-cache
 COPY *.py supervisord.conf entrypoint.sh ./
 COPY homelab_news ./homelab_news
 RUN chmod 0755 /app/entrypoint.sh

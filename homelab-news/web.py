@@ -21,23 +21,32 @@ from config import (
     UPDATE_INTERVAL, UPDATES_FILE,
 )
 from search import ensure_index, search_archive, search_current_articles
-from storage import load_json, save_json
+from storage import load_json as _load_json, save_json
+from privacy import redact_data
+from webhooks import authenticated_payload
 
-from lib import (
+from templates import (
     _FAVICON_SVG, _CSS,
-    get_container_status, get_container_status_async, check_fail2ban_bans, enrich_ips,
-    _suggest_asn_blocks, check_asn_blocks,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
     render_articles_html, render_blotter_html, render_blotter_skeleton,
     render_asn_suggestions_html, render_asn_blocklist_html, render_library_scan_html, render_recent_media_html,
     _render_ban_row,
     log_card, containers_card, updates_card, update_howto, alerts_card,
 )
+from security import (
+    check_fail2ban_bans, enrich_ips, _suggest_asn_blocks, check_asn_blocks,
+)
+from containers import get_container_status, get_container_status_async
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-app = FastAPI()
+app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
+
+
+def load_json(path):
+    """Also protect archived snapshots written before credential redaction."""
+    return redact_data(_load_json(path))
 
 _MEDIA_EVENT_LIMIT = 500
 
@@ -151,10 +160,7 @@ def _built_at_text(record: dict) -> str:
 @app.post("/api/events/seerr")
 async def receive_seerr_event(request: Request):
     """Receive Seerr's generic webhook and retain a bounded event history."""
-    try:
-        payload = await request.json()
-    except Exception:
-        return JSONResponse({"error": "invalid JSON"}, status_code=400)
+    payload = await authenticated_payload(request)
     if not isinstance(payload, dict):
         return JSONResponse({"error": "JSON object required"}, status_code=400)
 

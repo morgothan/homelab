@@ -33,11 +33,12 @@ sys.path.insert(0, os.path.dirname(__file__))
 from config import ARCHIVE_FILE, MAX_MONTHLY, MAX_WEEKLY, PERIODIC_FILE
 from storage import load_json, save_json
 
+from security import check_loki
 from lib import (
-    check_loki,
     generate_newspaper, generate_periodic_summary,
-    llm_analysis, _ban_summary,
+    _ban_summary,
 )
+from llm import llm_analysis
 
 logging.basicConfig(
     level=logging.INFO,

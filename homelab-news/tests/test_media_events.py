@@ -14,6 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import lib
 import media
 import web
+import webhooks
+from templates import render_articles_html, render_recent_media_html
 
 
 class MediaEventTests(unittest.TestCase):
@@ -60,12 +62,12 @@ class MediaEventTests(unittest.TestCase):
             "media": {"mediaType": "episode"},
         }
         with tempfile.TemporaryDirectory() as tmp, \
-             patch.object(lib, "MEDIA_LINKS_FILE", os.path.join(tmp, "links.json")), \
-             patch.object(lib, "JELLYFIN_URL", "http://jellyfin"), \
-             patch.object(lib, "JELLYFIN_KEY", "key"), \
-             patch.object(lib, "JELLYFIN_WEB_URL", "https://watch.example"), \
-             patch.object(lib.httpx, "AsyncClient", Client):
-            links = asyncio.run(lib.resolve_jellyfin_links([event]))
+             patch.object(media, "MEDIA_LINKS_FILE", os.path.join(tmp, "links.json")), \
+             patch.object(media, "JELLYFIN_URL", "http://jellyfin"), \
+             patch.object(media, "JELLYFIN_KEY", "key"), \
+             patch.object(media, "JELLYFIN_WEB_URL", "https://watch.example"), \
+             patch.object(media.httpx, "AsyncClient", Client):
+            links = asyncio.run(media.resolve_jellyfin_links([event]))
 
         self.assertEqual(Client.search_params["SearchTerm"], "Athens: Birth of Democracy")
         self.assertIn("id=episode-1", links[event["subject"]])
@@ -106,15 +108,15 @@ class MediaEventTests(unittest.TestCase):
                      "DateCreated": (now - timedelta(days=8)).isoformat()},
                 ]})
 
-        with patch.object(lib, "JELLYFIN_URL", "http://jellyfin"), \
-             patch.object(lib, "JELLYFIN_KEY", "key"), \
-             patch.object(lib, "RADARR_URL", ""), \
-             patch.object(lib, "RADARR_API_KEY", ""), \
-             patch.object(lib, "SONARR_URL", ""), \
-             patch.object(lib, "SONARR_API_KEY", ""), \
-             patch.object(lib, "SEERR_SETTINGS_FILE", ""), \
-             patch.object(lib.httpx, "AsyncClient", Client):
-            events = asyncio.run(lib.fetch_recent_media(now - timedelta(days=7)))
+        with patch.object(media, "JELLYFIN_URL", "http://jellyfin"), \
+             patch.object(media, "JELLYFIN_KEY", "key"), \
+             patch.object(media, "RADARR_URL", ""), \
+             patch.object(media, "RADARR_API_KEY", ""), \
+             patch.object(media, "SONARR_URL", ""), \
+             patch.object(media, "SONARR_API_KEY", ""), \
+             patch.object(media, "SEERR_SETTINGS_FILE", ""), \
+             patch.object(media.httpx, "AsyncClient", Client):
+            events = asyncio.run(media.fetch_recent_media(now - timedelta(days=7)))
 
         self.assertEqual(
             [event["subject"] for event in events],
@@ -158,8 +160,8 @@ class MediaEventTests(unittest.TestCase):
             async def get(self, *args, **kwargs):
                 return Response()
 
-        with patch.object(lib.httpx, "AsyncClient", Client):
-            events = asyncio.run(lib._fetch_arr_history(
+        with patch.object(media.httpx, "AsyncClient", Client):
+            events = asyncio.run(media._fetch_arr_history(
                 "http://radarr", "key", now - timedelta(days=7), "movie",
             ))
 
@@ -170,8 +172,12 @@ class MediaEventTests(unittest.TestCase):
     def test_webhook_persists_normalized_event(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = os.path.join(tmp, "media_events.json")
-            with patch.object(web, "MEDIA_EVENTS_FILE", path):
-                response = TestClient(web.app).post("/api/events/seerr", json={
+            with patch.object(web, "MEDIA_EVENTS_FILE", path), patch.object(
+                webhooks, "webhook_authorization", return_value="Bearer test-webhook-secret"
+            ):
+                response = TestClient(web.app).post("/api/events/seerr", headers={
+                    "Authorization": "Bearer test-webhook-secret"
+                }, json={
                     "notification_type": "MEDIA_AVAILABLE",
                     "event": "Movie Request Now Available",
                     "subject": "Example Movie (2026)",
@@ -186,7 +192,10 @@ class MediaEventTests(unittest.TestCase):
             self.assertEqual(events[0]["subject"], "Example Movie (2026)")
 
     def test_webhook_rejects_empty_payload(self):
-        response = TestClient(web.app).post("/api/events/seerr", json={})
+        with patch.object(webhooks, "webhook_authorization", return_value="Bearer test-webhook-secret"):
+            response = TestClient(web.app).post("/api/events/seerr", json={}, headers={
+                "Authorization": "Bearer test-webhook-secret"
+            })
         self.assertEqual(response.status_code, 400)
 
     def test_load_media_events_filters_by_window(self):
@@ -200,8 +209,8 @@ class MediaEventTests(unittest.TestCase):
             path = os.path.join(tmp, "media_events.json")
             with open(path, "w") as f:
                 json.dump(events, f)
-            with patch.object(lib, "MEDIA_EVENTS_FILE", path):
-                result = lib.load_media_events(now - timedelta(hours=12))
+            with patch.object(media, "MEDIA_EVENTS_FILE", path):
+                result = media.load_media_events(now - timedelta(hours=12))
         self.assertEqual([event["event"] for event in result], ["recent"])
 
     def test_library_additions_are_one_deduplicated_story(self):
@@ -212,7 +221,7 @@ class MediaEventTests(unittest.TestCase):
             {"event": "Movie Request Now Available", "subject": "example movie (2026)"},
             {"event": "Movie Request Automatically Approved", "subject": "Pending Movie (2026)"},
         ]
-        article = lib.build_library_additions_article(events)
+        article = media.build_library_additions_article(events)
         self.assertEqual(article["headline"], "2 New Library Additions")
         self.assertEqual(article["section"], "Arts & Entertainment")
         self.assertIn("Example Movie (2026)", article["blurb"])
@@ -229,14 +238,14 @@ class MediaEventTests(unittest.TestCase):
              "lookup_title": "Example Movie", "media": {"mediaType": "movie"}},
         ]
 
-        article = lib.build_library_additions_article(events)
+        article = media.build_library_additions_article(events)
 
         self.assertEqual(article["headline"], "3 New Library Additions")
         self.assertIn("2 new episodes of Shōgun", article["blurb"])
         self.assertIn("Example Movie (2026)", article["blurb"])
         self.assertNotIn("Shōgun S01E01", article["blurb"])
 
-        html = lib.render_articles_html([article])
+        html = render_articles_html([article])
         self.assertIn('<ul class="np-media-additions">', html)
         self.assertIn("<li>2 new episodes of Shōgun</li>", html)
         self.assertIn("<li>Example Movie (2026)</li>", html)
@@ -249,17 +258,17 @@ class MediaEventTests(unittest.TestCase):
              "lookup_title": "Shōgun", "media": {"mediaType": "episode"}},
         ]
 
-        html = lib.render_recent_media_html(events)
+        html = render_recent_media_html(events)
 
         self.assertIn("Shōgun S01E01", html)
         self.assertIn("Shōgun S01E02", html)
         self.assertNotIn("2 new episodes", html)
 
     def test_library_card_is_not_promoted_to_lead_story(self):
-        article = lib.build_library_additions_article([
+        article = media.build_library_additions_article([
             {"notification_type": "MEDIA_AVAILABLE", "subject": "Example Movie (2026)"},
         ])
-        html = lib.render_articles_html([article])
+        html = render_articles_html([article])
         self.assertIn("Arts &amp; Entertainment", html)
         self.assertIn("1 New Library Addition", html)
         self.assertNotIn("Lead Story", html)
@@ -275,7 +284,7 @@ class MediaEventTests(unittest.TestCase):
             "subject": "Example Movie (2026)",
         }]
 
-        merged = lib.merge_library_additions(articles, events)
+        merged = media.merge_library_additions(articles, events)
 
         arts = [a for a in merged if a["section"] == "Arts & Entertainment"]
         self.assertEqual(arts[0]["source"], "seerr-library-additions")
@@ -333,7 +342,7 @@ class MediaEventTests(unittest.TestCase):
         events = [{"notification_type": "MEDIA_AVAILABLE", "subject": "A & B (2026)"}]
         url = "https://jellyfin.example/web/#/details?id=item&serverId=server"
 
-        html = lib.render_recent_media_html(events, {"A & B (2026)": url})
+        html = render_recent_media_html(events, {"A & B (2026)": url})
 
         self.assertIn('href="https://jellyfin.example/web/#/details?id=item&amp;serverId=server"', html)
         self.assertIn("A &amp; B (2026)</a>", html)

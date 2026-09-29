@@ -154,9 +154,34 @@ All configuration is supplied through environment variables. Values containing c
 |----------|-------------|---------|
 | `REMOTE_DOCKER_HOSTS` | Comma-separated remote targets. Each entry may use `label=url`; supported URL schemes include `ssh://`, `tcp://`, and `pct://` | Empty |
 | `SSH_KEY` | Dedicated private key used for remote checks | `/home/appuser/.ssh/id_ed25519` |
+| `SSH_KNOWN_HOSTS` | Verified SSH host keys; unknown or changed keys are rejected | `/home/appuser/.ssh/known_hosts` |
 | `DOCKER_AUTH_FILE` | Registry authentication file used by `skopeo` | `/home/appuser/.docker/config.json` |
 | `SKOPEO_TIMEOUT` | Remote image-inspection timeout in seconds | `20` |
 | `GITHUB_TOKEN` | Optional token that raises the release-information API rate limit | Empty |
+
+The Compose deployment connects local Docker collectors through an isolated
+HAProxy service. It allows only container list/inspect/log and image-inspect
+GET requests plus API negotiation; the app has no Docker socket mount or Docker
+group membership. The proxy has no published port and uses a private internal
+network. Remote Docker endpoints retain their independently configured access
+controls.
+
+Provision verified keys in the host's SSH `known_hosts` before deployment. The
+entry point copies that file and the monitoring key into the unprivileged user's
+private SSH directory. Rotate host keys only after verifying the new identity.
+
+The Seerr webhook requires the exact Authorization header configured in Seerr's
+webhook agent (`options.authHeader`), read through `SEERR_SETTINGS_FILE`. Configure
+a random `Bearer` token in Seerr; missing configuration fails closed with 503,
+wrong credentials return 401, and bodies larger than 16 KiB return 413. Tokens
+must not be placed in URLs or committed to Git.
+
+Credential redaction runs before operational logs are stored or sent to inference,
+and before archived snapshots are rendered. It covers credential assignments,
+Authorization values, URL passwords, private-key blocks, and known configured
+secrets. It is defense in depth, not a substitute for keeping secrets out of source
+logs. Private operational data is still intended for trusted viewers; public
+routing must retain authentication.
 
 Example using role-based, non-production names:
 

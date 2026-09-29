@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
+from ssh_transport import ssh_arguments
 
 from config import (
     ADGUARD_PASSWORD, ADGUARD_URLS, ADGUARD_USERNAME, BESZEL_SSH_HOST, HERMES_SSH_HOST,
@@ -23,11 +24,12 @@ from config import APP_SETTINGS
 from runtime import run_loop
 from storage import load_json, save_json
 
-from lib import (
+from containers import (
     remote_digest, parse_image_ref, latest_semver_tag, _semver_sort_key,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
-    fetch_github_release_notes, llm_changelog_analysis, generate_homelab_intel,
 )
+from llm import llm_changelog_analysis, generate_homelab_intel
+from lib import fetch_github_release_notes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("updates")
@@ -159,9 +161,7 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
 async def _ssh_run(host: str, cmd: str, timeout: int = 45) -> tuple[bool, str]:
     """Run cmd over SSH, return (success, stdout)."""
     proc = await asyncio.create_subprocess_exec(
-        "ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
-        "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10",
-        "-i", SSH_KEY, host, cmd,
+        *ssh_arguments(), host, cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
