@@ -318,7 +318,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.1.3
+    image: amir20/dozzle:v11.2.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -583,7 +583,7 @@ services:
       - ${DOCKERNET}
     volumes:
       - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
-    image: prompve/prometheus-pve-exporter:3.10.0
+    image: prompve/prometheus-pve-exporter:3.10.1
 
 
 ########## Redis
@@ -624,7 +624,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.92.1
+    image: oliver006/redis_exporter:v1.93.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -875,7 +875,7 @@ services:
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
-    image: henrygd/beszel-agent:0.20.0
+    image: henrygd/beszel-agent:0.21.0
     container_name: "beszel-agent"
     restart: unless-stopped
     logging: *logging
