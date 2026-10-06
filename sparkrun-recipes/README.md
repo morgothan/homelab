@@ -33,16 +33,15 @@ two in sync by hand. sha of the vendored/deployed pair: `924d5a3f…`.
   non-fatal if it fails to apply (server still serves, reasoning replies can be
   truncated when a client sends stop strings). Verified with `git apply --check`
   against the pinned image before shipping.
-
-### Delta from the 2026-08-27 original export
-
-- `num_speculative_tokens` 3 → 5 — upstream retracted all k=3 guidance.
-- `pre_exec` step 3 applies tonyd2wild **Patch 5**
-  (`0005-suppress-stops-in-reasoning.patch` @ `0fec8084`) via `git apply` inside
-  the container, pinned to the container's vllm tree (0.21.1-dev). Idempotent;
-  non-fatal if it fails to apply (server still serves, reasoning replies can be
-  truncated when a client sends stop strings). Verified with `git apply --check`
-  against the pinned image before shipping.
+- **2026-09-16:** added `VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: '1800'`. Fixes
+  upstream issue #8 (closed 2026-09-02, PR #51): a request that hits an
+  MoE/batch shape the warmup never covered triggers a JIT compile mid-inference;
+  the worker blocks past vLLM's 300s default inference-time RPC deadline and the
+  engine dies (`CUBLAS_STATUS_INTERNAL_ERROR` → `EngineDeadError` → NCCL
+  timeout, container exits 0) — reported under tool-calling traffic, i.e. our
+  Hermes usage pattern. Upstream shipped the 1800s default in their compose
+  file/vision launcher/env example but **not** in their own sparkrun recipe;
+  neither of our vendored recipes carried it, so added directly here.
 
 ### Deploy / update
 
