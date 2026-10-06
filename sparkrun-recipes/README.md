@@ -14,7 +14,7 @@ It is **vendored verbatim** from the live copy on spark1 at
 `~/.config/sparkrun/services/sparkrun-deepseek/recipe.yaml`, which is what
 `sparkrun-deepseek.service` (systemd, system scope) actually loads. This file is
 the version-controlled mirror — spark1 is the runtime source of truth. Keep the
-two in sync by hand. sha of the vendored/deployed pair: `924d5a3f…`.
+two in sync by hand. sha of the vendored/deployed pair: `762e0d6f…`.
 
 > **2026-09-10 — a migration to `deepseek-v4-flash-vision-exp-dspark.yaml` was
 > deployed and then rolled back the same day.** Vision-Exp OOM'd spark1 into a
@@ -42,6 +42,11 @@ two in sync by hand. sha of the vendored/deployed pair: `924d5a3f…`.
   Hermes usage pattern. Upstream shipped the 1800s default in their compose
   file/vision launcher/env example but **not** in their own sparkrun recipe;
   neither of our vendored recipes carried it, so added directly here.
+- **2026-09-30:** live-only drift discovered and backported — `NCCL_IB_GID_INDEX: '2'`
+  was added to spark1's running recipe but never ported back to this vendored
+  copy. Pins NCCL to RoCEv2 GID table entry 2 on the CX7 links. Found during a
+  2026-10-06 deploy dry-run (diffing this file against the live copy before
+  restarting); backported here with no live change, since spark1 already had it.
 
 ### Deploy / update
 
