@@ -658,6 +658,7 @@ services:
       - SSHKEY=/ssh/id_ed25519
       - COMMAND=/home/nat/docker/bin/start-tmux.sh
       - TITLE=traefik.${LOCAL}
+      - ALLOWEDORIGINS=https://shell.${DOMAIN}
     labels:
       - traefik.enable=true
       - traefik.http.routers.wetty.entrypoints=https
