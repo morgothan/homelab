@@ -7,6 +7,16 @@
 #   - num_speculative_tokens 3 -> 5   (upstream retracted all k=3 guidance)
 #   - pre_exec step 3 added: applies tonyd2wild Patch 5 (0005-suppress-stops-in-
 #     reasoning) so client stop strings can't truncate a response mid-<think>.
+#   - 2026-09-16: added VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS=1800. Upstream issue
+#     #8 (closed 2026-09-02, fixed in PR #51): a request hitting an MoE/batch
+#     shape the warmup never covered triggers a mid-inference JIT compile: the
+#     worker blocks past vLLM's 300s default inference-time RPC deadline and
+#     the engine gets killed (CUBLAS_STATUS_INTERNAL_ERROR -> EngineDeadError
+#     -> NCCL timeout, container exits 0) -- reported under tool-calling
+#     traffic, i.e. our exact Hermes usage pattern. Upstream shipped the 1800s
+#     default in their compose file/vision launcher/env example but NOT in
+#     their own sparkrun recipe -- adding it here directly since neither
+#     recipe carried it.
 #   - 2026-09-10: Patch 5 pin bumped 0fec8084 -> 43201d1c (OUTPUT-SIDE ARMING
 #     revision, "Extended-by: Mcray4"). The old pin only armed when <think> was
 #     in the PROMPT; the model can also open <think> as its first OUTPUT token
@@ -115,6 +125,7 @@ defaults:
 env:
   PYTHONUNBUFFERED: '1'
   VLLM_ENGINE_READY_TIMEOUT_S: '3600'
+  VLLM_EXECUTE_MODEL_TIMEOUT_SECONDS: '1800'
   VLLM_ALLOW_LONG_MAX_MODEL_LEN: '1'
   VLLM_TRITON_MLA_SPARSE: '1'
   VLLM_SPARSE_INDEXER_MAX_LOGITS_MB: '256'
