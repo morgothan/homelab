@@ -168,6 +168,7 @@ env:
   PYTORCH_CUDA_ALLOC_CONF: expandable_segments:True
   NCCL_CUMEM_ENABLE: '0'
   NCCL_NVLS_ENABLE: '0'
+  NCCL_IB_GID_INDEX: '2'
 pre_exec:
 - |
   if [ ! -x /usr/bin/kill ] && [ ! -x /bin/kill ] && [ ! -x /usr/local/bin/kill ]; then
