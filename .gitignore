@@ -86,7 +86,9 @@ traefik/monitor/
 traefik/fail2ban-state.json
 
 # CrowdSec runtime data (owned by root)
-crowdsec/
+crowdsec/*
+!crowdsec/cloudflare-bouncer/
+!crowdsec/cloudflare-bouncer.yaml.template
 
 # Smokeping runtime config and RRD data
 smokeping/config/
