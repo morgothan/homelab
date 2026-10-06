@@ -33,6 +33,11 @@ from privacy import redact_text
 
 log = logging.getLogger(__name__)
 
+# Generic labels that identify no real host — a sender that lost track of its own
+# hostname (e.g. rsyslog caching it at daemon start before it was set) still reports
+# one of these literally. Don't let that read as a resolved device identity downstream.
+_AMBIGUOUS_HOSTS = {"localhost", "127.0.0.1", "0.0.0.0", "unknown", ""}
+
 # ── Log filtering ─────────────────────────────────────────────────────────────
 
 NOISE = re.compile(
@@ -383,6 +388,11 @@ async def check_loki(
             labels.get("container_name") or labels.get("app") or
             labels.get("job") or "unknown"
         )
+        if source.lower() in _AMBIGUOUS_HOSTS:
+            # A sender mislabeled itself (e.g. rsyslog cached "localhost" from before its
+            # hostname was finalized). Flag it instead of presenting a generic label as if
+            # it were a resolved identity.
+            source = f"unidentified host (reported as '{source}')"
         observed_at = datetime.fromtimestamp(int(ts_str) / 1_000_000_000, tz=timezone.utc).isoformat()
         raw_lines[source].append((observed_at, line))
 
