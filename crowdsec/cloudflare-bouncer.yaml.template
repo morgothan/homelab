@@ -1,0 +1,21 @@
+crowdsec_lapi_url: http://crowdsec:8080/
+crowdsec_lapi_key: ${CROWDSEC_BOUNCER_KEY}
+crowdsec_update_frequency: 10s
+
+cloudflare_config:
+  accounts:
+  - id: ${CF_ACCOUNT_ID}
+    token: ${CF_CROWDSEC_TOKEN}
+    ip_list_prefix: crowdsec
+    default_action: block
+    zones:
+    - actions:
+      - block
+      zone_id: ${CF_ZONE_ID}
+  # Retained for Cloudflare list-write quota compatibility. This also delays
+  # the first IP-list sync after startup; rule setup itself runs immediately.
+  update_frequency: 96h
+
+daemon: false
+log_mode: stdout
+log_level: info
