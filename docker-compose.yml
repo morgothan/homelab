@@ -115,6 +115,7 @@ services:
     environment:
       - HOMEPAGE_ALLOWED_HOSTS=home.${DOMAIN},homepage.${DOMAIN},home.${LOCAL}
       - NODE_TLS_REJECT_UNAUTHORIZED=0
+      - HOMEPAGE_VAR_ERSATZTV_API_KEY=${HOMEPAGE_VAR_ERSATZTV_API_KEY:-}
     restart: unless-stopped
     logging: *logging
     labels:
@@ -133,7 +134,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.45.1
+    image: portainer/portainer-ce:2.45.2
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
