@@ -97,7 +97,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:v2.4.0
+    image: ghcr.io/gethomepage/homepage:v2.5.0
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -203,7 +203,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.2.3
+    image: grafana/grafana:13.2.4
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -319,7 +319,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.3.0
+    image: amir20/dozzle:v11.3.1
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -523,7 +523,7 @@ services:
 # One-way configuration sync from primary DNS to the independent secondary.
 # DHCP is intentionally excluded; UniFi remains the DHCP authority.
   adguardhome-sync:
-    image: ghcr.io/bakito/adguardhome-sync:v0.9.3
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.4
     container_name: adguardhome-sync
     restart: unless-stopped
     logging: *logging
