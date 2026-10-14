@@ -642,7 +642,9 @@ services:
 ########## WeTTY
 # Simple web-based SSH terminal — no credential storage, opens straight to a shell on traefik.${LOCAL}
   wetty:
-    image: ghcr.io/butlerx/wetty:latest
+    build: ./wetty
+    pull_policy: never
+    image: wetty:latest
     container_name: wetty
     restart: unless-stopped
     logging: *logging
