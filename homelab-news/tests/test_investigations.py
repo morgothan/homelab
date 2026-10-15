@@ -4,10 +4,11 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
-
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
+import hindsight
 import investigations
 
 
@@ -72,6 +73,59 @@ class InvestigationTests(unittest.TestCase):
             ))
             self.assertEqual(cached, reports)
             self.assertEqual(complete.await_count, 2)
+
+
+class HindsightRetainInvestigationTests(unittest.TestCase):
+    REPORT = {
+        "id": "incident-123", "headline": "Resolver Agent Failed",
+        "finding": "The resolver agent dropped DNS queries.",
+        "confidence": "medium", "impact": "Six queries failed.",
+        "investigated_at": "2026-10-15T12:00:00+00:00",
+    }
+
+    def test_retains_single_memory_item_with_expected_body(self):
+        class Client:
+            posted = []
+
+            def __init__(self, timeout):
+                self.timeout = timeout
+
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *exc):
+                return False
+
+            async def post(self, url, json):
+                Client.posted.append((url, json))
+                return SimpleNamespace(raise_for_status=lambda: None)
+
+        with patch.object(hindsight.httpx, "AsyncClient", Client), \
+                patch.object(hindsight, "HINDSIGHT_URL", "http://hindsight.internal"), \
+                patch.object(hindsight, "HINDSIGHT_BANK", "homelab-news"):
+            result = asyncio.run(hindsight.hindsight_retain_investigations([self.REPORT]))
+
+        self.assertIsNone(result)
+        self.assertEqual(len(Client.posted), 1)
+        url, payload = Client.posted[0]
+        self.assertTrue(url.endswith("/v1/default/banks/homelab-news/memories"))
+        self.assertTrue(payload["async"])
+        items = payload["items"]
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(item["document_id"], "investigation_incident-123")
+        self.assertEqual(
+            item["content"],
+            "Investigation (medium): Resolver Agent Failed. "
+            "The resolver agent dropped DNS queries. — impact: Six queries failed.",
+        )
+        self.assertEqual(item["context"], "Investigation Desk | Resolver Agent Failed")
+        self.assertEqual(item["timestamp"], "2026-10-15T12:00:00+00:00")
+
+    def test_noop_returns_none_when_hindsight_unconfigured(self):
+        with patch.object(hindsight, "HINDSIGHT_URL", ""):
+            result = asyncio.run(hindsight.hindsight_retain_investigations([self.REPORT]))
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

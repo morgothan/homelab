@@ -8,6 +8,7 @@ Hindsight is unconfigured or unreachable.
 import asyncio
 import logging
 import time
+from datetime import datetime
 
 import httpx
 from privacy import redact_data, redact_text
@@ -97,3 +98,44 @@ async def hindsight_retain_newspaper(date_str: str, articles: list[dict]) -> Non
             resp.raise_for_status()
     except Exception as e:
         log.warning("Hindsight retain failed for %s: %s", date_str, e)
+
+
+# Stable fallback when a report carries no usable investigated_at.
+_INVESTIGATION_TIMESTAMP_FALLBACK = "1970-01-01T00:00:00Z"
+
+
+def _investigation_timestamp(report: dict) -> str:
+    """Return report['investigated_at'] if present and parseable, else a stable fallback."""
+    raw = report.get("investigated_at")
+    if not raw:
+        return _INVESTIGATION_TIMESTAMP_FALLBACK
+    try:
+        datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return _INVESTIGATION_TIMESTAMP_FALLBACK
+    return str(raw)
+
+
+async def hindsight_retain_investigations(reports: list[dict]) -> None:
+    """Fire-and-forget: store investigation reports as memories for future recall."""
+    if not HINDSIGHT_URL or not reports:
+        return
+    items = [
+        {
+            "content": f"Investigation ({r.get('confidence', 'low')}): {r['headline']}. "
+                       f"{r.get('finding', '')} — impact: {r.get('impact', '')}",
+            "context": f"Investigation Desk | {r['headline']}",
+            "document_id": f"investigation_{r['id']}",
+            "timestamp": _investigation_timestamp(r),
+        }
+        for r in reports
+    ]
+    try:
+        async with httpx.AsyncClient(timeout=HINDSIGHT_TIMEOUT) as client:
+            resp = await client.post(
+                f"{HINDSIGHT_URL}/v1/default/banks/{HINDSIGHT_BANK}/memories",
+                json={"items": redact_data(items), "async": True},
+            )
+            resp.raise_for_status()
+    except Exception as e:
+        log.warning("Hindsight retain investigations failed: %s: %r", type(e).__name__, e)
