@@ -22,6 +22,7 @@ from config import (
 )
 from homelab_news.jellyfin import authorization_headers as jellyfin_auth_headers
 from storage import load_json, save_json
+from runtime import configure_logging
 
 log = logging.getLogger(__name__)
 
@@ -541,6 +542,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    configure_logging(__name__)
     asyncio.run(main())

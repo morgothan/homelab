@@ -25,7 +25,7 @@ from config import APP_SETTINGS
 from articles import parse_llm_json
 from correlations import events_since
 from llm import complete, _sanitize_for_llm
-from runtime import run_loop
+from runtime import run_loop, configure_logging
 from storage import load_json, save_json
 
 
@@ -328,5 +328,5 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+    configure_logging("trends")
     asyncio.run(main())

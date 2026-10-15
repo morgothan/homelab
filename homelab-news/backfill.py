@@ -39,10 +39,11 @@ from lib import (
     _ban_summary,
 )
 from llm import llm_analysis
+from runtime import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s %(levelname)s %(message)s",
+configure_logging(
+    "backfill",
+    fmt="%(asctime)s %(levelname)s %(message)s",
     stream=sys.stdout,
 )
 log = logging.getLogger("backfill")

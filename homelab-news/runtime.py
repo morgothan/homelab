@@ -2,8 +2,25 @@
 
 import asyncio
 import logging
+import sys
 import time
 from collections.abc import Awaitable, Callable
+
+
+def configure_logging(
+    name: str | None = None,
+    *,
+    fmt: str = "%(asctime)s %(name)s %(levelname)s %(message)s",
+    stream=None,
+) -> None:
+    """Configure root logging for a runnable entry point.
+
+    Defaults to the standard news-app format. ``stream`` may be overridden
+    (e.g. ``sys.stdout``) by entry points that need a non-default sink.
+    """
+    logging.basicConfig(level=logging.INFO, format=fmt, stream=stream)
+    if name:
+        logging.getLogger(name).setLevel(logging.INFO)
 
 
 async def run_loop(
