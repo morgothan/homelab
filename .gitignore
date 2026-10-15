@@ -245,6 +245,9 @@ __pycache__/
 
 # Termix pre-upgrade backups
 termix/backups/
+
+# Ad-hoc host config backups (pulled during incidents, not app-managed)
+backups/
 termix/.database-layer-preupgrade-backup.json
 
 
@@ -273,3 +276,6 @@ bin/.library-dupe-scan-state.json
 
 # Outline API credential used by the local MCP bridge
 bin/.outline-api-key
+
+# Project MCP server registration (host-specific absolute path to bin/outline-mcp-proxy)
+.mcp.json
