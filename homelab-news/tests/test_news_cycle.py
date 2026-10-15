@@ -12,6 +12,7 @@ from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import lib
+import llm
 import daily
 from operational_coverage import build_operational_alerts_article, select_news_issues
 
@@ -173,7 +174,9 @@ class OperationalAlertFallbackTests(unittest.TestCase):
         alert = {"headline": "1 Operational Alert", "blurb": "x", "section": "City Hall",
                   "source": "deterministic-operational-alerts"}
         with (
-            patch.object(lib, "httpx") as mock_httpx,
+            # generate_newspaper dispatches through llm.complete, so the failure
+            # seam lives on llm.httpx (the lib.httpx copy is no longer used).
+            patch.object(llm, "httpx") as mock_httpx,
             patch.object(lib, "hindsight_recall", AsyncMock(return_value="")),
         ):
             mock_httpx.AsyncClient.return_value.__aenter__.return_value.post = AsyncMock(

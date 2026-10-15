@@ -7,8 +7,6 @@ import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-import httpx
-
 from storage import load_json, save_json
 from privacy import redact_data
 
@@ -68,27 +66,29 @@ def _json_object(content: str) -> dict[str, Any] | None:
 
 async def _complete(*, url: str, model: str, timeout: int, system: str,
                     payload: object, max_tokens: int) -> dict[str, Any] | None:
+    """Dispatch a single bounded investigation LLM call.
+
+    Thin wrapper over :func:`llm.complete`: redacts the untrusted evidence payload
+    and parses the model's content back into a dict (or ``None`` on failure).
+    ``timeout`` mirrors the call-site ``llm_timeout``, which every production caller
+    sets to ``config.OLLAMA_TIMEOUT`` — the fixed timeout :func:`llm.complete` uses.
+    """
+    from llm import complete
+
+    messages = [
+        {"role": "system", "content": system},
+        {"role": "user", "content": json.dumps(redact_data(payload), ensure_ascii=False)},
+    ]
+    response = await complete(messages, max_tokens=max_tokens, temperature=0.1,
+                              url=url, model=model)
+    if not isinstance(response, dict):
+        return None
     try:
-        async with httpx.AsyncClient(timeout=timeout) as client:
-            response = await client.post(
-                f"{url.rstrip('/')}/v1/chat/completions",
-                json={
-                    "model": model,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": json.dumps(redact_data(payload), ensure_ascii=False)},
-                    ],
-                    "stream": False,
-                    "temperature": 0.1,
-                    "max_tokens": max_tokens,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            response.raise_for_status()
-            return _json_object(response.json()["choices"][0]["message"]["content"])
-    except Exception as error:
+        content = response["choices"][0]["message"]["content"]
+    except (KeyError, IndexError, TypeError, AttributeError) as error:
         log.warning("Investigation LLM call failed (%s): %s", type(error).__name__, error)
         return None
+    return _json_object(content)
 
 
 def select_candidates(articles: list[dict], issues: list[dict]) -> list[dict[str, str]]:

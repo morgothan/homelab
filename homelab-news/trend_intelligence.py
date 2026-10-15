@@ -16,7 +16,6 @@ from config import (
     HINDSIGHT_BANK,
     HINDSIGHT_TIMEOUT,
     HINDSIGHT_URL,
-    OLLAMA_TIMEOUT,
     TREND_INTELLIGENCE_FILE,
     TREND_REFRESH_INTERVAL,
     VLLM_MODEL,
@@ -25,7 +24,7 @@ from config import (
 from config import APP_SETTINGS
 from articles import parse_llm_json
 from correlations import events_since
-from llm import _sanitize_for_llm
+from llm import complete, _sanitize_for_llm
 from runtime import run_loop
 from storage import load_json, save_json
 
@@ -254,30 +253,24 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
         "hindsight_recall": recalled,
     }
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            response = await client.post(
-                f"{VLLM_URL.rstrip('/')}/v1/chat/completions",
-                json={
-                    "model": VLLM_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": json.dumps(evidence, separators=(",", ":"))},
-                    ],
-                    "stream": False,
-                    "max_tokens": 2200,
-                    "temperature": 0.2,
-                    "response_format": {"type": "json_object"},
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            response.raise_for_status()
-            content = response.json()["choices"][0]["message"]["content"]
-            parsed = _parse_reflection(content)
-            if not isinstance(parsed, dict):
-                log.warning("Trend synthesis did not return a JSON object")
-                return None
-            log.info("Trend synthesis returned fields: %s", ", ".join(sorted(parsed)))
-            return validate_reflection(parsed, archive_dates)
+        result = await complete(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": json.dumps(evidence, separators=(",", ":"))},
+            ],
+            max_tokens=2200,
+            temperature=0.2,
+        )
+        if not isinstance(result, dict):
+            log.warning("Trend synthesis did not return a JSON object")
+            return None
+        content = result["choices"][0]["message"]["content"]
+        parsed = _parse_reflection(content)
+        if not isinstance(parsed, dict):
+            log.warning("Trend synthesis did not return a JSON object")
+            return None
+        log.info("Trend synthesis returned fields: %s", ", ".join(sorted(parsed)))
+        return validate_reflection(parsed, archive_dates)
     except Exception as error:
         log.warning("Trend explanation failed: %s: %s", type(error).__name__, error)
         return None
