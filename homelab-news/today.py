@@ -7,9 +7,9 @@ from zoneinfo import ZoneInfo
 
 from config import TODAY_FILE, UPDATE_INTERVAL
 from lib import run_news_cycle
-from runtime import run_loop
+from runtime import run_loop, configure_logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+configure_logging("today")
 log = logging.getLogger("today")
 
 _ET = ZoneInfo("America/New_York")

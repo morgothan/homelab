@@ -21,7 +21,7 @@ from config import (
 )
 from homelab_news.jellyfin import authorization_headers as jellyfin_auth_headers
 from config import APP_SETTINGS
-from runtime import run_loop
+from runtime import run_loop, configure_logging
 from storage import load_json, save_json
 
 from containers import (
@@ -31,7 +31,7 @@ from containers import (
 from llm import llm_changelog_analysis, generate_homelab_intel
 from lib import fetch_github_release_notes
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+configure_logging("updates")
 log = logging.getLogger("updates")
 
 _digest_cache: dict = {}

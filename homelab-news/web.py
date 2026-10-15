@@ -37,8 +37,11 @@ from security import (
     check_fail2ban_bans, enrich_ips, _suggest_asn_blocks, check_asn_blocks,
 )
 from containers import get_container_status, get_container_status_async
+from runtime import configure_logging
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+# Configured at import time (not under __main__) because `web:app` is launched
+# via uvicorn, not as a script; preserves the module's non-standard format.
+configure_logging(fmt="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)

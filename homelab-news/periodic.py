@@ -15,6 +15,7 @@ import os
 
 from config import ARCHIVE_DIR, ARCHIVE_INDEX, MAX_MONTHLY, MAX_WEEKLY, PERIODIC_FILE
 from storage import load_json, save_json
+from runtime import configure_logging
 
 _ET = ZoneInfo("America/New_York")
 
@@ -22,7 +23,7 @@ from lib import (
     build_period_digest, generate_periodic_summary, _ban_summary,
 )
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
+configure_logging("periodic")
 log = logging.getLogger("periodic")
 
 
