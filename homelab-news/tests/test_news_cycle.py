@@ -164,6 +164,79 @@ class DailyArchiveTests(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(archive_dir, "2026-08-27.json")))
 
 
+class OperationalAlertFallbackTests(unittest.TestCase):
+    """Regression coverage for the 2026-10-06 'Mystery Host' incident: a total LLM
+    outage must be reported as a failed generation, not masked as a successful one
+    just because a deterministic operational_alert was available as a fallback."""
+
+    def test_llm_failure_returns_none_even_with_operational_alert(self):
+        alert = {"headline": "1 Operational Alert", "blurb": "x", "section": "City Hall",
+                  "source": "deterministic-operational-alerts"}
+        with (
+            patch.object(lib, "httpx") as mock_httpx,
+            patch.object(lib, "hindsight_recall", AsyncMock(return_value="")),
+        ):
+            mock_httpx.AsyncClient.return_value.__aenter__.return_value.post = AsyncMock(
+                side_effect=ConnectionError("All connection attempts failed"))
+            result = asyncio.run(lib.generate_newspaper(
+                docker_issues=[], loki_issues=[], update_hosts={}, unhealthy_names=[],
+                operational_alert=alert,
+            ))
+        self.assertIsNone(result)
+
+    def test_run_news_cycle_merges_fresh_alert_into_preserved_edition_on_failure(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "today.json")
+            previous = {
+                "built_at": "2026-08-14T12:00:00+00:00",
+                "generation_status": "ok",
+                "newspaper": [
+                    {"headline": "Stale alert", "blurb": "old", "section": "City Hall",
+                     "source": "deterministic-operational-alerts"},
+                    {"headline": "Unrelated story", "blurb": "still good", "section": "Weather"},
+                ],
+            }
+            with open(target, "w") as f:
+                json.dump(previous, f)
+
+            loki_issue = {"source": "unidentified host (reported as 'localhost')", "level": "error",
+                          "message": "Buffer I/O error on dev mmcblk0p2, logical block 123", "count": 10}
+            empty = AsyncMock(return_value=[])
+            checks = {
+                "check_docker_logs": empty,
+                "check_loki": AsyncMock(return_value=[loki_issue]),
+                "check_fail2ban_bans": AsyncMock(return_value=([], [])),
+                "check_prometheus": AsyncMock(return_value={}),
+                "check_kopia": AsyncMock(return_value={}),
+                "check_beszel": AsyncMock(return_value={}),
+                "check_jellystat": AsyncMock(return_value={}),
+                "fetch_recent_media": AsyncMock(return_value=[]),
+                "get_container_status_async": AsyncMock(return_value=([], [], 0)),
+                "llm_analysis": AsyncMock(return_value=None),
+                "hindsight_targeted_recall": AsyncMock(return_value=""),
+                "generate_newspaper": AsyncMock(return_value=None),  # simulated total LLM outage
+            }
+            with (
+                patch.multiple(lib, **checks),
+                patch.object(lib, "UPDATES_FILE", target + ".updates"),
+                patch.object(lib, "EVENT_LEDGER_FILE", target + ".events"),
+                patch.object(lib, "UPDATE_DETECTION_STATE_FILE", target + ".update_state"),
+            ):
+                asyncio.run(lib.run_news_cycle(datetime.now(timezone.utc), target))
+
+            with open(target) as f:
+                result = json.load(f)
+            self.assertEqual(result["generation_status"], "stale")
+            self.assertEqual(result["built_at"], previous["built_at"])
+            # the unrelated preserved story must survive untouched
+            self.assertIn({"headline": "Unrelated story", "blurb": "still good", "section": "Weather"},
+                          result["newspaper"])
+            # the stale alert must be replaced by exactly one fresh one, not duplicated
+            alerts = [a for a in result["newspaper"] if a.get("source") == "deterministic-operational-alerts"]
+            self.assertEqual(len(alerts), 1)
+            self.assertNotEqual(alerts[0]["headline"], "Stale alert")
+
+
 class NewsCyclePersistenceTests(unittest.TestCase):
     def _run_cycle(self, target_file: str, generated_articles):
         empty = AsyncMock(return_value=[])

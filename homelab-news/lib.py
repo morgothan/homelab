@@ -586,6 +586,7 @@ async def generate_newspaper(
     media_events: Optional[list[dict]] = None,
     correlations: Optional[list[dict]] = None,
     targeted_history: str = "",
+    operational_alert: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     from security import _SECURITY_NOISE, _security_prompt_block
 
@@ -597,7 +598,6 @@ async def generate_newspaper(
     clean_loki   = [i for i in loki_issues   if not _SECURITY_NOISE.search(i.get("message", ""))]
     selected_docker = select_news_issues(clean_docker)
     selected_loki = select_news_issues(clean_loki)
-    operational_alert = build_operational_alerts_article(clean_docker + clean_loki)
 
     lines: list[str] = []
     if unhealthy_names:
@@ -743,7 +743,10 @@ async def generate_newspaper(
                     return valid
     except Exception as e:
         log.warning("Newspaper generation failed (%s): %s", type(e).__name__, e)
-    return [operational_alert] if operational_alert else None
+    # A total LLM failure must be reported as a failure, not masked as a successful
+    # edition — run_news_cycle relies on falsy here to preserve the previous edition
+    # and merges a fresh operational_alert into it separately.
+    return None
 
 
 async def generate_periodic_summary(
@@ -938,6 +941,12 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     recall_queries = targeted_recall_queries(cycle_events, correlations)
     targeted_history = await hindsight_targeted_recall(recall_queries)
 
+    from security import _SECURITY_NOISE
+
+    clean_docker = [i for i in docker_issues if not _SECURITY_NOISE.search(i.get("message", ""))]
+    clean_loki   = [i for i in loki_issues   if not _SECURITY_NOISE.search(i.get("message", ""))]
+    operational_alert = build_operational_alerts_article(clean_docker + clean_loki)
+
     # Phase 2: LLM calls — run sequentially to avoid concurrent KV-cache spikes on vLLM.
     # (vLLM batches concurrent requests together; 3 simultaneous prefills exhaust memory.)
     docker_analysis = await llm_analysis(docker_issues, "Docker container")
@@ -945,7 +954,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     newspaper = await generate_newspaper(
         docker_issues, loki_issues, update_hosts, unhealthy_names,
         bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions, media_events,
-        correlations, targeted_history,
+        correlations, targeted_history, operational_alert,
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))
@@ -958,8 +967,14 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     else:
         # An unavailable LLM must not erase the last good edition.  The web UI
         # uses generation_status to identify the retained articles as stale.
+        # Still refresh the deterministic operational-alerts entry (if any) on top
+        # of the preserved edition — it needs no LLM and would otherwise go stale.
         built_at = existing.get("built_at")
-        articles = merge_library_additions(existing.get("newspaper") or [], media_events)
+        preserved = [a for a in (existing.get("newspaper") or [])
+                     if a.get("source") != "deterministic-operational-alerts"]
+        if operational_alert:
+            preserved = [operational_alert] + preserved
+        articles = merge_library_additions(preserved, media_events)
         generation_status = "stale"
         generation_error = "LLM generation unavailable"
         log.warning("News generation unavailable; preserving previous edition in %s", target_file)
