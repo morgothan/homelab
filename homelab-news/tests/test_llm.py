@@ -55,6 +55,29 @@ class CompleteTests(unittest.TestCase):
         self.assertEqual(body["max_tokens"], 10)
         self.assertEqual(body["temperature"], 0.1)
         self.assertEqual(body["chat_template_kwargs"], {"enable_thinking": False})
+        self.assertNotIn("response_format", body)
+
+    def test_complete_includes_response_format_when_passed_and_omits_when_none(self):
+        payload = {"choices": [{"message": {"content": "{}"}}]}
+        cm = _client_mock(response_body=payload)
+        with patch.object(llm.httpx, "AsyncClient", return_value=cm) as ac:
+            asyncio.run(llm.complete(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=10, temperature=0.1, url="http://model", model="m",
+                response_format={"type": "json_object"},
+            ))
+        body = cm.__aenter__.return_value.post.call_args.kwargs["json"]
+        self.assertEqual(body["response_format"], {"type": "json_object"})
+        self.assertEqual(ac.call_count, 1)
+
+        cm2 = _client_mock(response_body=payload)
+        with patch.object(llm.httpx, "AsyncClient", return_value=cm2):
+            asyncio.run(llm.complete(
+                [{"role": "user", "content": "hi"}],
+                max_tokens=10, temperature=0.1, url="http://model", model="m",
+            ))
+        body2 = cm2.__aenter__.return_value.post.call_args.kwargs["json"]
+        self.assertNotIn("response_format", body2)
 
     def test_complete_returns_none_on_connect_error(self):
         post = AsyncMock(side_effect=httpx.ConnectError("connection refused"))

@@ -260,6 +260,7 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
             ],
             max_tokens=2200,
             temperature=0.2,
+            response_format={"type": "json_object"},
         )
         if not isinstance(result, dict):
             log.warning("Trend synthesis did not return a JSON object")

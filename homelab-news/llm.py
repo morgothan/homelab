@@ -125,29 +125,35 @@ def _load_context() -> str:
 
 async def complete(messages: list[dict], *,
                    max_tokens: int, temperature: float,
-                   url: str | None = None, model: str | None = None) -> dict | None:
+                   url: str | None = None, model: str | None = None,
+                   response_format: dict | None = None) -> dict | None:
     """Post ``messages`` to the chat-completions endpoint and return the raw JSON response.
 
     The single shared chat-completions dispatch. Reads ``config.VLLM_URL`` /
     ``config.VLLM_MODEL`` at call time (rather than freezing them at import) so a
     model swap takes effect without a restart; callers may override either with
-    ``url``/``model``. Returns ``None`` and logs a warning on any transport,
-    HTTP, or parsing error.
+    ``url``/``model``. Pass ``response_format`` (e.g. ``{"type": "json_object"}``)
+    to send a JSON-mode hint to the server; it is omitted from the body when
+    ``None``. Returns ``None`` and logs a warning on any transport, HTTP, or
+    parsing error.
     """
     base = url or VLLM_URL
     mdl = model or VLLM_MODEL
+    payload: dict = {
+        "model": mdl,
+        "messages": messages,
+        "stream": False,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "chat_template_kwargs": {"enable_thinking": False},
+    }
+    if response_format is not None:
+        payload["response_format"] = response_format
     try:
         async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
             resp = await client.post(
                 f"{base}/v1/chat/completions",
-                json={
-                    "model": mdl,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": max_tokens,
-                    "temperature": temperature,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
+                json=payload,
             )
             resp.raise_for_status()
             return resp.json()
