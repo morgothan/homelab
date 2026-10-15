@@ -91,6 +91,30 @@ class BuildPeriodDigestWeeklyTests(unittest.TestCase):
         self.assertEqual([w["week_start"] for w in result],
                          ["2026-05-08", "2026-05-07", "2026-05-06", "2026-05-05"])
 
+    def test_weekly_backfill_partial_resume_sorts_and_caps(self):
+        # Backfill processes oldest-first over a container that already holds
+        # newer records. The freshly built record is OLDER than every existing
+        # entry, so the builder must re-sort newest-first before capping —
+        # otherwise the older record lands at the front and the wrong entries
+        # survive the cap.
+        cap = 3
+        existing = [
+            {"week_start": f"2026-05-{d:02d}", "period": "p", "built_at": "t",
+             "articles": [{"headline": f"old{d}"}], "ban_summary": []}
+            for d in (7, 6, 5)  # newest-first, all newer than the new record
+        ]
+        result = build_period_digest(
+            scope="week", key="2026-04-20", period="2026-04-20 to 2026-04-26",
+            articles=ARTICLES, ban_records=[],
+            container=existing, max_entries=cap, built_at="t",
+        )
+        self.assertEqual(len(result), cap)
+        # Output is newest-first; the existing newest record survives the cap
+        self.assertEqual([w["week_start"] for w in result],
+                         ["2026-05-07", "2026-05-06", "2026-05-05"])
+        self.assertEqual(result[0]["week_start"], "2026-05-07")
+        self.assertNotIn("2026-04-20", [w["week_start"] for w in result])
+
 
 class BuildPeriodDigestMonthlyYearlyTests(unittest.TestCase):
     def test_month_record_fields_and_cap(self):
