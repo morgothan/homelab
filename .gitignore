@@ -279,3 +279,6 @@ bin/.outline-api-key
 
 # Project MCP server registration (host-specific absolute path to bin/outline-mcp-proxy)
 .mcp.json
+
+# superpowers design and implimentation docs
+.superpowers
