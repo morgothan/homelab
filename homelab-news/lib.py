@@ -25,7 +25,7 @@ from config import (
 )
 from homelab_news.capabilities import configured_capabilities
 from homelab_news.configuration import APP_SETTINGS
-from operational_coverage import build_operational_alerts_article, select_news_issues
+from homelab_news.newsroom.coverage import build_operational_alerts_article, select_news_issues
 from storage import load_json, save_json
 
 from containers import get_container_status_async
