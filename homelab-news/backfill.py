@@ -35,7 +35,7 @@ from storage import load_json, save_json
 
 from security import check_loki
 from lib import (
-    generate_newspaper, generate_periodic_summary,
+    build_period_digest, generate_newspaper, generate_periodic_summary,
     _ban_summary,
 )
 from llm import llm_analysis
@@ -212,26 +212,13 @@ async def run_weekly_backfill(dry_run: bool) -> None:
             log.warning("[weekly %s] No articles generated", period)
             continue
 
-        all_week_bans: list[dict] = []
-        seen_ips: set[str] = set()
-        for e in entries:
-            for b in e.get("bans") or []:
-                if b["ip"] not in seen_ips:
-                    all_week_bans.append(b)
-                    seen_ips.add(b["ip"])
-
+        ban_records = [b for e in entries for b in (e.get("bans") or [])]
         periodic = load_json(PERIODIC_FILE) or {}
-        weekly   = periodic.get("weekly", [])
-        weekly.append({
-            "week_start":  week_start,
-            "period":      period,
-            "built_at":    datetime.now(timezone.utc).isoformat(),
-            "articles":    articles,
-            "ban_summary": _ban_summary(all_week_bans),
-        })
-        # Sort newest-first, cap at MAX_WEEKLY
-        weekly.sort(key=lambda w: w["week_start"], reverse=True)
-        periodic["weekly"] = weekly[:MAX_WEEKLY]
+        periodic["weekly"] = build_period_digest(
+            scope="week", key=week_start, period=period, articles=articles,
+            ban_records=ban_records,
+            container=periodic.get("weekly", []), max_entries=MAX_WEEKLY,
+        )
         save_json(PERIODIC_FILE, periodic)
         existing_starts.add(week_start)
         saved += 1
@@ -302,15 +289,10 @@ async def run_monthly_backfill(dry_run: bool) -> None:
             continue
 
         periodic = load_json(PERIODIC_FILE) or {}
-        monthly  = periodic.get("monthly", [])
-        monthly.append({
-            "month":    month_key,
-            "period":   month_label,
-            "built_at": datetime.now(timezone.utc).isoformat(),
-            "articles": articles,
-        })
-        monthly.sort(key=lambda m: m["month"], reverse=True)
-        periodic["monthly"] = monthly[:MAX_MONTHLY]
+        periodic["monthly"] = build_period_digest(
+            scope="month", key=month_key, period=month_label, articles=articles,
+            container=periodic.get("monthly", []), max_entries=MAX_MONTHLY,
+        )
         save_json(PERIODIC_FILE, periodic)
         existing_months.add(month_key)
         saved += 1
