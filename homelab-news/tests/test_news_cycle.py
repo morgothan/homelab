@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 import lib
 import llm
 import daily
-from operational_coverage import build_operational_alerts_article, select_news_issues
+from homelab_news.newsroom.coverage import build_operational_alerts_article, select_news_issues
 from security import _fetch_loki_complete
 from templates import masthead_rolling, masthead_today
 
