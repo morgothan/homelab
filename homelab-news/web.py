@@ -21,7 +21,7 @@ from config import (
     UPDATE_INTERVAL, UPDATES_FILE,
 )
 from search import ensure_index, search_archive, search_current_articles
-from storage import load_json as _load_json, save_json
+from storage import load_json, save_json
 from privacy import redact_data
 from webhooks import authenticated_payload
 
@@ -44,9 +44,9 @@ log = logging.getLogger(__name__)
 app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
 
-def load_json(path):
+def load_redacted(path):
     """Also protect archived snapshots written before credential redaction."""
-    return redact_data(_load_json(path))
+    return redact_data(load_json(path))
 
 _MEDIA_EVENT_LIMIT = 500
 
@@ -183,7 +183,7 @@ async def receive_seerr_event(request: Request):
             key: media[key] for key in ("mediaType", "tmdbId", "tvdbId")
             if key in media and isinstance(media[key], (str, int))
         }
-    events = load_json(MEDIA_EVENTS_FILE) or []
+    events = load_redacted(MEDIA_EVENTS_FILE) or []
     if not isinstance(events, list):
         events = []
     events.append(record)
@@ -193,8 +193,8 @@ async def receive_seerr_event(request: Request):
 
 @app.get("/")
 async def index():
-    today = load_json(TODAY_FILE)
-    updates_raw = load_json(UPDATES_FILE) or {}
+    today = load_redacted(TODAY_FILE)
+    updates_raw = load_redacted(UPDATES_FILE) or {}
     unhealthy, _, n_running = await get_container_status_async()
     update_hosts = updates_raw.get("hosts", {})
     if updates_raw.get("checked_at"):
@@ -245,8 +245,8 @@ async def index():
 
 @app.get("/current")
 async def current_events():
-    rolling = load_json(ROLLING_FILE)
-    updates_raw = load_json(UPDATES_FILE) or {}
+    rolling = load_redacted(ROLLING_FILE)
+    updates_raw = load_redacted(UPDATES_FILE) or {}
     unhealthy, starting, n_running = await get_container_status_async()
     update_hosts = updates_raw.get("hosts", {})
     if updates_raw.get("checked_at"):
@@ -297,8 +297,8 @@ async def current_events():
 
 @app.get("/wire")
 async def wire_reports():
-    intel = load_json(HOMELAB_INTEL_FILE)
-    updates_raw = load_json(UPDATES_FILE) or {}
+    intel = load_redacted(HOMELAB_INTEL_FILE)
+    updates_raw = load_redacted(UPDATES_FILE) or {}
     update_hosts = updates_raw.get("hosts", {})
 
     if intel is None and not update_hosts:
@@ -415,7 +415,7 @@ async def api_bans():
         _blotter_cache = (bans, probes, now)
     else:
         bans, probes, _ = _blotter_cache
-    ip_cache = load_json(IP_INTEL_FILE) or {}
+    ip_cache = load_redacted(IP_INTEL_FILE) or {}
     intel = {b["ip"]: ip_cache.get(b["ip"], {}) for b in bans}
     cf_bans = [b for b in bans if b.get("source") != "crowdsec"]
     cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
@@ -447,7 +447,7 @@ async def api_cs_bans(offset: int = 0):
         bans, probes, _ = _blotter_cache
     cs_bans = [b for b in bans if b.get("source") == "crowdsec"]
     page = cs_bans[offset:offset + _CS_PAGE]
-    ip_cache = load_json(IP_INTEL_FILE) or {}
+    ip_cache = load_redacted(IP_INTEL_FILE) or {}
     intel = {b["ip"]: ip_cache.get(b["ip"], {}) for b in page}
     return JSONResponse({
         "rows":     [_render_ban_row(b, intel) for b in page],
@@ -458,8 +458,8 @@ async def api_cs_bans(offset: int = 0):
 
 @app.get("/entertainment")
 async def entertainment():
-    data = load_json(LIBRARY_SCAN_FILE)
-    recent_media = load_json(RECENT_MEDIA_FILE) or {}
+    data = load_redacted(LIBRARY_SCAN_FILE)
+    recent_media = load_redacted(RECENT_MEDIA_FILE) or {}
     media_events = recent_media.get("media_events") or []
     media_links = recent_media.get("media_links") or {}
     refreshed_at = str(recent_media.get("refreshed_at") or "")
@@ -484,7 +484,7 @@ async def detailed():
 @app.get("/archive")
 async def archive_index():
     from itertools import groupby
-    index = load_json(ARCHIVE_INDEX) or []
+    index = load_redacted(ARCHIVE_INDEX) or []
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     if not index:
         content = '<div class="arch-empty">No archives yet &mdash; the first edition will appear tomorrow morning.</div>'
@@ -551,7 +551,7 @@ async def archive_day(date_str: str):
     except ValueError:
         return Response(content="Invalid date. Use YYYY-MM-DD.", status_code=400,
                         media_type="text/plain")
-    rec = load_json(_os.path.join(ARCHIVE_DIR, f"{date_str}.json"))
+    rec = load_redacted(_os.path.join(ARCHIVE_DIR, f"{date_str}.json"))
     if rec is None:
         return Response(content=f"No archive found for {date_str}.", status_code=404,
                         media_type="text/plain")
@@ -729,8 +729,8 @@ async def search_page(q: str = ""):
     rows = ""
 
     if query:
-        today = load_json(TODAY_FILE) or {}
-        rolling = load_json(ROLLING_FILE) or {}
+        today = load_redacted(TODAY_FILE) or {}
+        rolling = load_redacted(ROLLING_FILE) or {}
         current_hits = [
             (article, "/", "today's front page")
             for article in search_current_articles(today.get("newspaper") or [], query)
@@ -770,7 +770,7 @@ async def search_page(q: str = ""):
 
 @app.get("/services")
 async def services_index():
-    events = load_json(EVENT_LEDGER_FILE) or []
+    events = load_redacted(EVENT_LEDGER_FILE) or []
     counts = Counter(str(e["service"]) for e in events if e.get("service"))
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
@@ -795,7 +795,7 @@ async def services_index():
 
 @app.get("/service/{name}")
 async def service_timeline(name: str):
-    events = load_json(EVENT_LEDGER_FILE) or []
+    events = load_redacted(EVENT_LEDGER_FILE) or []
     matches = [e for e in events if str(e.get("service")) == name]
     if not matches:
         return Response(content=f"No events recorded for service '{_h(name)}'.",
@@ -815,8 +815,8 @@ async def service_timeline(name: str):
 
 @app.get("/trends")
 async def trends():
-    periodic = load_json(PERIODIC_FILE) or {}
-    intelligence = load_json(TREND_INTELLIGENCE_FILE) or {}
+    periodic = load_redacted(PERIODIC_FILE) or {}
+    intelligence = load_redacted(TREND_INTELLIGENCE_FILE) or {}
     now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     sections: list[str] = [render_trend_intelligence(intelligence)]
