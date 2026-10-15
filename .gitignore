@@ -170,6 +170,9 @@ peanut/
 # Dozzle runtime data
 dozzle/
 
+# Jellystat runtime data (root-owned container SQLite DB — unreadable by user, never index it)
+jellystat/
+
 # CrowdSec database
 crowdsec/crowdsec-db/
 
