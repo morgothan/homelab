@@ -32,9 +32,6 @@ from storage import load_json, save_json
 
 log = logging.getLogger(__name__)
 
-_LLM_URL   = VLLM_URL
-_LLM_MODEL = VLLM_MODEL
-
 # ── Compatibility re-exports ─────────────────────────────────────────────────
 # The portable domains now live in focused modules; these names are re-exported
 # so that ``lib`` remains a stable facade for existing callers and tests.
@@ -77,7 +74,7 @@ from hindsight import (  # noqa: E402
 )
 
 from llm import (  # noqa: E402
-    generate_homelab_intel, llm_analysis, llm_changelog_analysis,
+    generate_articles, generate_homelab_intel, llm_analysis, llm_changelog_analysis,
     _compress_messages, _load_context, _sanitize_for_llm,
     _truncate_to_token_limit,
 )
@@ -522,24 +519,6 @@ def _fmt_section(data: Optional[dict], alerts_hdr: str, info_hdr: Optional[str] 
     return ("\n" + "\n".join(out)) if out else ""
 
 
-def _validate_articles(raw: list, max_count: int = 16) -> list[dict]:
-    """Validate and clamp LLM article output.
-
-    Enforces field-length limits so oversized injected content cannot be stored
-    or displayed. Unknown section values are normalised to City Hall.
-    """
-    from articles import validate_articles
-
-    return validate_articles(raw, max_count)
-
-
-def _parse_llm_json(content: str) -> list:
-    """Parse LLM output as a JSON array using three progressively looser strategies."""
-    from articles import parse_llm_json
-
-    return parse_llm_json(content)
-
-
 def _ban_summary(bans: list[dict]) -> list[str]:
     """Summarise a ban list into compact strings for LLM context.
 
@@ -719,34 +698,20 @@ async def generate_newspaper(
         {"role": "system", "content": system},
         {"role": "user",   "content": f"CURRENT HOMELAB STATUS:\n{situation}"},
     ])
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{_LLM_URL}/v1/chat/completions",
-                json={
-                    "model": _LLM_MODEL,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": 2500,
-                    "temperature": 0.3,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            articles = _parse_llm_json(content)
-            if articles:
-                valid = _validate_articles(articles, max_count=15 if operational_alert else 16)
-                if valid:
-                    if operational_alert:
-                        valid.append(operational_alert)
-                    return valid
-    except Exception as e:
-        log.warning("Newspaper generation failed (%s): %s", type(e).__name__, e)
-    # A total LLM failure must be reported as a failure, not masked as a successful
-    # edition — run_news_cycle relies on falsy here to preserve the previous edition
-    # and merges a fresh operational_alert into it separately.
-    return None
+    valid = await generate_articles(
+        messages,
+        max_tokens=2500,
+        temperature=0.3,
+        max_count=15 if operational_alert else 16,
+    )
+    if not valid:
+        # A total LLM failure must be reported as a failure, not masked as a successful
+        # edition — run_news_cycle relies on falsy here to preserve the previous edition
+        # and merges a fresh operational_alert into it separately.
+        return None
+    if operational_alert:
+        valid.append(operational_alert)
+    return valid
 
 
 async def generate_periodic_summary(
@@ -807,29 +772,7 @@ async def generate_periodic_summary(
         {"role": "system", "content": system},
         {"role": "user",   "content": json.dumps(sanitized_entries, indent=2)},
     ])
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{_LLM_URL}/v1/chat/completions",
-                json={
-                    "model": _LLM_MODEL,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": 3000,
-                    "temperature": 0.3,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            articles = _parse_llm_json(content)
-            if articles:
-                valid = _validate_articles(articles, max_count=10)
-                if valid:
-                    return valid
-    except Exception as e:
-        log.warning("Periodic summary failed (%s): %s", type(e).__name__, e)
-    return None
+    return await generate_articles(messages, max_tokens=3000, temperature=0.3, max_count=10)
 
 
 # ── Shared news-cycle worker ─────────────────────────────────────────────────

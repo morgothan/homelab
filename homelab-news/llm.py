@@ -25,9 +25,6 @@ log = logging.getLogger(__name__)
 
 _CL100K_ENCODING = tiktoken.get_encoding("cl100k_base")
 
-_LLM_URL   = VLLM_URL
-_LLM_MODEL = VLLM_MODEL
-
 
 def _truncate_to_token_limit(text: str, max_tokens: int) -> str:
     tokens = _CL100K_ENCODING.encode(text)
@@ -126,6 +123,69 @@ def _load_context() -> str:
         return ""
 
 
+async def complete(messages: list[dict], *,
+                   max_tokens: int, temperature: float,
+                   url: str | None = None, model: str | None = None) -> dict | None:
+    """Post ``messages`` to the chat-completions endpoint and return the raw JSON response.
+
+    The single shared chat-completions dispatch. Reads ``config.VLLM_URL`` /
+    ``config.VLLM_MODEL`` at call time (rather than freezing them at import) so a
+    model swap takes effect without a restart; callers may override either with
+    ``url``/``model``. Returns ``None`` and logs a warning on any transport,
+    HTTP, or parsing error.
+    """
+    base = url or VLLM_URL
+    mdl = model or VLLM_MODEL
+    try:
+        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
+            resp = await client.post(
+                f"{base}/v1/chat/completions",
+                json={
+                    "model": mdl,
+                    "messages": messages,
+                    "stream": False,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                    "chat_template_kwargs": {"enable_thinking": False},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json()
+    except Exception as e:
+        log.warning("LLM completion failed (%s): %s", type(e).__name__, e)
+        return None
+
+
+async def generate_articles(messages: list[dict], *,
+                            max_tokens: int, temperature: float, max_count: int,
+                            url: str | None = None, model: str | None = None) -> list[dict] | None:
+    """Request a bounded, validated list of newspaper articles from the model.
+
+    Built on :func:`complete`: parses the model's content with
+    :func:`articles.parse_llm_json` and clamps it with
+    :func:`articles.validate_articles` (``max_count`` bounds the array). Returns
+    ``None`` on a failed dispatch or unparseable/invalid output.
+    """
+    from articles import parse_llm_json, validate_articles
+
+    result = await complete(messages, max_tokens=max_tokens, temperature=temperature,
+                            url=url, model=model)
+    if not isinstance(result, dict):
+        return None
+    try:
+        content = result["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
+        log.warning("generate_articles: unexpected response shape (%s): %s", type(e).__name__, e)
+        return None
+    articles = parse_llm_json(content)
+    if not articles:
+        return None
+    valid = validate_articles(articles, max_count=max_count)
+    if not valid:
+        return None
+    return valid
+
+
 async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
     if not issues:
         return None
@@ -160,22 +220,12 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         {"role": "system", "content": system},
         {"role": "user",   "content": user},
     ])
+    result = await complete(messages, max_tokens=500, temperature=0.1)
+    if not isinstance(result, dict):
+        return None
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{_LLM_URL}/v1/chat/completions",
-                json={
-                    "model": _LLM_MODEL,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": 500,
-                    "temperature": 0.1,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
+        return result["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
         log.warning("LLM analysis failed (%s): %s", type(e).__name__, e)
         return None
 
@@ -209,30 +259,18 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         {"role": "system", "content": system},
         {"role": "user",   "content": user},
     ])
+    result = await complete(messages, max_tokens=1500, temperature=0.1)
+    if not isinstance(result, dict):
+        return None
     try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{_LLM_URL}/v1/chat/completions",
-                json={
-                    "model": _LLM_MODEL,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": 1500,
-                    "temperature": 0.1,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            return resp.json()["choices"][0]["message"]["content"].strip()
-    except Exception as e:
+        return result["choices"][0]["message"]["content"].strip()
+    except (KeyError, IndexError, TypeError, AttributeError) as e:
         log.warning("Changelog LLM failed for %s: %s", container, e)
         return None
 
 
 async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[list[dict]]:
     """Generate newspaper articles summarising all available homelab software updates."""
-    from articles import parse_llm_json, validate_articles
-
     lines: list[str] = []
 
     docker_updates: list[str] = []
@@ -301,26 +339,4 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         {"role": "system", "content": system},
         {"role": "user",   "content": f"SOFTWARE UPDATE STATUS:\n{situation}"},
     ])
-    try:
-        async with httpx.AsyncClient(timeout=OLLAMA_TIMEOUT) as client:
-            resp = await client.post(
-                f"{_LLM_URL}/v1/chat/completions",
-                json={
-                    "model": _LLM_MODEL,
-                    "messages": messages,
-                    "stream": False,
-                    "max_tokens": 2000,
-                    "temperature": 0.3,
-                    "chat_template_kwargs": {"enable_thinking": False},
-                },
-            )
-            resp.raise_for_status()
-            content = resp.json()["choices"][0]["message"]["content"].strip()
-            articles = parse_llm_json(content)
-            if articles:
-                valid = validate_articles(articles, max_count=10)
-                if valid:
-                    return valid
-    except Exception as e:
-        log.warning("generate_homelab_intel failed (%s): %s", type(e).__name__, e)
-    return None
+    return await generate_articles(messages, max_tokens=2000, temperature=0.3, max_count=10)
