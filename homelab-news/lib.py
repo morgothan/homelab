@@ -93,6 +93,60 @@ def _ban_summary(bans: list[dict]) -> list[str]:
     return parts
 
 
+_SCOPE_KEY_FIELD = {"week": "week_start", "month": "month", "year": "year"}
+
+
+def build_period_digest(
+    *,
+    scope: str,                    # "week" | "month" | "year"
+    key: str,                      # value for the scope's key field (week_start / month / year)
+    period: str = "",              # human label; weekly/monthly only (yearly carries none)
+    articles: list[dict],          # generated digest articles
+    ban_records: list[dict] = (),  # raw per-IP ban records; aggregated uniquely per-IP for weekly
+    container: list[dict] = (),    # existing records for this scope, newest-first (pre-cap)
+    max_entries: int | None = None,  # cap; None -> no cap (yearly)
+    built_at: str | None = None,   # ISO timestamp; defaults to now-UTC
+) -> list[dict]:
+    """Build and cap one period-digest record.
+
+    Shared by the weekly/monthly/yearly workers in ``periodic.py`` and
+    ``backfill.py``: owns the unique-ban-per-IP aggregation, the per-period
+    ``ban_summary`` (via ``_ban_summary``, weekly only), and the record/cap
+    behaviour both workers historically applied. Returns the updated
+    newest-first, capped list of records for the scope; the caller persists it
+    under the scope's key with its exact ``save_json`` sequencing.
+
+    The produced record keeps the exact key order the workers emitted
+    historically (relevant because ``storage.save_json`` does not sort keys):
+
+      week:   {week_start, period, built_at, articles, ban_summary}
+      month:  {month, period, built_at, articles}
+      year:   {year, built_at, articles}
+    """
+    if built_at is None:
+        built_at = datetime.now(timezone.utc).isoformat()
+
+    key_field = _SCOPE_KEY_FIELD[scope]
+    record: dict = {key_field: key}
+    if scope != "year":
+        record["period"] = period
+    record["built_at"] = built_at
+    record["articles"] = articles
+    if scope == "week":
+        all_bans: list[dict] = []
+        seen_ips: set[str] = set()
+        for b in ban_records:
+            if b["ip"] not in seen_ips:
+                all_bans.append(b)
+                seen_ips.add(b["ip"])
+        record["ban_summary"] = _ban_summary(all_bans)
+
+    combined = [record] + list(container)
+    if max_entries is not None:
+        combined = combined[:max_entries]
+    return combined
+
+
 async def generate_newspaper(
     docker_issues: list[dict],
     loki_issues: list[dict],

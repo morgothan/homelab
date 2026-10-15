@@ -8,7 +8,7 @@ Schedules:
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 import os
@@ -19,7 +19,7 @@ from storage import load_json, save_json
 _ET = ZoneInfo("America/New_York")
 
 from lib import (
-    generate_periodic_summary, _ban_summary,
+    build_period_digest, generate_periodic_summary, _ban_summary,
 )
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -87,24 +87,12 @@ async def build_weekly() -> None:
         log.warning("Weekly digest generation returned no articles")
         return
 
-    # Aggregate ban data across the week so monthly/yearly can see it
-    all_week_bans: list[dict] = []
-    seen_ips: set[str] = set()
-    for e in entries:
-        for b in e.get("bans") or []:
-            if b["ip"] not in seen_ips:
-                all_week_bans.append(b)
-                seen_ips.add(b["ip"])
-
-    weekly = periodic.get("weekly", [])
-    weekly.insert(0, {
-        "week_start": week_start,
-        "period":     period,
-        "built_at":   datetime.now(timezone.utc).isoformat(),
-        "articles":   articles,
-        "ban_summary": _ban_summary(all_week_bans),
-    })
-    periodic["weekly"] = weekly[:MAX_WEEKLY]
+    ban_records = [b for e in entries for b in (e.get("bans") or [])]
+    periodic["weekly"] = build_period_digest(
+        scope="week", key=week_start, period=period, articles=articles,
+        ban_records=ban_records,
+        container=periodic.get("weekly", []), max_entries=MAX_WEEKLY,
+    )
     save_json(PERIODIC_FILE, periodic)
     log.info("Weekly digest saved for %s (%d articles)", period, len(articles))
 
@@ -141,13 +129,10 @@ async def build_monthly() -> None:
         log.warning("Monthly review generation returned no articles")
         return
 
-    monthly.insert(0, {
-        "month": month_key,
-        "period": month_label,
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "articles": articles,
-    })
-    periodic["monthly"] = monthly[:MAX_MONTHLY]
+    periodic["monthly"] = build_period_digest(
+        scope="month", key=month_key, period=month_label, articles=articles,
+        container=monthly, max_entries=MAX_MONTHLY,
+    )
     save_json(PERIODIC_FILE, periodic)
     log.info("Monthly review saved for %s", month_label)
 
@@ -174,12 +159,9 @@ async def build_yearly() -> None:
         log.warning("Yearly report generation returned no articles")
         return
 
-    yearly.insert(0, {
-        "year": year_key,
-        "built_at": datetime.now(timezone.utc).isoformat(),
-        "articles": articles,
-    })
-    periodic["yearly"] = yearly
+    periodic["yearly"] = build_period_digest(
+        scope="year", key=year_key, articles=articles, container=yearly,
+    )
     save_json(PERIODIC_FILE, periodic)
     log.info("Yearly report saved for %s", year_key)
 
