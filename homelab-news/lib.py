@@ -1,11 +1,11 @@
-"""Shared orchestration and compatibility facade.
+"""Shared orchestration for the homelab newspaper.
 
 Historically this was a 4,500-line god module. The cohesive domains have been
 extracted into focused modules (``templates``, ``security``, ``containers``,
-``media``, ``llm``, ``hindsight``) and are re-exported here so existing callers
-keep working during the migration. What remains in this file is the edition
-orchestration (``run_news_cycle``, ``generate_newspaper``, periodic summaries)
-plus the Prometheus/infra checks that feed the edition.
+``media``, ``llm``, ``hindsight``), and the infrastructure/Prometheus collectors
+now live in ``homelab_news.collectors.monitoring``. What remains in this file is
+the edition orchestration: ``run_news_cycle``, ``generate_newspaper``, and
+periodic summaries.
 """
 
 import asyncio
@@ -28,72 +28,22 @@ from homelab_news.configuration import APP_SETTINGS
 from operational_coverage import build_operational_alerts_article, select_news_issues
 from storage import load_json, save_json
 
-log = logging.getLogger(__name__)
-
-# ── Compatibility re-exports ─────────────────────────────────────────────────
-# The portable domains now live in focused modules; these names are re-exported
-# so that ``lib`` remains a stable facade for existing callers and tests.
-
-from articles import SECTION_ORDER  # noqa: E402
-
-from templates import (  # noqa: E402
-    _CSS, _FAVICON_SVG,
-    alerts_card, containers_card, log_card, masthead_archive, masthead_rolling,
-    masthead_today, masthead_wire, nav_bar, page_wrap, render_articles_html,
-    render_asn_blocklist_html, render_asn_suggestions_html, render_blotter_html,
-    render_blotter_skeleton, render_library_scan_html, render_recent_media_html,
-    render_issue_rows, render_bans_card, update_howto, updates_card,
-    _render_ban_row,
-)
-
-from containers import (  # noqa: E402
-    get_container_status, get_container_status_async, get_containers_local,
-    get_containers_pct, get_containers_ssh, get_containers_tcp,
-    latest_semver_tag, parse_image_ref, remote_digest, _semver_sort_key,
-    _semver_tag_pattern,
-)
-
-from media import (  # noqa: E402
-    build_library_additions_article, fetch_recent_media, library_addition_summaries,
-    library_addition_titles, load_media_events, merge_library_additions,
-    resolve_jellyfin_links,
-)
-
-from security import (  # noqa: E402
-    check_docker_logs, check_fail2ban_bans, check_loki, check_asn_blocks,
-    enrich_ips, fetch_crowdsec_decisions, LokiCollection, _collect_issues,
-    _group_by_ip, _label_sip_phone_prefix, _suggest_asn_blocks,
-    _security_prompt_block, _classify_ban, _fetch_loki_complete,
-)
-
-from hindsight import (  # noqa: E402
-    hindsight_recall, hindsight_retain_newspaper, hindsight_targeted_recall,
-    _TARGETED_RECALL_CACHE,
-)
-
-from llm import (  # noqa: E402
-    generate_articles, generate_homelab_intel, llm_analysis, llm_changelog_analysis,
-    _compress_messages, _load_context, _sanitize_for_llm,
-    _truncate_to_token_limit,
-)
-
-from config import REMOTE_HOSTS  # noqa: E402
-
-
-def _parse_remote_hosts() -> list[tuple[str, str]]:
-    """Compatibility wrapper for :func:`config.parse_remote_hosts`."""
-    from config import parse_remote_hosts
-
-    return parse_remote_hosts()
-
-
-# ── Infrastructure monitoring re-export ───────────────────────────────────────
-# Prometheus/Kopia/Beszel/Jellystat collectors now live in the package; re-export
-# so ``lib`` remains a stable facade (tests patch lib.<name>).
-
-from homelab_news.collectors.monitoring import (  # noqa: E402
+from containers import get_container_status_async
+from hindsight import hindsight_recall, hindsight_targeted_recall
+from homelab_news.collectors.monitoring import (
     check_beszel, check_jellystat, check_kopia, check_prometheus,
 )
+from llm import (
+    generate_articles, llm_analysis, _compress_messages, _load_context,
+    _sanitize_for_llm,
+)
+from media import fetch_recent_media, merge_library_additions
+from security import (
+    check_docker_logs, check_fail2ban_bans, check_loki, LokiCollection,
+    _label_sip_phone_prefix, _suggest_asn_blocks, _security_prompt_block,
+)
+
+log = logging.getLogger(__name__)
 
 
 # ── Edition generation ────────────────────────────────────────────────────────
@@ -552,14 +502,6 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     if generation_error:
         result["generation_error"] = generation_error
     save_json(target_file, result)
-
-
-# ── Worker loop helper ───────────────────────────────────────────────────────
-
-async def run_loop(fn, interval: int, log=None) -> None:
-    from runtime import run_loop as run_worker_loop
-
-    await run_worker_loop(fn, interval, log)
 
 
 # ── GitHub release notes ──────────────────────────────────────────────────────

@@ -11,6 +11,7 @@ import config
 import lib
 import runtime
 import storage
+from containers import _semver_sort_key, _semver_tag_pattern
 from homelab_news.capabilities import configured_capabilities
 from homelab_news.configuration import load_settings
 from homelab_news.jellyfin import authorization_headers
@@ -104,12 +105,12 @@ class SemverTagTests(unittest.TestCase):
     haproxy:3.4.4-alpine was reported as an update to '3.4.4' every hour."""
 
     def _best(self, current, tags):
-        pat = lib._semver_tag_pattern(current)
+        pat = _semver_tag_pattern(current)
         matching = [t for t in tags if pat and pat.match(t)]
         if not matching:
             return None
-        best = max(matching, key=lib._semver_sort_key)
-        return best if lib._semver_sort_key(best) > lib._semver_sort_key(current) else None
+        best = max(matching, key=_semver_sort_key)
+        return best if _semver_sort_key(best) > _semver_sort_key(current) else None
 
     def test_suffix_tag_ignores_bare_variant(self):
         self.assertIsNone(self._best("3.4.4-alpine", ["3.4.4", "3.4.4-alpine", "3.0.5"]))
@@ -125,12 +126,12 @@ class SemverTagTests(unittest.TestCase):
         self.assertIsNone(self._best("v3.5.0", ["v3.4.4", "v3.5.0"]))
 
     def test_sort_key_ignores_suffix(self):
-        self.assertEqual(lib._semver_sort_key("3.4.4-alpine"), (3, 4, 4))
+        self.assertEqual(_semver_sort_key("3.4.4-alpine"), (3, 4, 4))
 
     def test_alpine_revision_suffix_is_ordered(self):
         # '-rN' is an Alpine package revision, not a variant: it must be
         # comparable across revisions and patch levels (regression: nut-upsd).
-        self.assertEqual(lib._semver_sort_key("2.8.5-r1"), (2, 8, 5, 1))
+        self.assertEqual(_semver_sort_key("2.8.5-r1"), (2, 8, 5, 1))
         tags = ["2.8.3-r2", "2.8.3-r4", "2.8.5-r1", "2.8.2-r0", "latest"]
         self.assertEqual(self._best("2.8.3-r4", tags), "2.8.5-r1")
         self.assertIsNone(self._best("2.8.5-r1", tags))
