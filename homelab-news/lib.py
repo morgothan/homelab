@@ -528,7 +528,8 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
 
     investigations = existing.get("investigations") or []
     if getattr(features, "investigations", True) and newspaper:
-        from investigations import investigate_edition
+        from investigations import investigate_edition, persist_investigations
+        from hindsight import hindsight_retain_investigations
 
         investigations = await investigate_edition(
             articles=articles,
@@ -541,6 +542,9 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
             llm_model=VLLM_MODEL,
             llm_timeout=OLLAMA_TIMEOUT,
         )
+        new_reports = persist_investigations(investigations)
+        if new_reports:
+            await hindsight_retain_investigations(new_reports)
 
     result = {
         "built_at":        built_at,

@@ -1,12 +1,15 @@
 """Automatic, read-only incident triage and evidence synthesis."""
 
+import fcntl
 import hashlib
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
+import config
 from storage import load_json, save_json
 from privacy import redact_data
 
@@ -249,3 +252,37 @@ async def investigate_edition(*, articles: list[dict], docker_issues: list[dict]
     candidate_ids = {article["id"] for article in candidates}
     return [report for report in reports
             if isinstance(report, dict) and report.get("id") in candidate_ids][:MAX_INVESTIGATIONS]
+
+
+def persist_investigations(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge REPORTS into the durable Investigation Desk archive.
+
+    Under an inter-process ``fcntl`` lock on ``INVESTIGATIONS_ARCHIVE_FILE``, loads the
+    existing archive list and appends only the reports whose ``id`` is not already present,
+    so repeated calls and concurrent workers are idempotent (no duplicates). Persists via
+    ``save_json`` (which applies redaction and atomic replace) and returns ONLY the newly
+    appended subset, so the caller retains exactly those to Hindsight. Empty input is a
+    no-op that returns ``[]`` and leaves the archive untouched.
+    """
+    if not reports:
+        return []
+    path = config.INVESTIGATIONS_ARCHIVE_FILE
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    lock_path = f"{path}.lock"
+    with open(lock_path, "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            existing = [r for r in (load_json(path) or []) if isinstance(r, dict) and r.get("id")]
+            present = {r["id"] for r in existing}
+            new_reports = [
+                r for r in reports
+                if isinstance(r, dict) and r.get("id") and r["id"] not in present
+            ]
+            if new_reports:
+                archive = existing + new_reports
+                save_json(path, archive)
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+    return new_reports

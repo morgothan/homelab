@@ -128,5 +128,51 @@ class HindsightRetainInvestigationTests(unittest.TestCase):
         self.assertIsNone(result)
 
 
+class PersistInvestigationTests(unittest.TestCase):
+    A = {"id": "a", "headline": "Resolver Agent Failed", "finding": "Cause A.",
+         "confidence": "low", "impact": "Minor.", "investigated_at": "2026-10-15T12:00:00+00:00"}
+    B = {"id": "b", "headline": "Disk Nearly Full", "finding": "Cause B.",
+         "confidence": "high", "impact": "Severe.", "investigated_at": "2026-10-15T12:01:00+00:00"}
+    C = {"id": "c", "headline": "Backup Missed", "finding": "Cause C.",
+         "confidence": "medium", "impact": "Moderate.", "investigated_at": "2026-10-15T12:02:00+00:00"}
+
+    def test_fresh_path_returns_all_and_persists_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "archive.json")
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", path):
+                new = investigations.persist_investigations([self.A, self.B])
+            self.assertEqual([r["id"] for r in new], ["a", "b"])
+            self.assertEqual([r["id"] for r in self._load(path)], ["a", "b"])
+
+    def test_repeat_call_is_idempotent_and_dedups(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "archive.json")
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", path):
+                investigations.persist_investigations([self.A, self.B])
+                new = investigations.persist_investigations([self.A, self.C])
+            self.assertEqual([r["id"] for r in new], ["c"])
+            self.assertEqual([r["id"] for r in self._load(path)], ["a", "b", "c"])
+
+    def test_empty_input_is_a_noop(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            path = os.path.join(tmp, "archive.json")
+            # No file yet; empty input must not create one.
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", path):
+                new = investigations.persist_investigations([])
+            self.assertEqual(new, [])
+            self.assertFalse(os.path.exists(path))
+
+            # And with an existing archive it leaves it untouched.
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", path):
+                investigations.persist_investigations([self.A])
+                new = investigations.persist_investigations([])
+            self.assertEqual(new, [])
+            self.assertEqual([r["id"] for r in self._load(path)], ["a"])
+
+    def _load(self, path):
+        with open(path, encoding="utf-8") as source:
+            return json.load(source)
+
+
 if __name__ == "__main__":
     unittest.main()
