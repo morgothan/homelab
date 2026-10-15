@@ -662,6 +662,12 @@ services:
       - COMMAND=/home/nat/docker/bin/start-tmux.sh
       - TITLE=traefik.${LOCAL}
       - ALLOWEDORIGINS=https://shell.${DOMAIN}
+      # WeTTY's default Socket.IO heartbeat is very aggressive (ping every 3s,
+      # pong timeout 7s), which false-trips over Cloudflare/WARP latency and
+      # drops the browser connection (the tmux session itself survives, so it
+      # just reconnects). Relax it to tolerate WARP jitter.
+      - PINGINTERVAL=20000
+      - PINGTIMEOUT=30000
     labels:
       - traefik.enable=true
       - traefik.http.routers.wetty.entrypoints=https
