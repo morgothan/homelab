@@ -102,7 +102,7 @@ class PrivacyTests(unittest.TestCase):
             # An old archive must also be protected without requiring migration.
             with open(path, "w") as destination:
                 json.dump({"message": raw}, destination)
-            displayed = json.dumps(web.load_json(path))
+            displayed = json.dumps(web.load_redacted(path))
         for output in [issues[0]["message"], llm._sanitize_for_llm(raw, 2000), stored, displayed]:
             for value in ["fixture password", "fixture-key", "fixture-bearer", "fixture-pass", "fixture-nested"]:
                 self.assertNotIn(value, output)
