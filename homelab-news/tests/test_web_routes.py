@@ -130,5 +130,44 @@ class SearchRouteTests(unittest.TestCase):
         self.assertIn('href="/archive/2026-08-01"', response.text)
 
 
+class InvestigationsArchiveRouteTests(unittest.TestCase):
+    def test_investigations_archive_renders_and_escapes_report_fields(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "investigations_archive.json")
+            _write_json(archive_path, [{
+                "id": "inv-1",
+                "headline": "<script>alert('XSS')</script> headline",
+                "finding": "<b>finding</b> & more",
+                "confidence": "high",
+                "impact": "impact with \"quotes\" & symbols",
+                "next_checks": ["<script>check</script>", "plain"],
+                "investigated_at": "2026-10-15T03:00:00Z",
+            }])
+            with patch.object(web, "INVESTIGATIONS_ARCHIVE_FILE", archive_path):
+                response = TestClient(web.app).get("/investigations")
+
+        self.assertEqual(response.status_code, 200)
+        # Raw script tags must not appear.
+        self.assertNotIn("<script>alert", response.text)
+        self.assertNotIn("<script>check", response.text)
+        # HTML-escaped forms should be present.
+        self.assertIn("&lt;script&gt;", response.text)
+        self.assertNotIn("<b>finding</b>", response.text)
+        self.assertIn("&lt;b&gt;finding&lt;/b&gt; &amp; more", response.text)
+        self.assertIn("impact with &quot;quotes&quot; &amp; symbols", response.text)
+        self.assertIn("High confidence", response.text)
+        self.assertIn("Investigations", response.text)
+
+    def test_investigations_archive_empty_state(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "investigations_archive.json")
+            _write_json(archive_path, [])
+            with patch.object(web, "INVESTIGATIONS_ARCHIVE_FILE", archive_path):
+                response = TestClient(web.app).get("/investigations")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("No investigations recorded yet", response.text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -15,7 +15,7 @@ from fastapi.responses import JSONResponse, RedirectResponse
 
 from config import (
     ARCHIVE_DIR, ARCHIVE_INDEX, EVENT_LEDGER_FILE, HOMELAB_INTEL_FILE, IP_INTEL_FILE,
-    LIBRARY_SCAN_FILE, LOG_HOURS, MEDIA_EVENTS_FILE, PERIODIC_FILE,
+    INVESTIGATIONS_ARCHIVE_FILE, LIBRARY_SCAN_FILE, LOG_HOURS, MEDIA_EVENTS_FILE, PERIODIC_FILE,
     RECENT_MEDIA_FILE, REFRESH_INTERVAL, ROLLING_FILE, ROLLING_HOURS,
     SEARCH_INDEX_FILE, SITE_NAME, TODAY_FILE, TREND_INTELLIGENCE_FILE,
     UPDATE_INTERVAL, UPDATES_FILE,
@@ -90,6 +90,53 @@ def _investigations_html(reports: list[dict]) -> str:
         '<details class="np-section" open><summary class="np-dispatch-head">Investigation Desk</summary>'
         '<div class="grid" style="margin-top:16px">' + "".join(cards) + "</div></details>"
     )
+
+
+def _investigations_archive_html(reports: list[dict]) -> str:
+    """Render the persisted investigation archive page (newest first)."""
+    if not reports:
+        return (
+            '<div class="arch-empty">'
+            "No investigations recorded yet &mdash; reports appear here after an "
+            "edition&#39;s investigation desk runs its checks."
+            "</div>"
+        )
+
+    def _sort_key(report: dict) -> tuple:
+        # Sort newest-first by investigated_at; fall back to stable list order.
+        return report.get("investigated_at") or "", report.get("id") or ""
+
+    ordered = sorted(reports, key=_sort_key, reverse=True)
+
+    def items(values) -> str:
+        if not values:
+            return ""
+        return "<ul>" + "".join(f"<li>{_h(str(value))}</li>" for value in values) + "</ul>"
+
+    cards = []
+    for report in ordered:
+        confidence = _h(str(report.get("confidence") or "low").title())
+        headline = _h(str(report.get("headline") or "Untitled investigation"))
+        finding = _h(str(report.get("finding") or "No finding returned."))
+        investigated_at = _h(str(report.get("investigated_at") or ""))
+        next_checks = report.get("next_checks") if isinstance(report.get("next_checks"), list) else []
+
+        lines = [f'<p>{finding}</p>']
+        if report.get("impact"):
+            lines.append(f'<p><strong>Impact:</strong> {_h(str(report["impact"]))}</p>')
+        if next_checks:
+            lines.append("<strong>Read-only next checks</strong>" + items(next_checks))
+        if investigated_at:
+            lines.append(f'<p class="card-meta">Investigated {investigated_at} UTC</p>')
+
+        cards.append(
+            '<details class="card" open><summary>'
+            f'<span class="card-title">{headline}</span>'
+            f'<span class="card-meta">{confidence} confidence</span></summary>'
+            + "".join(lines)
+            + "</details>"
+        )
+    return '<div class="arch-index">' + "".join(cards) + "</div>"
 
 
 def _init_page() -> str:
@@ -541,6 +588,16 @@ async def archive_index():
         content = '<div class="arch-index">' + "".join(sections) + '</div>'
 
     body = masthead_rolling(now_str) + nav_bar("archive") + content
+    return Response(content=page_wrap(body, refresh=3600),
+                    media_type="text/html; charset=utf-8")
+
+
+@app.get("/investigations")
+async def investigations_archive():
+    reports = load_redacted(INVESTIGATIONS_ARCHIVE_FILE) or []
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    content = _investigations_archive_html(reports)
+    body = masthead_rolling(now_str) + nav_bar("investigations") + content
     return Response(content=page_wrap(body, refresh=3600),
                     media_type="text/html; charset=utf-8")
 
