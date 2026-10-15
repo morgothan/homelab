@@ -142,6 +142,13 @@ def build_period_digest(
         record["ban_summary"] = _ban_summary(all_bans)
 
     combined = [record] + list(container)
+    # Restore the backfill workers' historical newest-first sort. For the
+    # periodic path the freshly built record is already the newest, so the
+    # sort is a stable no-op; for backfill's partial-resume scenario (oldest
+    # record first over a container already holding newer entries) it puts the
+    # list back in newest-first order before capping.
+    if len(combined) > 1:
+        combined.sort(key=lambda r: r[key_field], reverse=True)
     if max_entries is not None:
         combined = combined[:max_entries]
     return combined
