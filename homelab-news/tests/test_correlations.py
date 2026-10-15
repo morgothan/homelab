@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
 
 import lib
 import hindsight
+from security import _collect_issues, _group_by_ip, _label_sip_phone_prefix
 from correlations import (
     append_events,
     build_cycle_events,
@@ -43,7 +44,7 @@ class CorrelationTests(unittest.TestCase):
             'token needs to be rotated"'
         )
 
-        issues, _ = lib._collect_issues("grafana", [message])
+        issues, _ = _collect_issues("grafana", [message])
 
         self.assertEqual(issues, [])
 
@@ -55,7 +56,7 @@ class CorrelationTests(unittest.TestCase):
             'Incoming request ended abruptly: context canceled"',
         ]
 
-        issues, _ = lib._collect_issues("cf-tunnel-blue", messages)
+        issues, _ = _collect_issues("cf-tunnel-blue", messages)
 
         self.assertEqual(issues, [])
 
@@ -65,12 +66,12 @@ class CorrelationTests(unittest.TestCase):
             'connIndex=1 event=0'
         )
 
-        issues, _ = lib._collect_issues("cf-tunnel-blue", [message])
+        issues, _ = _collect_issues("cf-tunnel-blue", [message])
 
         self.assertEqual(len(issues), 1)
 
     def test_log_collection_preserves_observation_window(self):
-        issues, counts = lib._collect_issues("traefik", [
+        issues, counts = _collect_issues("traefik", [
             ("2026-08-24T12:00:00+00:00", "ERROR backend connection failed"),
             ("2026-08-24T12:02:00+00:00", "ERROR backend connection failed"),
         ])
@@ -256,12 +257,12 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
             "ubios-udapi-server[2143]: process: Process' stime is unknown "
             "(not an error); failed to parse /proc/919352/stat: Short read"
         )
-        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        issues, _ = _collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(issues, [])
 
     def test_ap_garp_netlink_resource_busy_is_noise(self):
         message = "wevent[7643]: garp.get_ipv4_by_mac(): Netlink error response: Resource busy"
-        issues, _ = lib._collect_issues("backyard-u7prooutdoor", [message])
+        issues, _ = _collect_issues("backyard-u7prooutdoor", [message])
         self.assertEqual(issues, [])
 
     def test_sip_registration_success_logged_as_error_is_noise(self):
@@ -270,7 +271,7 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
             "SigControl(performRegistration):5242:Register transaction got error: "
             "No Error, code:200, retry after: 0"
         )
-        issues, _ = lib._collect_issues("172.18.0.1", [message])
+        issues, _ = _collect_issues("172.18.0.1", [message])
         self.assertEqual(issues, [])
 
     def test_mcad_retry_chatter_is_noise(self):
@@ -278,7 +279,7 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
             "mca-ctrl[908924]: mca-proto.service_json(): failed to contact mcad",
             "mca-ctrl[908924]: mca-monitor.mca_control_main(): service_json event fail, retry (35 sec left)",
         ]
-        issues, _ = lib._collect_issues("edge-udm-pro-max", messages)
+        issues, _ = _collect_issues("edge-udm-pro-max", messages)
         self.assertEqual(issues, [])
 
     def test_dhcp_probe_start_event_is_noise(self):
@@ -286,17 +287,17 @@ class NetworkGearLogNoiseTests(unittest.TestCase):
             "mcad[5162]: probe-runner.probe_runner_dispatch(): [dhcpv6] start "
             "ifname=eth8 timeout=10 req=2f99add0-965c-4410-b7e7-15c4"
         )
-        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        issues, _ = _collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(issues, [])
 
     def test_smartctl_unsupported_device_is_noise(self):
         message = 'beszel-agent[4276]: 2026/08/25 16:45:26 INFO smartctl failed device=/dev/sda err="exit status 2"'
-        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        issues, _ = _collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(issues, [])
 
     def test_smartctl_failure_with_other_exit_status_remains_alertable(self):
         message = 'beszel-agent[4276]: 2026/08/25 16:45:26 INFO smartctl failed device=/dev/sda err="exit status 4"'
-        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        issues, _ = _collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(len(issues), 1)
 
 
@@ -306,7 +307,7 @@ class JellyfinLogNoiseTests(unittest.TestCase):
             '[13:56:06] [INF] Trickplay generation: '
             '/usr/lib/jellyfin-ffmpeg/ffmpeg -loglevel error -i file:"episode.mkv"'
         )
-        issues, _ = lib._collect_issues("jellyfin.lan", [message])
+        issues, _ = _collect_issues("jellyfin.lan", [message])
         self.assertEqual(issues, [])
 
     def test_real_jellyfin_sqlite_error_remains_alertable(self):
@@ -314,7 +315,7 @@ class JellyfinLogNoiseTests(unittest.TestCase):
             "Microsoft.Data.Sqlite.SqliteException: SQLite Error 5: "
             "'database is locked'"
         )
-        issues, _ = lib._collect_issues("jellyfin.lan", [message])
+        issues, _ = _collect_issues("jellyfin.lan", [message])
         self.assertEqual(len(issues), 1)
 
     def test_wifi_soft_fail_association_telemetry_is_noise(self):
@@ -322,12 +323,12 @@ class JellyfinLogNoiseTests(unittest.TestCase):
             'stahtd[6247]: [STA-TRACKER].stahtd_dump_event(): {"op":"event",'
             '"message_type":"STA_ASSOC_TRACKER","event_type":"soft fail"}'
         )
-        issues, _ = lib._collect_issues("upstairs-u7-pro", [message])
+        issues, _ = _collect_issues("upstairs-u7-pro", [message])
         self.assertEqual(issues, [])
 
     def test_dhcp_probe_explicit_failure_remains_alertable(self):
         message = "mcad[5162]: probe-runner.probe_runner_dispatch(): [dhcpv6] failed ifname=eth8"
-        issues, _ = lib._collect_issues("edge-udm-pro-max", [message])
+        issues, _ = _collect_issues("edge-udm-pro-max", [message])
         self.assertEqual(len(issues), 1)
 
     def test_unrelated_registration_failure_remains_alertable(self):
@@ -335,7 +336,7 @@ class JellyfinLogNoiseTests(unittest.TestCase):
             "SigControl(performRegistration):5242:Register transaction got error: "
             "Request Timeout, code:408, retry after: 30"
         )
-        issues, _ = lib._collect_issues("172.18.0.1", [message])
+        issues, _ = _collect_issues("172.18.0.1", [message])
         self.assertEqual(len(issues), 1)
 
 
@@ -351,7 +352,7 @@ class GroupByIpTests(unittest.TestCase):
                         "could not download https://fm.grandstream.com/gs/dp755fw.bin (No error)")
             for pid in (111, 222, 333, 444)
         ]
-        grouped = lib._group_by_ip(issues)
+        grouped = _group_by_ip(issues)
         self.assertEqual(len(grouped), 4)
         self.assertFalse(any("patterns from 1.0.3.25" in i["message"] for i in grouped))
 
@@ -363,15 +364,15 @@ class GroupByIpTests(unittest.TestCase):
                         f"could not download https://fm.grandstream.com/config-{n}.xml (No error)")
             for n in range(4)
         ]
-        grouped = lib._group_by_ip(issues)
+        grouped = _group_by_ip(issues)
         self.assertEqual(len(grouped), 4)
         self.assertFalse(any("patterns from 1.0.3.25" in i["message"] for i in grouped))
 
     def test_sip_phone_prefix_is_labeled_for_llm(self):
-        without_pid = lib._label_sip_phone_prefix(
+        without_pid = _label_sip_phone_prefix(
             "USER.ERROR [02:00:00:00:00:01][1.0.3.25] unable to download config data"
         )
-        with_pid = lib._label_sip_phone_prefix(
+        with_pid = _label_sip_phone_prefix(
             "USER.ERROR [02:00:00:00:00:01][1.0.3.25][831509568] transport error"
         )
         self.assertIn("[device 02:00:00:00:00:01][firmware 1.0.3.25]", without_pid)
@@ -379,7 +380,7 @@ class GroupByIpTests(unittest.TestCase):
 
     def test_real_lan_ip_still_aggregates(self):
         issues = [self._issue(f"denied connection from 192.168.1.50 attempt {n}") for n in range(4)]
-        grouped = lib._group_by_ip(issues)
+        grouped = _group_by_ip(issues)
         self.assertEqual(len(grouped), 1)
         self.assertIn("patterns from 192.168.1.50", grouped[0]["message"])
         self.assertEqual(grouped[0]["count"], 4)

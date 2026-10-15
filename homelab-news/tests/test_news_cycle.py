@@ -15,6 +15,8 @@ import lib
 import llm
 import daily
 from operational_coverage import build_operational_alerts_article, select_news_issues
+from security import _fetch_loki_complete
+from templates import masthead_rolling, masthead_today
 
 
 class _LokiResponse:
@@ -46,7 +48,7 @@ class _LokiClient:
 class LokiCollectionTests(unittest.TestCase):
     def test_saturated_windows_are_split_without_boundary_loss(self):
         values = [[str(timestamp), f"error {timestamp}"] for timestamp in range(1, 8)]
-        entries, metadata = asyncio.run(lib._fetch_loki_complete(
+        entries, metadata = asyncio.run(_fetch_loki_complete(
             _LokiClient(values), "query", 1, 7, page_size=3,
         ))
         self.assertEqual([int(entry[1]) for entry in entries], list(range(1, 8)))
@@ -56,7 +58,7 @@ class LokiCollectionTests(unittest.TestCase):
 
     def test_irreducible_saturated_timestamp_is_reported_incomplete(self):
         values = [["5", f"error {number}"] for number in range(4)]
-        entries, metadata = asyncio.run(lib._fetch_loki_complete(
+        entries, metadata = asyncio.run(_fetch_loki_complete(
             _LokiClient(values), "query", 5, 5, page_size=3,
         ))
         self.assertEqual(len(entries), 3)
@@ -309,8 +311,8 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             self.assertNotEqual(result["built_at"], "2026-08-14T12:00:00+00:00")
 
     def test_stale_notice_is_rendered_in_timestamp_area(self):
-        today = lib.masthead_today("2026-08-14 12:00 UTC", stale=True)
-        rolling = lib.masthead_rolling("2026-08-14 12:00 UTC", stale=True)
+        today = masthead_today("2026-08-14 12:00 UTC", stale=True)
+        rolling = masthead_rolling("2026-08-14 12:00 UTC", stale=True)
         for masthead in (today, rolling):
             self.assertIn("Generated 2026-08-14 12:00 UTC", masthead)
             self.assertIn("Update failed; showing last successful edition", masthead)
