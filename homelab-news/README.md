@@ -35,6 +35,7 @@ The web server reads previously generated JSON files and does not depend on the 
 | **Services** (`/services`) | Every service in the 90-day event ledger with its event count; links into per-service timelines | Live from the event ledger |
 | **Service timeline** (`/service/{name}`) | One service's chronological events from the 90-day ledger | Live from the event ledger |
 | **Search** (`/search`) | Full-text search over article headlines/blurbs across today, Current Events, and the archive | Live query |
+| **Investigations** (`/investigations`) | Durable Investigation Desk reports, merged idempotently across editions | Persisted per investigation |
 
 Operational editions also run an automatic Investigation Desk. A low-cost LLM
 triage pass asks whether each substantive incident has a realistically established
@@ -110,6 +111,7 @@ data/
   recent_media.json       # hourly seven-day media list and resolved Jellyfin links
   search_index.db         # SQLite FTS5 index of archived article text, rebuilt when stale
   investigations.json    # cached automatic read-only incident investigations
+  investigations_archive.json # durable Investigation Desk report log (idempotent, retained to Hindsight)
   archive/
     index.json            # lightweight archive index
     YYYY-MM-DD.json       # one archived edition per day
