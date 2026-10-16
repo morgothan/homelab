@@ -27,6 +27,8 @@ from textual.reactive import reactive
 from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Label, ProgressBar, RichLog, Static
 
+from rich.text import Text
+
 # ── load bin/update-images as a module (explicit SourceFileLoader: a bare
 # ── spec_from_file_location yields a NULL loader for a non-.py file) ──────────
 _BIN = Path(__file__).resolve().parent
@@ -160,10 +162,9 @@ class ApplyScreen(Screen):
         self.set_interval(0.12, self._spin_tick)
         self._render_stage()
 
-    def on_stages(self, msg: "UpdateImagesApp.Stages") -> None:
-        self.stage = msg.stage
-
     def watch_stage(self, _: str) -> None:
+        # Single owner of the stage text/spinner: App.on_stages sets this
+        # reactive; watch_stage (+ _spin_tick) re-renders #stage.
         self._render_stage()
 
     def _spin_tick(self) -> None:
@@ -377,21 +378,34 @@ class UpdateImagesApp(App):
         self.post_message(self.Stages(stage))
 
     def on_stages(self, msg: "Stages") -> None:
-        try:
-            self.screen.query_one("#stage", Static).update(
-                f"[b cyan]{msg.stage}[/]")
-        except Exception:
-            pass
+        # Forward to the ApplyScreen's stage reactive — the single owner that
+        # renders stage text + spinner (avoids racing writers on #stage).
+        screen = self.screen
+        if isinstance(screen, ApplyScreen):
+            screen.stage = msg.stage
+
+    _FAIL_TOKENS = ("failed", "error", "exception", "not found", "unable to")
+
+    @staticmethod
+    def _is_fail_line(line: str) -> bool:
+        stripped = line.lstrip()
+        low = line.lower()
+        if stripped.startswith("[!]") or stripped.startswith("[e]"):
+            return True
+        return any(tok in low for tok in UpdateImagesApp._FAIL_TOKENS)
 
     def on_log_lines(self, msg: "LogLines") -> None:
         try:
             log = self.screen.query_one("#apply-log", RichLog)
         except Exception:
             return  # apply finished / screen changed
-        text = msg.text
-        for line in text.split("\n"):
-            if line:
-                log.write_line(line)
+        for line in msg.text.split("\n"):
+            if not line:
+                continue
+            if self._is_fail_line(line):
+                log.write(Text(line, style="bold red"))
+            else:
+                log.write(Text(line))
 
 
 def main() -> None:

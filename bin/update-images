@@ -615,14 +615,14 @@ def _autocommit_compose(applied_bumps: list, out=sys.stdout) -> Optional[tuple]:
     if commit.returncode != 0:
         print(f"\n[!] git commit failed:\n{commit.stderr.strip()}", file=sys.stderr)
         return ("git commit error", "FAILED")
-    out.write(f"\n+ git commit -m {msg!r}")
+    print(f"\n+ git commit -m {msg!r}", file=out)
     sha = _git(["rev-parse", "--short", "HEAD"]).stdout.strip()
     push = _git(["push"])
     if push.returncode != 0:
         print(f"[!] git push failed (commit is local):\n{push.stderr.strip()}",
               file=sys.stderr)
         return (f"commit {sha}", "PUSH FAILED (local only)")
-    out.write("+ git push")
+    print("+ git push", file=out)
     return (f"commit {sha}", "pushed")
 
 
@@ -648,7 +648,7 @@ def _update_remote_hosts(out=sys.stdout) -> tuple:
     failed: list = []
     for host in [*REMOTE_DC_HOSTS, SKETCHY_NAS_HOST]:
         cmd = SKETCHY_NAS_CMD if host == SKETCHY_NAS_HOST else REMOTE_DC_CMD
-        out.write(f"\n=== {host} ===")
+        print(f"\n=== {host} ===", file=out)
         rc, out_cap = _run_capture(["ssh", f"nat@{host}", cmd], out=out)
         if rc == 0:
             host_updates[host] = _parse_img_updates(out_cap)
