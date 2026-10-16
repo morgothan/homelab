@@ -285,3 +285,6 @@ bin/.outline-api-key
 
 # superpowers design and implimentation docs
 .superpowers
+
+# isolated git worktrees
+/.worktrees/
