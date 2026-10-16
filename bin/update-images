@@ -218,6 +218,13 @@ class CheckProgress:
     base_done: int = 0
 
 
+@dataclass
+class ApplyOptions:
+    all_remote: bool = False
+    no_commit: bool = False
+    edge_gateway: bool = False
+
+
 async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) -> Optional[str]:
     """Return newest matching tag if newer than current and manifest is pullable, else None."""
     pat = _tag_pattern(current)
@@ -666,6 +673,167 @@ def _remote_rows(host_updates: dict, failed: list) -> list:
     return rows
 
 
+# ── apply phase (shared by CLI and TUI) ───────────────────────────────────────
+
+def apply_updates(status: dict, opts: ApplyOptions,
+                  out=sys.stdout, stage_cb=None) -> list:
+    """Apply the detected updates end-to-end; return the WHAT CHANGED rows.
+
+    This is the old inline apply block from main(), hoisted into a callable so a
+    TUI can drive it with a different `out` stream. `stage_cb` (if given) is
+    called with one of "pull"/"rebuild"/"redeploy"/"prune"/"commit"/"remote" at
+    the start of each respective step. Any fatal command failure raises
+    ApplyError (via _run(check=True)) so the caller can abort before showing a
+    misleading summary.
+    """
+    semver_by_file = status["semver_by_file"]
+    rolling_stale  = status["rolling_stale"]
+    build_stale    = status["build_stale"]
+    stale_bases    = status["stale_bases"]
+    svc_bases      = status["svc_bases"]
+
+    total = (sum(len(v) for v in semver_by_file.values())
+             + len(rolling_stale) + len(build_stale))
+
+    if total == 0:
+        if not opts.all_remote:
+            return []
+        if stage_cb is not None:
+            stage_cb("remote")
+        host_updates, remote_failed = _update_remote_hosts()
+        return _remote_rows(host_updates, remote_failed)
+
+    main_cf    = REPO_ROOT / "docker-compose.yml"
+    openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
+    edge_items = list(semver_by_file.get(EDGE_COMPOSE, []))
+    edge_changed = (
+        bool(edge_items)
+        or any(cf == EDGE_COMPOSE for cf, _, _ in rolling_stale)
+        or any(cf == EDGE_COMPOSE for cf, _, _ in build_stale)
+    )
+
+    # ── 1. write semver tag changes into compose files ─────────────────────────
+    if semver_by_file:
+        _apply_semver(semver_by_file)
+
+    # ── 2. pull updated images (rolling stale + new semver tags) ──────────────
+    if stage_cb is not None:
+        stage_cb("pull")
+    pulled: set = set()
+    pull_failed: list = []  # (cf, full_ref, name, old_tag, new_tag)
+
+    for _, _, ref in rolling_stale:
+        if ref not in pulled:
+            if _run(["docker", "pull", ref], check=False, out=out) == 0:
+                pulled.add(ref)
+            # rolling failure is non-fatal — the old image keeps running
+
+    for cf, items in semver_by_file.items():
+        for full_ref, name, old_tag, new_tag in items:
+            ref = f"{name}:{new_tag}"
+            if ref not in pulled:
+                if _run(["docker", "pull", ref], check=False, out=out) == 0:
+                    pulled.add(ref)
+                else:
+                    print(f"\n[!] pull failed for {ref} — reverting compose file", file=sys.stderr)
+                    pull_failed.append((cf, full_ref, name, old_tag, new_tag))
+
+    if pull_failed:
+        _revert_semver(pull_failed)
+        print(f"[!] {len(pull_failed)} image(s) reverted in compose file(s).", file=sys.stderr)
+
+    # ── 3. rebuild local builds whose base images changed ─────────────────────
+    if stage_cb is not None:
+        stage_cb("rebuild")
+    for cf, svc, _ in build_stale:
+        if cf == main_cf:
+            _run([str(REPO_ROOT / "dc.sh"), "build", "--pull", svc], check=False, out=out)
+        else:
+            _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc], check=False, out=out)
+
+    # ── 4. redeploy ────────────────────────────────────────────────────────────
+    # dc.sh handles OpenBao auto-start + secret injection for the main stack.
+    if stage_cb is not None:
+        stage_cb("redeploy")
+    _run([str(REPO_ROOT / "dc.sh"), "up", "-d"], out=out)
+
+    # Traefik/cloudflared are deliberately absent from the main Compose project.
+    # Promote the complete edge pair through the healthy inactive color instead
+    # of letting Compose replace the only reverse proxy in place.
+    if edge_changed:
+        if _run([str(REPO_ROOT / "bin" / "deploy-traefik")], check=False, out=out) != 0:
+            if edge_items:
+                _revert_semver([
+                    (EDGE_COMPOSE, full_ref, name, old_tag, new_tag)
+                    for full_ref, name, old_tag, new_tag in edge_items
+                ])
+            raise ApplyError(1, "edge promotion failed; compose image tags reverted")
+
+    # Redeploy OpenBao stack separately if any of its images changed.
+    openbao_changed = (
+        openbao_cf in semver_by_file
+        or any(cf == openbao_cf for cf, _, _ in rolling_stale)
+        or any(cf == openbao_cf for cf, _, _ in build_stale)
+    )
+    if openbao_changed:
+        _run(["docker", "compose", "-f", str(openbao_cf), "up", "-d"], out=out)
+
+    # ── 5. prune ───────────────────────────────────────────────────────────────
+    # -f only (no -a): removes dangling images but preserves tagged ones.
+    # Using -fa would remove build-base images (e.g. python:3.13-slim) that
+    # aren't referenced by running containers, causing false-positive stale
+    # detection on the next run.
+    if stage_cb is not None:
+        stage_cb("prune")
+    _run(["docker", "system", "prune", "-f"], out=out)
+
+    # ── 6. commit + push the compose tag bumps ────────────────────────────────
+    if stage_cb is not None:
+        stage_cb("commit")
+    failed_refs = {(name, new_tag) for _, _, name, _, new_tag in pull_failed}
+    applied_bumps = [
+        (name, old_tag, new_tag)
+        for items in semver_by_file.values()
+        for _, name, old_tag, new_tag in items
+        if (name, new_tag) not in failed_refs
+    ]
+    if opts.no_commit:
+        git_row = ("--no-commit", "skipped")
+    else:
+        git_row = _autocommit_compose(applied_bumps)
+
+    # ── 7. remote hosts ──────────────────────────────────────────────────────
+    if stage_cb is not None:
+        stage_cb("remote")
+    host_updates, remote_failed = _update_remote_hosts() if opts.all_remote else ({}, [])
+
+    # ── 8. summary table ─────────────────────────────────────────────────────
+    rows: list = []
+    for cf, items in semver_by_file.items():
+        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
+        for _, name, old, new in items:
+            reverted = (name, new) in failed_refs
+            rows.append(("image", name.rsplit("/", 1)[-1] + scope, f"{old} → {new}",
+                         "REVERTED (pull failed)" if reverted else "updated"))
+    for cf, svc, ref in rolling_stale:
+        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
+        rows.append(("rolling", svc + scope, ref.rsplit("/", 1)[-1],
+                     "pulled" if ref in pulled else "PULL FAILED (kept old)"))
+    for cf, svc, _ in build_stale:
+        changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
+        rows.append(("rebuild", svc, "base: " + ", ".join(changed), "rebuilt"))
+    rows.append(("deploy", "main stack", "dc.sh up -d", "ok"))
+    if edge_changed:
+        rows.append(("deploy", "edge pair", "blue/green promotion", "ok"))
+    if openbao_changed:
+        rows.append(("deploy", "openbao stack", "compose up -d", "ok"))
+    if git_row:
+        rows.append(("git", "compose files", git_row[0], git_row[1]))
+    rows += _remote_rows(host_updates, remote_failed)
+
+    return rows
+
+
 # ── end-of-run summary ────────────────────────────────────────────────────────
 
 def _print_change_table(rows: list) -> None:
@@ -706,12 +874,12 @@ def main() -> None:
                         help="skip the automatic git commit + push of compose tag bumps")
     args = parser.parse_args()
 
-    results        = asyncio.run(_check_all(include_edge_gateway=args.edge_gateway))
-    semver_by_file = results["semver_by_file"]
-    rolling_stale  = results["rolling_stale"]
-    build_stale    = results["build_stale"]
-    stale_bases    = results["stale_bases"]
-    svc_bases      = results["svc_bases"]
+    status         = asyncio.run(_check_all(include_edge_gateway=args.edge_gateway))
+    semver_by_file = status["semver_by_file"]
+    rolling_stale  = status["rolling_stale"]
+    build_stale    = status["build_stale"]
+    stale_bases    = status["stale_bases"]
+    svc_bases      = status["svc_bases"]
 
     # ── display ────────────────────────────────────────────────────────────────
     for cf in COMPOSE_FILES:
@@ -770,128 +938,12 @@ def main() -> None:
             print("Aborted.")
             return
 
-    if total == 0:
-        host_updates, remote_failed = _update_remote_hosts()
-        _print_change_table(_remote_rows(host_updates, remote_failed))
-        return
-
-    main_cf    = REPO_ROOT / "docker-compose.yml"
-    openbao_cf = REPO_ROOT / "docker-compose.openbao.yml"
-    edge_items = list(semver_by_file.get(EDGE_COMPOSE, []))
-    edge_changed = (
-        bool(edge_items)
-        or any(cf == EDGE_COMPOSE for cf, _, _ in rolling_stale)
-        or any(cf == EDGE_COMPOSE for cf, _, _ in build_stale)
-    )
-
-    # ── 1. write semver tag changes into compose files ─────────────────────────
-    if semver_by_file:
-        _apply_semver(semver_by_file)
-
-    # ── 2. pull updated images (rolling stale + new semver tags) ──────────────
-    pulled: set = set()
-    pull_failed: list = []  # (cf, full_ref, name, old_tag, new_tag)
-
-    for _, _, ref in rolling_stale:
-        if ref not in pulled:
-            if _run(["docker", "pull", ref], check=False) == 0:
-                pulled.add(ref)
-            # rolling failure is non-fatal — the old image keeps running
-
-    for cf, items in semver_by_file.items():
-        for full_ref, name, old_tag, new_tag in items:
-            ref = f"{name}:{new_tag}"
-            if ref not in pulled:
-                if _run(["docker", "pull", ref], check=False) == 0:
-                    pulled.add(ref)
-                else:
-                    print(f"\n[!] pull failed for {ref} — reverting compose file", file=sys.stderr)
-                    pull_failed.append((cf, full_ref, name, old_tag, new_tag))
-
-    if pull_failed:
-        _revert_semver(pull_failed)
-        print(f"[!] {len(pull_failed)} image(s) reverted in compose file(s).", file=sys.stderr)
-
-    # ── 3. rebuild local builds whose base images changed ─────────────────────
-    for cf, svc, _ in build_stale:
-        if cf == main_cf:
-            _run([str(REPO_ROOT / "dc.sh"), "build", "--pull", svc], check=False)
-        else:
-            _run(["docker", "compose", "-f", str(cf), "build", "--pull", svc], check=False)
-
-    # ── 4. redeploy ────────────────────────────────────────────────────────────
-    # dc.sh handles OpenBao auto-start + secret injection for the main stack.
-    _run([str(REPO_ROOT / "dc.sh"), "up", "-d"])
-
-    # Traefik/cloudflared are deliberately absent from the main Compose project.
-    # Promote the complete edge pair through the healthy inactive color instead
-    # of letting Compose replace the only reverse proxy in place.
-    if edge_changed:
-        if _run([str(REPO_ROOT / "bin" / "deploy-traefik")], check=False) != 0:
-            if edge_items:
-                _revert_semver([
-                    (EDGE_COMPOSE, full_ref, name, old_tag, new_tag)
-                    for full_ref, name, old_tag, new_tag in edge_items
-                ])
-            print("[!] Edge promotion failed; compose image tags were reverted.", file=sys.stderr)
-            sys.exit(1)
-
-    # Redeploy OpenBao stack separately if any of its images changed.
-    openbao_changed = (
-        openbao_cf in semver_by_file
-        or any(cf == openbao_cf for cf, _, _ in rolling_stale)
-        or any(cf == openbao_cf for cf, _, _ in build_stale)
-    )
-    if openbao_changed:
-        _run(["docker", "compose", "-f", str(openbao_cf), "up", "-d"])
-
-    # ── 5. prune ───────────────────────────────────────────────────────────────
-    # -f only (no -a): removes dangling images but preserves tagged ones.
-    # Using -fa would remove build-base images (e.g. python:3.13-slim) that
-    # aren't referenced by running containers, causing false-positive stale
-    # detection on the next run.
-    _run(["docker", "system", "prune", "-f"])
-
-    # ── 6. commit + push the compose tag bumps ────────────────────────────────
-    failed_refs = {(name, new_tag) for _, _, name, _, new_tag in pull_failed}
-    applied_bumps = [
-        (name, old_tag, new_tag)
-        for items in semver_by_file.values()
-        for _, name, old_tag, new_tag in items
-        if (name, new_tag) not in failed_refs
-    ]
-    if args.no_commit:
-        git_row = ("--no-commit", "skipped")
-    else:
-        git_row = _autocommit_compose(applied_bumps)
-
-    # ── 7. remote hosts ──────────────────────────────────────────────────────
-    host_updates, remote_failed = _update_remote_hosts() if args.all else ({}, [])
-
-    # ── 8. summary table ─────────────────────────────────────────────────────
-    rows: list = []
-    for cf, items in semver_by_file.items():
-        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
-        for _, name, old, new in items:
-            reverted = (name, new) in failed_refs
-            rows.append(("image", name.rsplit("/", 1)[-1] + scope, f"{old} → {new}",
-                         "REVERTED (pull failed)" if reverted else "updated"))
-    for cf, svc, ref in rolling_stale:
-        scope = " (edge)" if cf == EDGE_COMPOSE else " (openbao)" if cf == openbao_cf else ""
-        rows.append(("rolling", svc + scope, ref.rsplit("/", 1)[-1],
-                     "pulled" if ref in pulled else "PULL FAILED (kept old)"))
-    for cf, svc, _ in build_stale:
-        changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
-        rows.append(("rebuild", svc, "base: " + ", ".join(changed), "rebuilt"))
-    rows.append(("deploy", "main stack", "dc.sh up -d", "ok"))
-    if edge_changed:
-        rows.append(("deploy", "edge pair", "blue/green promotion", "ok"))
-    if openbao_changed:
-        rows.append(("deploy", "openbao stack", "compose up -d", "ok"))
-    if git_row:
-        rows.append(("git", "compose files", git_row[0], git_row[1]))
-    rows += _remote_rows(host_updates, remote_failed)
-
+    try:
+        rows = apply_updates(status, ApplyOptions(args.all, args.no_commit, args.edge_gateway),
+                             out=sys.stdout)
+    except ApplyError as e:
+        print(f"\n[e] {e}", file=sys.stderr)
+        sys.exit(e.rc)
     _print_change_table(rows)
     print("\nDone.")
 
