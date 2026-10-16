@@ -766,7 +766,7 @@ services:
 # Web UI for NUT UPS monitoring and status
   peanut:
     container_name: peanut
-    image: brandawg93/peanut:6.0.0
+    image: brandawg93/peanut:6.1.0
     restart: unless-stopped
     logging: *logging
     depends_on:
