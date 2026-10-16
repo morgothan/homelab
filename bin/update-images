@@ -572,7 +572,7 @@ def _git(args: list) -> subprocess.CompletedProcess:
                           capture_output=True, text=True)
 
 
-def _autocommit_compose(applied_bumps: list) -> Optional[tuple]:
+def _autocommit_compose(applied_bumps: list, out=sys.stdout) -> Optional[tuple]:
     """Commit changed compose files and push — unless the diff trips a leak marker.
 
     applied_bumps: [(image_name, old_tag, new_tag), ...] used only for the message.
@@ -615,14 +615,14 @@ def _autocommit_compose(applied_bumps: list) -> Optional[tuple]:
     if commit.returncode != 0:
         print(f"\n[!] git commit failed:\n{commit.stderr.strip()}", file=sys.stderr)
         return ("git commit error", "FAILED")
-    print(f"\n+ git commit -m {msg!r}")
+    out.write(f"\n+ git commit -m {msg!r}")
     sha = _git(["rev-parse", "--short", "HEAD"]).stdout.strip()
     push = _git(["push"])
     if push.returncode != 0:
         print(f"[!] git push failed (commit is local):\n{push.stderr.strip()}",
               file=sys.stderr)
         return (f"commit {sha}", "PUSH FAILED (local only)")
-    print("+ git push")
+    out.write("+ git push")
     return (f"commit {sha}", "pushed")
 
 
@@ -636,7 +636,7 @@ def _parse_img_updates(output: str) -> list[str]:
     return [ln.split()[0] for ln in m.group(1).splitlines() if ln.strip()]
 
 
-def _update_remote_hosts() -> tuple:
+def _update_remote_hosts(out=sys.stdout) -> tuple:
     """SSH into each remote host and run its own pull/up/prune (or update script).
 
     Returns (host_updates, failed): host_updates maps each host that succeeded to
@@ -648,10 +648,10 @@ def _update_remote_hosts() -> tuple:
     failed: list = []
     for host in [*REMOTE_DC_HOSTS, SKETCHY_NAS_HOST]:
         cmd = SKETCHY_NAS_CMD if host == SKETCHY_NAS_HOST else REMOTE_DC_CMD
-        print(f"\n=== {host} ===")
-        rc, out = _run_capture(["ssh", f"nat@{host}", cmd])
+        out.write(f"\n=== {host} ===")
+        rc, out_cap = _run_capture(["ssh", f"nat@{host}", cmd], out=out)
         if rc == 0:
-            host_updates[host] = _parse_img_updates(out)
+            host_updates[host] = _parse_img_updates(out_cap)
         else:
             failed.append(host)
     if failed:
@@ -700,7 +700,7 @@ def apply_updates(status: dict, opts: ApplyOptions,
             return []
         if stage_cb is not None:
             stage_cb("remote")
-        host_updates, remote_failed = _update_remote_hosts()
+        host_updates, remote_failed = _update_remote_hosts(out=out)
         return _remote_rows(host_updates, remote_failed)
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
@@ -800,12 +800,12 @@ def apply_updates(status: dict, opts: ApplyOptions,
     if opts.no_commit:
         git_row = ("--no-commit", "skipped")
     else:
-        git_row = _autocommit_compose(applied_bumps)
+        git_row = _autocommit_compose(applied_bumps, out=out)
 
     # ── 7. remote hosts ──────────────────────────────────────────────────────
     if stage_cb is not None:
         stage_cb("remote")
-    host_updates, remote_failed = _update_remote_hosts() if opts.all_remote else ({}, [])
+    host_updates, remote_failed = _update_remote_hosts(out=out) if opts.all_remote else ({}, [])
 
     # ── 8. summary table ─────────────────────────────────────────────────────
     rows: list = []
