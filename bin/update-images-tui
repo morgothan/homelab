@@ -1,0 +1,404 @@
+#!/usr/bin/env -S uv run --script
+# /// script
+# requires-python = ">=3.10"
+# dependencies = ["textual>=0.90"]
+# ///
+"""Textual TUI front-end for `bin/update-images`.
+
+This is a graphical wrapper around the shared logic in `bin/update-images`
+(loaded in place as a module). It shows live progress while checking, grouped
+findings before applying, a live command log during the apply, and a WHAT
+CHANGED summary table at the end. The same five flags are supported.
+
+Usage:
+  bin/update-images-tui [--dry-run] [--yes] [--all] [--edge-gateway] [--no-commit]
+"""
+
+import argparse
+import importlib.machinery
+import importlib.util
+from pathlib import Path
+
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import ScrollableContainer
+from textual.message import Message
+from textual.reactive import reactive
+from textual.screen import Screen
+from textual.widgets import DataTable, Footer, Label, ProgressBar, RichLog, Static
+
+# ── load bin/update-images as a module (explicit SourceFileLoader: a bare
+# ── spec_from_file_location yields a NULL loader for a non-.py file) ──────────
+_BIN = Path(__file__).resolve().parent
+_spec = importlib.util.spec_from_loader(
+    "update_images",
+    importlib.machinery.SourceFileLoader("update_images", str(_BIN / "update-images")),
+)
+ui = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(ui)
+
+
+def _parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Update Docker images: semver bumps, rolling-tag pulls, local rebuilds"
+    )
+    parser.add_argument("--dry-run", "-n", action="store_true",
+                        help="check only, make no changes")
+    parser.add_argument("--yes", "-y", action="store_true",
+                        help="skip confirmation prompt")
+    parser.add_argument("--all", "-a", action="store_true",
+                        help="also update beszel/whisper/spark/hermes/sketchy-nas over SSH")
+    parser.add_argument("--edge-gateway", action="store_true",
+                        help="also check/update HAProxy; briefly interrupts direct LAN/host-port traffic")
+    parser.add_argument("--no-commit", action="store_true",
+                        help="skip the automatic git commit + push of compose tag bumps")
+    return parser.parse_args()
+
+
+def _human(cf: Path) -> str:
+    return cf.name
+
+
+# ── Check screen ──────────────────────────────────────────────────────────────
+
+class CheckScreen(Screen):
+    """Three progress bars (semver/rolling/build-base) plus a footer tally."""
+
+    def compose(self) -> ComposeResult:
+        yield Static("Checking for image updates…", id="check-title")
+        yield Label("Semver-pinned images", classes="pb-label")
+        yield ProgressBar(total=0, show_eta=False, id="semver")
+        yield Label("Rolling-tag images", classes="pb-label")
+        yield ProgressBar(total=0, show_eta=False, id="rolling")
+        yield Label("Build-base images", classes="pb-label")
+        yield ProgressBar(total=0, show_eta=False, id="base")
+        yield Static("", id="check-tally")
+
+
+# ── Findings screen ───────────────────────────────────────────────────────────
+
+class FindingsScreen(Screen):
+    """Grouped findings (semver per compose file, rolling, rebuilds) + banner."""
+
+    BINDINGS = [
+        Binding("enter", "apply", "Apply"),
+        Binding("escape", "abort", "Quit"),
+    ]
+
+    def __init__(self, status: dict, dry_run: bool = False):
+        super().__init__()
+        self.status = status
+        self.dry_run = dry_run
+
+    def compose(self) -> ComposeResult:
+        yield Static("Findings", id="findings-title")
+        with ScrollableContainer(id="findings-scroll"):
+            yield Static(self._body(), id="findings-body", markup=True)
+        if self.dry_run:
+            yield Static("DRY RUN — nothing will change (Enter/Escape to exit)",
+                         id="dry-banner")
+        else:
+            yield Static("Press Enter to apply  ·  Esc to quit", id="banner")
+
+    def _body(self) -> str:
+        lines: list[str] = []
+        semver_by_file = self.status["semver_by_file"]
+        rolling = self.status["rolling_stale"]
+        build = self.status["build_stale"]
+        stale_bases = self.status["stale_bases"]
+        svc_bases = self.status["svc_bases"]
+
+        n_semver = sum(len(v) for v in semver_by_file.values())
+        for cf, items in semver_by_file.items():
+            lines.append(f"[b]{_human(cf)}[/b] — semver updates:")
+            for _, name, old, new in items:
+                major = (ui._sort_key(new)[0] > ui._sort_key(old)[0])
+                flag = "  [red][major][/red]" if major else ""
+                lines.append(f"  {name}: {old}  →  {new}{flag}")
+        if rolling:
+            lines.append("")
+            lines.append("[b]Rolling-tag images with digest changes:[/b]")
+            for cf, svc, ref in rolling:
+                lines.append(f"  {svc}[dim] ({_human(cf)})[/dim]: {ref}")
+        if build:
+            lines.append("")
+            lines.append("[b]Local builds with stale base images:[/b]")
+            for cf, svc, _ in build:
+                changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
+                lines.append(f"  {svc}{'[dim] (%s)[/dim]' % _human(cf) if cf.name != 'docker-compose.yml' else ''}: {', '.join(changed)}")
+        lines.append("")
+        lines.append(f"{n_semver} semver, {len(rolling)} rolling, {len(build)} rebuild")
+        return "\n".join(lines)
+
+    def action_apply(self) -> None:
+        if self.dry_run:
+            self.app.exit(0)
+        else:
+            self.app.start_apply()
+
+    def action_abort(self) -> None:
+        self.app.exit(0)
+
+
+# ── Apply screen ──────────────────────────────────────────────────────────────
+
+class ApplyScreen(Screen):
+    """Current stage (spinner) + a live RichLog fed from apply's `out`."""
+
+    stage = reactive("preparing")
+    _spin = reactive(0)
+    _CHARS = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+
+    def compose(self) -> ComposeResult:
+        yield Static("Applying updates…", id="apply-title")
+        yield Static("", id="stage")
+        yield RichLog(id="apply-log", highlight=False, markup=False,
+                      wrap=False, auto_scroll=True)
+
+    def on_mount(self) -> None:
+        self.set_interval(0.12, self._spin_tick)
+        self._render_stage()
+
+    def on_stages(self, msg: "UpdateImagesApp.Stages") -> None:
+        self.stage = msg.stage
+
+    def watch_stage(self, _: str) -> None:
+        self._render_stage()
+
+    def _spin_tick(self) -> None:
+        self._spin += 1
+        self._render_stage()
+
+    def _spin_char(self) -> str:
+        return self._CHARS[self._spin % len(self._CHARS)]
+
+    def _render_stage(self) -> None:
+        try:
+            self.query_one("#stage", Static).update(
+                f"[b cyan]{self._spin_char()} {self.stage}[/]")
+        except Exception:
+            pass  # not mounted yet
+
+
+# ── Summary screen ────────────────────────────────────────────────────────────
+
+class SummaryScreen(Screen):
+    """WHAT CHANGED rows as a DataTable; footer tells the user how to quit."""
+
+    BINDINGS = [Binding("escape", "quit", "Quit")]
+
+    def __init__(self, rows: list):
+        super().__init__()
+        self.rows = rows
+
+    def compose(self) -> ComposeResult:
+        yield Static("Done — press Escape to quit", id="sum-title")
+        yield DataTable(id="changes")
+        yield Static("", id="sum-foot")
+        yield Footer()
+
+    def on_mount(self) -> None:
+        table = self.query_one("#changes", DataTable)
+        table.add_columns("category", "item", "change", "result")
+        if not self.rows:
+            table.add_row("(nothing)", "", "", "everything already up to date")
+        for cat, item, change, result in self.rows:
+            table.add_row(cat, item, change, result)
+        self.query_one("#sum-foot", Static).update(
+            f"{len(self.rows)} change(s) recorded")
+
+    def action_quit(self) -> None:
+        self.app.exit(0)
+
+
+# ── Error screen ──────────────────────────────────────────────────────────────
+
+class ErrorScreen(Screen):
+    """Red banner after an ApplyError; quits on any keypress, no summary."""
+
+    def __init__(self, message: str, rc: int = 1):
+        super().__init__()
+        self.message = message
+        self.rc = rc
+
+    def compose(self) -> ComposeResult:
+        yield Static(f"[red][b]Apply failed (exit {self.rc})[/][/]", id="error-title")
+        yield Static(self.message, id="error-body")
+        yield Static("Press any key to quit", id="error-hint")
+
+    async def on_key(self, event) -> None:
+        event.prevent_default()
+        self.app.exit(self.rc)
+
+
+# ── The app ───────────────────────────────────────────────────────────────────
+
+class UpdateImagesApp(App):
+    TITLE = "Update Images"
+    CSS = """
+    Screen { layout: vertical; }
+    Label.pb-label { padding-top: 1; }
+    ProgressBar { width: 100%; height: 1; }
+    #check-title, #findings-title, #apply-title, #sum-title {
+        height: 1; text-style: bold; padding-bottom: 1;
+    }
+    #check-tally { height: 1; padding-top: 1; color: $text-muted; }
+    #stage { height: 1; }
+    #findings-scroll { height: 1fr; border: round $accent; }
+    #findings-body { height: auto; padding: 1 2; }
+    #banner, #dry-banner {
+        height: 3; content-align: center middle;
+        text-style: bold; margin-top: 1;
+    }
+    #banner { background: $success; color: $text; }
+    #dry-banner { background: $warning; color: $text; }
+    #apply-log { height: 1fr; border: round $accent; }
+    #changes { height: 1fr; }
+    #error-title { background: $error; color: $text; text-style: bold; padding: 1 2; }
+    #error-body { padding: 1 2; }
+    #error-hint { color: $text-muted; padding: 0 2; }
+    """
+
+    # custom messages
+    class Progress(Message):
+        def __init__(self, cp) -> None:
+            super().__init__()
+            self.cp = cp
+
+    class Stages(Message):
+        def __init__(self, stage: str) -> None:
+            super().__init__()
+            self.stage = stage
+
+    class LogLines(Message):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
+
+    class ApplyFinished(Message):
+        def __init__(self, rows: list) -> None:
+            super().__init__()
+            self.rows = rows
+
+    class ApplyFailed(Message):
+        def __init__(self, rc: int, message: str) -> None:
+            super().__init__()
+            self.rc = rc
+            self.message = message
+
+    def __init__(self, args: argparse.Namespace) -> None:
+        super().__init__()
+        self.args = args
+        self.status: dict | None = None
+        self.opts = ui.ApplyOptions(args.all, args.no_commit, args.edge_gateway)
+
+    # ── entry / check phase ──────────────────────────────────────────────────
+    def on_mount(self) -> None:
+        self.push_screen(CheckScreen())
+        self.run_worker(self._check_and_continue, name="check",
+                        thread=False, exit_on_error=False)
+
+    async def _check_and_continue(self) -> None:
+        try:
+            status = await ui._check_all(
+                include_edge_gateway=self.args.edge_gateway,
+                progress_cb=self._on_progress,
+            )
+        except Exception as e:
+            self.push_screen(ErrorScreen(f"Check failed: {e}"))
+            return
+        self.status = status
+        self.push_screen(FindingsScreen(status, dry_run=self.args.dry_run))
+
+    def _on_progress(self, cp) -> None:
+        # runs on the UI thread (check is async); post a thread-safe Message
+        self.post_message(self.Progress(cp))
+
+    def on_progress(self, msg: "Progress") -> None:
+        cp = msg.cp
+        for ident, done, total in (
+            ("semver", cp.semver_done, cp.semver_total),
+            ("rolling", cp.rolling_done, cp.rolling_total),
+            ("base", cp.base_done, cp.base_total),
+        ):
+            try:
+                bar = self.query_one(f"#{ident}", ProgressBar)
+                bar.total = total if total else 0
+                bar.progress = 0 if not total else done
+            except Exception:
+                pass
+        try:
+            self.query_one("#check-tally", Static).update(
+                f"{cp.semver_done}/{cp.semver_total} semver  ·  "
+                f"{cp.rolling_done}/{cp.rolling_total} rolling  ·  "
+                f"{cp.base_done}/{cp.base_total} build-base")
+        except Exception:
+            pass
+
+    # ── apply phase ──────────────────────────────────────────────────────────
+    def start_apply(self) -> None:
+        self.push_screen(ApplyScreen())
+        self.run_worker(self._apply_work, name="apply",
+                        thread=True, exit_on_error=False)
+
+    def _apply_work(self):
+        try:
+            rows = ui.apply_updates(
+                self.status, self.opts, out=self._sink(), stage_cb=self._stage_sink,
+            )
+        except ui.ApplyError as e:
+            self.post_message(self.ApplyFailed(e.rc, str(e)))
+            return
+        except Exception as e:  # unexpected
+            self.post_message(self.ApplyFailed(1, f"Unexpected failure: {e}"))
+            return
+        self.post_message(self.ApplyFinished(rows))
+
+    def on_apply_finished(self, msg: "ApplyFinished") -> None:
+        self.push_screen(SummaryScreen(msg.rows))
+
+    def on_apply_failed(self, msg: "ApplyFailed") -> None:
+        self.push_screen(ErrorScreen(msg.message, msg.rc))
+
+    def _sink(self):
+        class _Sink:
+            def __init__(self, app):
+                self.app = app
+            def write(self, s: str) -> None:
+                if not s:
+                    return
+                self.app.post_message(self.app.LogLines(s))
+            def flush(self) -> None:
+                pass
+        return _Sink(self)
+
+    def _stage_sink(self, stage: str) -> None:
+        self.post_message(self.Stages(stage))
+
+    def on_stages(self, msg: "Stages") -> None:
+        try:
+            self.screen.query_one("#stage", Static).update(
+                f"[b cyan]{msg.stage}[/]")
+        except Exception:
+            pass
+
+    def on_log_lines(self, msg: "LogLines") -> None:
+        try:
+            log = self.screen.query_one("#apply-log", RichLog)
+        except Exception:
+            return  # apply finished / screen changed
+        text = msg.text
+        for line in text.split("\n"):
+            if line:
+                log.write_line(line)
+
+
+def main() -> None:
+    args = _parse_args()
+    app = UpdateImagesApp(args)
+    raise SystemExit(app.run())
+
+
+if __name__ == "__main__":
+    main()
