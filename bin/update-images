@@ -30,6 +30,7 @@ import platform
 import re
 import subprocess
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -178,21 +179,22 @@ async def _remote_digest(ref: str, sem: asyncio.Semaphore) -> Optional[str]:
     return None
 
 
-def _local_digests(ref: str) -> set[str]:
+async def _local_digests(ref: str) -> set[str]:
     """Return all sha256 digests from local Docker image cache, or empty set.
 
     An image can accumulate multiple RepoDigests entries when Docker Hub
     re-signs or re-pushes a manifest without changing the image content.
     Comparing only index 0 causes false-positive stale detection.
     """
-    r = subprocess.run(
-        ["docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}"],
-        capture_output=True, text=True,
+    proc = await asyncio.create_subprocess_exec(
+        "docker", "image", "inspect", ref, "--format", "{{json .RepoDigests}}",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
     )
-    if r.returncode != 0 or not r.stdout.strip():
+    out, _ = await proc.communicate()
+    if proc.returncode != 0 or not out.strip():
         return set()
     try:
-        repo_digests = json.loads(r.stdout.strip())
+        repo_digests = json.loads(out.decode().strip())
     except json.JSONDecodeError:
         return set()
     result = set()
@@ -205,6 +207,16 @@ def _local_digests(ref: str) -> set[str]:
 
 
 # ── semver update check ────────────────────────────────────────────────────────
+
+@dataclass
+class CheckProgress:
+    semver_total: int = 0
+    semver_done: int = 0
+    rolling_total: int = 0
+    rolling_done: int = 0
+    base_total: int = 0
+    base_done: int = 0
+
 
 async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) -> Optional[str]:
     """Return newest matching tag if newer than current and manifest is pullable, else None."""
@@ -345,7 +357,7 @@ def _dockerfile_bases(context_str: str) -> list[str]:
 
 # ── check everything ───────────────────────────────────────────────────────────
 
-async def _check_all(include_edge_gateway: bool = False) -> dict:
+async def _check_all(include_edge_gateway: bool = False, progress_cb=None) -> dict:
     sem = asyncio.Semaphore(_SEM_SIZE)
 
     all_semver:  list = []  # (cf, full_ref, name, tag)
@@ -392,14 +404,14 @@ async def _check_all(include_edge_gateway: bool = False) -> dict:
 
     async def _chk_rolling(cf, svc, ref):
         remote = await _remote_digest(ref, sem)
-        local  = _local_digests(ref)
+        local  = await _local_digests(ref)
         stale  = remote is not None and bool(local) and remote not in local
         print(".", end="", flush=True)
         return cf, svc, ref, stale
 
     async def _chk_base(base):
         remote = await _remote_digest(base, sem)
-        local  = _local_digests(base)
+        local  = await _local_digests(base)
         # If local is absent, assume stale so the rebuild pulls the latest base
         changed = remote is not None and (not local or remote not in local)
         print(".", end="", flush=True)
@@ -408,14 +420,32 @@ async def _check_all(include_edge_gateway: bool = False) -> dict:
     print(f"  semver    [{len(all_semver):2}] ", end="", flush=True)
     s_res = await asyncio.gather(*[_chk_semver(*t) for t in all_semver])
     print()
+    if progress_cb is not None:
+        progress_cb(CheckProgress(
+            semver_total=len(all_semver), semver_done=len(all_semver),
+            rolling_total=len(all_rolling),
+            base_total=len(unique_bases),
+        ))
 
     print(f"  rolling   [{len(all_rolling):2}] ", end="", flush=True)
     r_res = await asyncio.gather(*[_chk_rolling(*t) for t in all_rolling])
     print()
+    if progress_cb is not None:
+        progress_cb(CheckProgress(
+            semver_total=len(all_semver), semver_done=len(all_semver),
+            rolling_total=len(all_rolling), rolling_done=len(all_rolling),
+            base_total=len(unique_bases),
+        ))
 
     print(f"  build base[{len(unique_bases):2}] ", end="", flush=True)
     b_res = await asyncio.gather(*[_chk_base(b) for b in unique_bases])
     print()
+    if progress_cb is not None:
+        progress_cb(CheckProgress(
+            semver_total=len(all_semver), semver_done=len(all_semver),
+            rolling_total=len(all_rolling), rolling_done=len(all_rolling),
+            base_total=len(unique_bases), base_done=len(unique_bases),
+        ))
 
     semver_by_file: dict = {}
     for cf, full_ref, name, old, new in s_res:
