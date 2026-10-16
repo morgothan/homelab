@@ -475,18 +475,36 @@ def _revert_semver(items: list) -> None:
 
 # ── shell helper ───────────────────────────────────────────────────────────────
 
-def _run(cmd: list, check: bool = True) -> int:
-    print(f"\n+ {' '.join(str(c) for c in cmd)}")
-    result = subprocess.run(cmd, cwd=REPO_ROOT)
-    if check and result.returncode != 0:
-        print(f"Command failed (exit {result.returncode})", file=sys.stderr)
-        sys.exit(result.returncode)
-    return result.returncode
+class ApplyError(Exception):
+    """A command that the apply phase treats as fatal failed."""
+    def __init__(self, rc: int, msg: str = ""):
+        super().__init__(msg or f"command failed (exit {rc})")
+        self.rc = rc
 
 
-def _run_capture(cmd: list) -> tuple[int, str]:
+def _run(cmd: list, check: bool = True, out=sys.stdout) -> int:
+    out.write(f"\n+ {' '.join(str(c) for c in cmd)}")
+    out.write("\n")
+    out.flush()
+    proc = subprocess.Popen(
+        cmd, cwd=REPO_ROOT,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    )
+    assert proc.stdout is not None
+    for line in proc.stdout:
+        out.write(line)
+        out.flush()
+    proc.wait()
+    if check and proc.returncode != 0:
+        raise ApplyError(proc.returncode)
+    return proc.returncode
+
+
+def _run_capture(cmd: list, out=sys.stdout) -> tuple[int, str]:
     """Like _run (non-fatal), but tee: stream output live AND return it for parsing."""
-    print(f"\n+ {' '.join(str(c) for c in cmd)}")
+    out.write(f"\n+ {' '.join(str(c) for c in cmd)}")
+    out.write("\n")
+    out.flush()
     proc = subprocess.Popen(
         cmd, cwd=REPO_ROOT,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
@@ -494,7 +512,7 @@ def _run_capture(cmd: list) -> tuple[int, str]:
     chunks: list = []
     assert proc.stdout is not None
     for line in proc.stdout:
-        sys.stdout.write(line)
+        out.write(line)
         chunks.append(line)
     proc.wait()
     return proc.returncode, "".join(chunks)
