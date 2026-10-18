@@ -97,7 +97,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:v2.5.0
+    image: ghcr.io/gethomepage/homepage:v2.6.0
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -1047,7 +1047,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.28.0 #
+    image: ghcr.io/mealie-recipes/mealie:v3.29.0 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
