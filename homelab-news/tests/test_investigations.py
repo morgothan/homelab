@@ -227,6 +227,17 @@ class GroupRelatedInvestigationTests(unittest.TestCase):
         # all-ties group order.
         self.assertEqual([g["count"] for g in groups], [2, 1])
 
+    def test_non_dict_rows_are_dropped_without_crashing(self):
+        a = self._report("a", "Overseerr Jellyfin Sync Fails",
+            "the anime list mapping download failed", "2026-10-15T09:00:00+00:00")
+        b = self._report("b", "Overseerr Jellyfin Sync Interrupted",
+            "the anime list mapping download failed again", "2026-10-16T09:00:00+00:00")
+        groups = investigations.group_related_investigations(
+            [a, "not a dict", None, 42, b])
+        # The non-dict rows are dropped; the two dict reports still group together.
+        self.assertEqual(len(groups), 1)
+        self.assertEqual([r["id"] for r in groups[0]["reports"]], ["b", "a"])
+
 
 if __name__ == "__main__":
     unittest.main()
