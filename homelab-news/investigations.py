@@ -80,9 +80,9 @@ def significant_tokens(report: dict[str, Any]) -> frozenset[str]:
     )
 
 
-def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
-    union = len(a | b)
-    return (len(a & b) / union) if union else 0.0
+def _similarity(a: frozenset[str], b: frozenset[str]) -> float:
+    """Overlap coefficient — intersection over the smaller set."""
+    return (len(a & b) / min(len(a), len(b))) if a and b else 0.0
 
 
 def group_related_investigations(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -90,8 +90,9 @@ def group_related_investigations(reports: list[dict[str, Any]]) -> list[dict[str
 
     Deterministic greedy single-link: sort copies of REPORTS descending by
     ``investigated_at`` (missing timestamps sort last), then each report joins the
-    existing group whose leader's token set has the highest Jaccard similarity
-    >= INCIDENT_GROUP_THRESHOLD (ties go to the newest leader); otherwise it
+    existing group whose leader's token set has the highest overlap-coefficient
+    similarity (intersection / min of sizes) >= INCIDENT_GROUP_THRESHOLD; on equal
+    similarity the first candidate group in iteration order wins. Otherwise it
     starts its own group (and becomes that group's leader). An inverted
     token->group index restricts comparisons to candidate groups sharing >= 1
     token, keeping the 900-report live archive ~0.7s. Returns
@@ -112,7 +113,7 @@ def group_related_investigations(reports: list[dict[str, Any]]) -> list[dict[str
         candidates = {gi for t in toks for gi in inv.get(t, ())}
         best_gi, best_sim = None, -1.0
         for gi in candidates:
-            sim = _jaccard(groups[gi]["_toks"], toks)
+            sim = _similarity(groups[gi]["_toks"], toks)
             if sim > best_sim:
                 best_gi, best_sim = gi, sim
         if best_gi is not None and best_sim >= INCIDENT_GROUP_THRESHOLD:
