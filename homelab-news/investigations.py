@@ -32,9 +32,98 @@ _PROMPT_INJECTION = re.compile(
 )
 
 
+INCIDENT_GROUP_THRESHOLD = 0.35  # min Jaccard similarity between two reports to be "same incident"
+
+# Tokens too generic to distinguish one incident from another (numbers and
+# function words are filtered separately). Validated against the live 927-report
+# archive: keeps the UDM mq-broker/CoreDNS, UniFi WiFi-auth, peanut config-write,
+# kids-dns SD card, and overseerr/jellyfin clusters each as one group.
+_INCIDENT_NOISE = frozenset({
+    "the", "and", "for", "with", "from", "that", "this", "are", "was", "its", "has", "had", "not",
+    "but", "you", "your", "have", "will", "would", "should", "could", "than", "then", "they", "them",
+    "their", "there", "these", "those", "what", "when", "where", "which", "while", "who", "whom",
+    "into", "onto", "over", "under", "again", "further", "once", "here", "all", "any", "both", "each",
+    "more", "most", "other", "some", "such", "only", "own", "same", "too", "very", "can", "may", "must",
+    "about", "after", "before", "between", "during", "until", "upon", "also", "because", "been", "being",
+    "did", "does", "doing", "how", "just", "like", "were", "said", "says", "yes", "no", "per", "off",
+    "out", "via", "within", "without", "each",
+    # operational noise present in every report (would otherwise lower similarity
+    # inside true groups and raise it across unrelated groups)
+    "log", "logs", "logged", "logging", "error", "errors", "err", "warning", "warnings", "warn",
+    "fail", "fails", "failed", "failure", "failures", "report", "reports", "reported", "shows",
+    "show", "shown", "times", "count", "counts", "occurrences", "occurrence", "instances",
+    "issue", "issues", "problem", "problems", "service", "services", "status", "second", "seconds",
+    "minute", "minutes", "hour", "hours", "day", "days", "approximately", "about",
+    "observations", "observation", "evidence", "event", "events", "history", "include", "includes",
+    "including", "seen", "first", "last", "until", "across", "through", "during", "since",
+    "start", "started", "ended", "present", "current", "currently", "likely", "probably", "possible",
+    "possibly", "indicates", "indicating", "indicate", "suggest", "suggests", "suggesting",
+    "cause", "caused", "result", "resulting", "results", "occurring", "occurs", "occurred",
+})
+
+
 def _clean(value: object, limit: int) -> str:
     """Return bounded single-line text suitable for an untrusted evidence packet."""
     return " ".join(str(value or "").split())[:limit]
+
+
+def significant_tokens(report: dict[str, Any]) -> frozenset[str]:
+    """Distinctive lowercase tokens (headline + finding + evidence) that identify an incident."""
+    text = " ".join((
+        str(report.get("headline") or ""),
+        str(report.get("finding") or ""),
+        " ".join(str(v) for v in (report.get("evidence") or []) if isinstance(v, str)),
+    )).lower()
+    return frozenset(
+        t for t in re.findall(r"[a-z][a-z0-9_]{2,}", text)
+        if t not in _INCIDENT_NOISE and not t.isdigit()
+    )
+
+
+def _jaccard(a: frozenset[str], b: frozenset[str]) -> float:
+    union = len(a | b)
+    return (len(a & b) / union) if union else 0.0
+
+
+def group_related_investigations(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Cluster reports describing the same incident; groups + members newest-first.
+
+    Deterministic greedy single-link: sort copies of REPORTS descending by
+    ``investigated_at`` (missing timestamps sort last), then each report joins the
+    existing group whose leader's token set has the highest Jaccard similarity
+    >= INCIDENT_GROUP_THRESHOLD (ties go to the newest leader); otherwise it
+    starts its own group (and becomes that group's leader). An inverted
+    token->group index restricts comparisons to candidate groups sharing >= 1
+    token, keeping the 900-report live archive ~0.7s. Returns
+    [{"reports": [dict newest-first], "count": int}, ...] ordered by each
+    group's newest investigated_at descending. Accepted non-dict input is
+    dropped; non-empty only if a dict has an id/headline worth grouping.
+    """
+    rows = [r for r in reports if isinstance(r, dict)]
+    if not rows:
+        return []
+    rows.sort(key=lambda r: r.get("investigated_at") or "", reverse=True)
+    groups: list[dict[str, Any]] = []   # {"reports": [...], "count": int, "_toks": frozenset}
+    inv: dict[str, list[int]] = {}
+    for report in rows:
+        toks = significant_tokens(report)
+        if not toks:
+            toks = frozenset({_clean(str(report.get("id") or ""), 60)})
+        candidates = {gi for t in toks for gi in inv.get(t, ())}
+        best_gi, best_sim = None, -1.0
+        for gi in candidates:
+            sim = _jaccard(groups[gi]["_toks"], toks)
+            if sim > best_sim:
+                best_gi, best_sim = gi, sim
+        if best_gi is not None and best_sim >= INCIDENT_GROUP_THRESHOLD:
+            groups[best_gi]["reports"].append(report)
+            groups[best_gi]["count"] += 1
+        else:
+            groups.append({"reports": [report], "count": 1, "_toks": toks})
+            gi = len(groups) - 1
+            for t in toks:
+                inv.setdefault(t, []).append(gi)
+    return [{"reports": g["reports"], "count": g["count"]} for g in groups]
 
 
 def _evidence_text(value: object, limit: int) -> str:
