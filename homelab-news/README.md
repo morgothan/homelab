@@ -200,6 +200,8 @@ environment:
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `LOKI_URL` | Loki HTTP API base URL | `http://loki:3100` |
+| `LOG_SUPPRESS_PATTERNS` | Comma-separated regex patterns matched against raw Loki syslog lines; matching lines are dropped before issue building (known-benign noise suppression) | Empty |
+| `LOG_SUPPRESS_FILE` | Path to a file of additional suppression regexes (one per line, `#` comments/blank lines ignored), merged with `LOG_SUPPRESS_PATTERNS` | Empty |
 | `PROMETHEUS_URL` | Prometheus HTTP API base URL | `http://prometheus:9090` |
 | `NODE_EXPORTER_INSTANCE` | Prometheus instance label used for host metrics | Empty |
 | `KOPIA_URL` | Kopia server URL | `https://kopia-webui:5151` |
