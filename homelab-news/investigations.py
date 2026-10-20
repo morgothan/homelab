@@ -110,7 +110,7 @@ def group_related_investigations(reports: list[dict[str, Any]]) -> list[dict[str
         toks = significant_tokens(report)
         if not toks:
             toks = frozenset({_clean(str(report.get("id") or ""), 60)})
-        candidates = {gi for t in toks for gi in inv.get(t, ())}
+        candidates = sorted({gi for t in toks for gi in inv.get(t, ())})
         best_gi, best_sim = None, -1.0
         for gi in candidates:
             sim = _similarity(groups[gi]["_toks"], toks)
