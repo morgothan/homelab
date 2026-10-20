@@ -277,6 +277,9 @@ cf-poller/data/*
 # library-dupe-scan runtime state (dedup signatures, not source)
 bin/.library-dupe-scan-state.json
 
+# Homelab News log-suppression list (ops decision: which logs we ignore is not advertised)
+homelab-news/log_suppress.patterns
+
 # Outline API credential used by the local MCP bridge
 bin/.outline-api-key
 

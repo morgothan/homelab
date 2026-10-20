@@ -1136,6 +1136,7 @@ services:
       - ${USERDIR}/.ssh/id_ed25519:/run/secrets/monitoring_ssh_key:ro
       - ${USERDIR}/.ssh/known_hosts:/run/secrets/monitoring_known_hosts:ro
       - ${USERDIR}/docker/homelab-news/data:/data
+      - ${USERDIR}/docker/homelab-news/log_suppress.patterns:/etc/log-suppress.patterns:ro
       - ${USERDIR}/docker/jellyseerr/settings.json:/seerr/settings.json:ro
       - ${USERDIR}/docker/traefik/logs/access.log:/traefik/access.log:ro
       - ${USERDIR}/docker/traefik/monitor:/traefik/monitor:ro
@@ -1143,6 +1144,9 @@ services:
     environment:
       - LOCAL=${LOCAL}
       - LOKI_URL=${LOKI_URL}
+      # Known-benign syslog suppression list lives in the gitignored file mounted below
+      # (${USERDIR}/docker/homelab-news/log_suppress.patterns); LOG_SUPPRESS_FILE enables it.
+      - LOG_SUPPRESS_FILE=/etc/log-suppress.patterns
       - VLLM_URL=${VLLM_URL}
       - VLLM_MODEL=${VLLM_MODEL}
       - HINDSIGHT_URL=${HINDSIGHT_URL}    # optional: enables memory recall/retain for wire report + log analysis

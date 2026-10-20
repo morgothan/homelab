@@ -25,7 +25,7 @@ import docker
 from config import (
     ABUSEIPDB_KEY, CF_FAIL2BAN_STATE, CROWDSEC_KEY,
     CROWDSEC_LAPI_KEY, CROWDSEC_LAPI_URL, IP_INTEL_FILE, IP_INTEL_TTL,
-    LOG_HOURS, LOKI_URL, TRAEFIK_ACCESS_LOG,
+    LOG_HOURS, LOG_SUPPRESS_FILE, LOG_SUPPRESS_PATTERNS, LOKI_URL, TRAEFIK_ACCESS_LOG,
 )
 from homelab_news.collectors.loki import LokiCollector
 from storage import load_json, save_json
@@ -344,6 +344,53 @@ async def _fetch_loki_complete(
     return result.events, result.metadata
 
 
+# ── Log suppression ────────────────────────────────────────────────────────────
+# Compiled once at startup from LOG_SUPPRESS_PATTERNS (comma-separated env) plus the
+# optional LOG_SUPPRESS_FILE (one regex per line; blank lines and '#' comments ignored).
+# Empty config => empty list, so the filter below is a no-op and issue building is
+# byte-identical to an unconfigured run.
+def _pattern_texts_from_file(path: str) -> list[str]:
+    """Read regex patterns from the optional suppression FILE (see config)."""
+    if not path:
+        return []
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return [
+                ln.strip() for ln in fh
+                if ln.strip() and not ln.lstrip().startswith("#")
+            ]
+    except OSError:
+        # A missing/unreadable suppression file must never break log collection.
+        log.warning("Unable to read log suppression file %s; continuing without it", path)
+        return []
+
+
+def _load_suppression_patterns() -> list["re.Pattern"]:
+    """Compile suppression regexes from env patterns plus the optional pattern file."""
+    texts = [p for p in LOG_SUPPRESS_PATTERNS if p]
+    texts += _pattern_texts_from_file(LOG_SUPPRESS_FILE)
+    return [re.compile(p) for p in texts]
+
+
+_SUPPRESS_PATTERNS: list["re.Pattern"] = _load_suppression_patterns()
+
+
+def _is_suppressed(line: str, patterns: list[re.Pattern]) -> bool:
+    """Return True when LINE matches any compiled suppression PATTERNS."""
+    return any(p.search(line) for p in patterns)
+
+
+def _filter_suppressed(lines: list[tuple[str, str]], patterns: list[re.Pattern]) -> list[tuple[str, str]]:
+    """Drop (observed_at, line) entries whose LINE matches any suppression PATTERNS.
+
+    Pass the empty pattern list (or nothing configured) to pass LINES through
+    unchanged — a byte-identical no-op.
+    """
+    if not patterns:
+        return lines
+    return [(observed_at, line) for observed_at, line in lines if not _is_suppressed(line, patterns)]
+
+
 async def check_loki(
     start: Optional[datetime] = None,
     end: Optional[datetime] = None,
@@ -400,6 +447,7 @@ async def check_loki(
     all_seen: dict[str, int] = defaultdict(int)
 
     for source, lines in raw_lines.items():
+        lines = _filter_suppressed(lines, _SUPPRESS_PATTERNS)
         issues, seen = _collect_issues(source, lines)
         all_issues.extend(issues)
         for k, v in seen.items():

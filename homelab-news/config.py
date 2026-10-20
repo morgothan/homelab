@@ -16,6 +16,11 @@ def _integer(name: str, default: int) -> int:
     return int(os.getenv(name, str(default)))
 
 
+def _list(name: str, default: str = "") -> list[str]:
+    """Return comma-separated environment variable NAME as trimmed non-empty entries."""
+    return [part.strip() for part in os.getenv(name, default).split(",") if part.strip()]
+
+
 @dataclass(frozen=True)
 class RuntimeSettings:
     """Scheduling and inference settings shared by newsroom workers."""
@@ -32,6 +37,15 @@ class RuntimeSettings:
 
 LOCAL = os.getenv("LOCAL", "")
 LOKI_URL = os.getenv("LOKI_URL", "http://loki:3100")
+# Regex patterns (comma-separated) matched against raw syslog lines in check_loki() to
+# suppress known-benign noise before issue building. Empty by default = no suppression.
+# An optional LOG_SUPPRESS_FILE (below) is also read; patterns from both are combined.
+LOG_SUPPRESS_PATTERNS = _list("LOG_SUPPRESS_PATTERNS")
+# Path to an optional file of additional suppression regexes (one per line; blank lines
+# and lines starting with '#') that are combined with LOG_SUPPRESS_PATTERNS. Keeping the
+# suppression list in a file (rather than env/compose) lets deployments decide what logs
+# they ignore without advertising it in version control. Empty default = no file.
+LOG_SUPPRESS_FILE = os.getenv("LOG_SUPPRESS_FILE", "").strip()
 REFRESH_INTERVAL = _integer("REFRESH_INTERVAL", 900)
 UPDATE_INTERVAL = _integer("UPDATE_INTERVAL", 3600)
 LOG_HOURS = _integer("LOG_HOURS", 1)
