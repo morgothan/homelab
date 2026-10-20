@@ -15,7 +15,6 @@ RUN python -c 'import tiktoken; tiktoken.get_encoding("cl100k_base"); tiktoken.g
 COPY *.py supervisord.conf entrypoint.sh ./
 COPY homelab_news ./homelab_news
 RUN chmod 0755 /app/entrypoint.sh
-ENV HEADROOM_WORKSPACE_DIR=/home/appuser/.headroom
 ENV DOCKER_AUTH_FILE=/home/appuser/.docker/config.json
 # The /data bind-mount must be chowned to uid 1001 on the host before first run:
 #   sudo chown -R 1001:1001 <dockerdir>/homelab-news/data
