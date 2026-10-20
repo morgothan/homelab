@@ -125,6 +125,49 @@ body {
 .arch-period-lead { font-size: 0.85rem; color: var(--muted); margin-top: 3px; padding-left: 19px;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .arch-period-body { padding: 4px 0 14px 19px; }
+/* Investigation archive grouping */
+.inv-details { margin-bottom: 12px; }
+.inv-details > summary {
+  display: flex; align-items: baseline; gap: 12px; cursor: pointer; user-select: none;
+  padding: 10px 16px; background: var(--surf); border-bottom: 1px solid var(--bdr);
+  list-style: none;
+}
+.inv-details > summary::-webkit-details-marker { display: none; }
+.inv-details > summary::marker { display: none; }
+.inv-details > summary .card-title { flex-shrink: 0; }
+.inv-headline { flex: 1; min-width: 0; font-size: 0.88rem; color: var(--text); }
+.inv-details > summary:hover .inv-headline { color: var(--gold); }
+.inv-count {
+  flex-shrink: 0; border: 1px solid var(--bdr); border-radius: 999px; background: var(--dim);
+  padding: 1px 10px; font-size: 0.68rem; color: var(--gold);
+  font-family: "Courier New", monospace; white-space: nowrap; text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.inv-details > summary .card-meta { flex-shrink: 0; white-space: nowrap; }
+.inv-details > summary::after { content: "▸"; color: var(--muted); flex-shrink: 0; }
+.inv-details[open] > summary::after { content: "▾"; }
+.inv-meta { font-size: 0.72rem; color: var(--muted); font-family: "Courier New", monospace; margin-bottom: 10px; }
+.inv-analysis-hd { font-size: 0.62rem; letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold2); margin: 10px 0 6px; }
+.inv-earlier { margin-top: 12px; border-top: 1px solid var(--dim); }
+.inv-earlier > summary {
+  cursor: pointer; padding: 9px 2px 5px; list-style: none; user-select: none;
+  font-family: "Courier New", monospace; font-size: 0.7rem; text-transform: uppercase;
+  letter-spacing: 0.14em; color: var(--gold2);
+}
+.inv-earlier > summary::-webkit-details-marker { display: none; }
+.inv-earlier > summary::marker { display: none; }
+.inv-occ { padding: 8px 0 0 14px; border-left: 2px solid var(--dim); }
+.inv-occ > summary {
+  display: flex; gap: 10px; align-items: baseline; cursor: pointer; padding: 4px 0; list-style: none;
+  font-family: "Courier New", monospace; font-size: 0.76rem;
+}
+.inv-occ > summary::-webkit-details-marker { display: none; }
+.inv-occ > summary::marker { display: none; }
+.inv-occ > summary::before { content: "▸"; color: var(--gold2); font-size: 0.6rem; }
+.inv-occ[open] > summary::before { content: "▾"; }
+.inv-occ-hd { color: var(--text); font-size: 0.8rem; flex: 1; min-width: 0; }
+.inv-occ > summary .card-meta { white-space: nowrap; flex-shrink: 0; }
+.inv-occ-body { padding: 6px 0 12px; font-size: 11.5px; }
 .changelog {
   margin: 2px 0 8px 14px; padding: 5px 10px; border-left: 2px solid var(--warn);
   background: rgba(200, 136, 64, 0.05); font-size: 11px; color: #aaaaaa; white-space: pre-wrap; line-height: 1.6;

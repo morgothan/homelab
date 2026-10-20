@@ -156,7 +156,8 @@ class InvestigationsArchiveRouteTests(unittest.TestCase):
         self.assertIn("&lt;b&gt;finding&lt;/b&gt; &amp; more", response.text)
         self.assertIn("impact with &quot;quotes&quot; &amp; symbols", response.text)
         self.assertIn("High confidence", response.text)
-        self.assertIn("Investigations", response.text)
+        self.assertIn("Latest analysis", response.text)          # newest analysis header
+        self.assertIn("Investigations", response.text)           # nav label
 
     def test_investigations_archive_empty_state(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -167,6 +168,32 @@ class InvestigationsArchiveRouteTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 200)
         self.assertIn("No investigations recorded yet", response.text)
+
+    def test_investigations_archive_groups_duplicates_with_count(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "investigations_archive.json")
+            _write_json(archive_path, [
+                {"id": "inv-a", "headline": "UniFi MQ Broker Struggles to Reach CoreDNS",
+                 "finding": "the unifi mq broker fails to dial the coredns unix socket",
+                 "confidence": "high", "impact": "router dns lookups degraded",
+                 "evidence": [], "alternatives": [], "next_checks": [],
+                 "investigated_at": "2026-10-15T16:00:00Z"},
+                {"id": "inv-b", "headline": "UniFi MQ Broker Fails to Reach CoreDNS on UDM",
+                 "finding": "the unifi mq broker cannot connect to coredns local socket",
+                 "confidence": "high", "impact": "router dns lookups degraded",
+                 "evidence": [], "alternatives": [], "next_checks": [],
+                 "investigated_at": "2026-10-16T16:00:00Z"},
+            ])
+            with patch.object(web, "INVESTIGATIONS_ARCHIVE_FILE", archive_path):
+                response = TestClient(web.app).get("/investigations")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.text.count("2 occurrences"), 1)   # one count badge
+        self.assertIn("2 analyses", response.text)                  # body meta line
+        self.assertIn("earlier analysis", response.text)            # nested earlier toggle
+        # both analyses are reachable in the group
+        self.assertIn("fails to dial the coredns", response.text)
+        self.assertIn("cannot connect to coredns local socket", response.text)
 
 
 if __name__ == "__main__":
