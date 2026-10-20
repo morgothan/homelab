@@ -174,5 +174,59 @@ class PersistInvestigationTests(unittest.TestCase):
             return json.load(source)
 
 
+class GroupRelatedInvestigationTests(unittest.TestCase):
+    @staticmethod
+    def _report(id_, headline, finding, at, evidence=()):
+        return {"id": id_, "headline": headline, "finding": finding,
+                "investigated_at": at, "confidence": "medium", "impact": "",
+                "evidence": list(evidence), "alternatives": [], "next_checks": [],
+                "limitations": ""}
+
+    def test_empty_input_returns_empty(self):
+        self.assertEqual(investigations.group_related_investigations([]), [])
+
+    def test_similar_reports_group_and_dissimilar_stay_apart(self):
+        core_a = self._report("a", "UniFi MQ Broker Struggles to Reach CoreDNS",
+            "The unifi mq broker on the edge router is failing to dial the coredns "
+            "unix socket and getting resource temporarily unavailable",
+            "2026-10-15T16:00:00+00:00")
+        core_b = self._report("b", "UniFi MQ Broker Fails to Reach CoreDNS on UDM Pro Max",
+            "The unifi mq broker on udm pro max cannot connect to the coredns local "
+            "unix socket resource temporarily unavailable",
+            "2026-10-15T17:00:00+00:00")
+        kids = self._report("c", "Kids DNS Pi Reports SD Card Read Error",
+            "A single read io error on the kids dns raspberry pi sd card sector",
+            "2026-10-15T18:00:00+00:00")
+        groups = investigations.group_related_investigations([core_a, core_b, kids])
+        self.assertEqual(len(groups), 2)
+        # newest group (kids, 18:00) first; core cluster second
+        self.assertEqual([g["count"] for g in groups], [1, 2])
+        multi = next(g for g in groups if g["count"] == 2)
+        self.assertEqual([r["id"] for r in multi["reports"]], ["b", "a"])  # newest-first inside
+
+    def test_exact_duplicate_content_with_different_ids_groups(self):
+        one = self._report("x", "Peanut Settings File Missing",
+            "the config settings.yml is missing enoent", "2026-10-15T09:00:00+00:00")
+        two = self._report("y", "Peanut Settings File Missing",
+            "the config settings.yml is missing enoent", "2026-10-16T09:00:00+00:00")
+        groups = investigations.group_related_investigations([one, two])
+        self.assertEqual(len(groups), 1)
+        self.assertEqual(groups[0]["count"], 2)
+
+    def test_reports_without_timestamp_still_group_by_content(self):
+        a = self._report("a", "Overseerr Jellyfin Sync Fails",
+            "the anime list mapping download failed", None)
+        b = self._report("b", "Overseerr Jellyfin Sync Interrupted",
+            "the anime list mapping download failed again", None)
+        c = self._report("c", "Scraparr Sonarr Connector Returns Empty",
+            "scraparr sonarr connector logged no data found", None)
+        groups = investigations.group_related_investigations([a, b, c])
+        # All timestamps are absent (tie). Deterministic processing order a, b, c
+        # groups a+b first (count 2), then c (count 1): [2, 1]. The point of this
+        # test is content-based grouping without timestamps, not the ambiguous
+        # all-ties group order.
+        self.assertEqual([g["count"] for g in groups], [2, 1])
+
+
 if __name__ == "__main__":
     unittest.main()
