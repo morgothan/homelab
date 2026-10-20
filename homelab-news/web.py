@@ -25,6 +25,8 @@ from storage import load_json, save_json
 from privacy import redact_data
 from webhooks import authenticated_payload
 
+from investigations import group_related_investigations
+
 from templates import (
     _FAVICON_SVG, _CSS,
     page_wrap, nav_bar, masthead_today, masthead_rolling, masthead_archive, masthead_wire,
@@ -92,8 +94,44 @@ def _investigations_html(reports: list[dict]) -> str:
     )
 
 
+def _fmt_investigated_at(report: dict) -> str:
+    raw = report.get("investigated_at") or ""
+    try:
+        return datetime.fromisoformat(raw).strftime("%Y-%m-%d %H:%M UTC")
+    except (ValueError, TypeError):
+        return _h(str(raw))
+
+
+def _investigation_analysis_html(report: dict) -> str:
+    """Render one report's full analysis (finding/impact/evidence/alternatives/next_checks/limitations), escaped."""
+    finding = _h(str(report.get("finding") or "No finding returned."))
+    impact = _h(str(report.get("impact") or ""))
+    limitations = _h(str(report.get("limitations") or ""))
+
+    def items(values) -> str:
+        if not values:
+            return ""
+        return "<ul>" + "".join(f"<li>{_h(str(v))}</li>" for v in values) + "</ul>"
+
+    evidence = report.get("evidence") if isinstance(report.get("evidence"), list) else []
+    alternatives = report.get("alternatives") if isinstance(report.get("alternatives"), list) else []
+    next_checks = report.get("next_checks") if isinstance(report.get("next_checks"), list) else []
+    parts = [f"<p>{finding}</p>"]
+    if impact:
+        parts.append(f"<p><strong>Impact:</strong> {impact}</p>")
+    if evidence:
+        parts.append("<strong>Evidence</strong>" + items(evidence))
+    if alternatives:
+        parts.append("<strong>Alternatives</strong>" + items(alternatives))
+    if next_checks:
+        parts.append("<strong>Read-only next checks</strong>" + items(next_checks))
+    if limitations:
+        parts.append(f"<p><strong>Limitations:</strong> {limitations}</p>")
+    return "".join(parts)
+
+
 def _investigations_archive_html(reports: list[dict]) -> str:
-    """Render the persisted investigation archive page (newest first)."""
+    """Render the persisted investigation archive page (newest first, grouped)."""
     if not reports:
         return (
             '<div class="arch-empty">'
@@ -102,40 +140,54 @@ def _investigations_archive_html(reports: list[dict]) -> str:
             "</div>"
         )
 
-    def _sort_key(report: dict) -> tuple:
-        # Sort newest-first by investigated_at; fall back to stable list order.
-        return report.get("investigated_at") or "", report.get("id") or ""
-
-    ordered = sorted(reports, key=_sort_key, reverse=True)
-
-    def items(values) -> str:
-        if not values:
-            return ""
-        return "<ul>" + "".join(f"<li>{_h(str(value))}</li>" for value in values) + "</ul>"
-
     cards = []
-    for report in ordered:
-        confidence = _h(str(report.get("confidence") or "low").title())
-        headline = _h(str(report.get("headline") or "Untitled investigation"))
-        finding = _h(str(report.get("finding") or "No finding returned."))
-        investigated_at = _h(str(report.get("investigated_at") or ""))
-        next_checks = report.get("next_checks") if isinstance(report.get("next_checks"), list) else []
+    for group in group_related_investigations(reports):
+        members = group["reports"]  # newest-first
+        count = group["count"]
+        newest = members[0]
+        oldest = members[-1]
+        confidence = _h(str(newest.get("confidence") or "low").title())
+        headline = _h(str(newest.get("headline") or "Untitled investigation"))
 
-        lines = [f'<p>{finding}</p>']
-        if report.get("impact"):
-            lines.append(f'<p><strong>Impact:</strong> {_h(str(report["impact"]))}</p>')
-        if next_checks:
-            lines.append("<strong>Read-only next checks</strong>" + items(next_checks))
-        if investigated_at:
-            lines.append(f'<p class="card-meta">Investigated {investigated_at} UTC</p>')
-
-        cards.append(
-            '<details class="card" open><summary>'
-            f'<span class="card-title">{headline}</span>'
-            f'<span class="card-meta">{confidence} confidence</span></summary>'
-            + "".join(lines)
-            + "</details>"
+        summary = [
+            '<details class="card inv-details"><summary>',
+            '<span class="card-title">Investigation</span>',
+            f'<span class="inv-headline">{headline}</span>',
+        ]
+        if count > 1:
+            summary.append(f'<span class="inv-count">{count} occurrences</span>')
+        summary.append(
+            f'<span class="card-meta">{confidence} confidence &middot; {_fmt_investigated_at(newest)}</span>'
+            "</summary>"
         )
+
+        body = [
+            '<div class="card-body">',
+            f'<p class="inv-meta">{count} analyses &middot; first {_fmt_investigated_at(oldest)}'
+            f' &middot; last {_fmt_investigated_at(newest)}'
+            f' &middot; confidence {confidence}</p>',
+            f'<div class="inv-analysis-hd">Latest analysis &middot; {_fmt_investigated_at(newest)}</div>',
+            _investigation_analysis_html(newest),
+        ]
+        if count > 1:
+            n_prev = count - 1
+            label = f"{n_prev} earlier analysis" if n_prev == 1 else f"{n_prev} earlier analyses"
+            body.append(f'<details class="inv-earlier"><summary>{label}</summary>')
+            for earlier in members[1:]:  # newest-first
+                conf = _h(str(earlier.get("confidence") or "low").title())
+                hd = _h(str(earlier.get("headline") or "Untitled investigation"))
+                body.append(
+                    '<details class="inv-occ"><summary>'
+                    f'<span class="inv-occ-hd">{hd}</span>'
+                    f'<span class="card-meta">{conf} confidence &middot; {_fmt_investigated_at(earlier)}</span>'
+                    "</summary>"
+                    f'<div class="inv-occ-body">{_investigation_analysis_html(earlier)}</div>'
+                    "</details>"
+                )
+            body.append("</details>")
+        body.append("</div>")
+
+        cards.append("".join(summary) + "".join(body) + "</details>")
     return '<div class="arch-index">' + "".join(cards) + "</div>"
 
 
