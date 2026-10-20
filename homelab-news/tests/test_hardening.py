@@ -6,7 +6,6 @@ import subprocess
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
@@ -21,28 +20,26 @@ import web
 import webhooks
 
 
-class CompressionTests(unittest.TestCase):
-    def test_success_returns_result_messages_and_preserves_instruction_policy(self):
-        original = [{"role": "user", "content": "long evidence"}]
-        compressed = [{"role": "user", "content": "short evidence"}]
-        with patch.object(llm, "_HEADROOM_AVAILABLE", True), patch.object(
-            llm, "_headroom_compress", return_value=SimpleNamespace(messages=compressed)
-        ) as compress:
-            self.assertEqual(llm._compress_messages(original), compressed)
-        policy = compress.call_args.kwargs["config"]
-        self.assertEqual(compress.call_args.kwargs["model"], "gpt-4o")
-        self.assertTrue(policy.compress_user_messages)
-        self.assertFalse(policy.compress_system_messages)
-        self.assertEqual(policy.protect_recent, 0)
-        self.assertFalse(policy.protect_analysis_context)
-        self.assertEqual(policy.kompress_model, "disabled")
+class RedactionTests(unittest.TestCase):
+    """LLM message redaction before dispatch (headroom compression was retired)."""
 
-    def test_failure_preserves_original(self):
-        original = [{"role": "user", "content": "evidence"}]
-        with patch.object(llm, "_HEADROOM_AVAILABLE", True), patch.object(
-            llm, "_headroom_compress", side_effect=RuntimeError("unavailable")
-        ):
-            self.assertEqual(llm._compress_messages(original), original)
+    def test_redacts_credentials_inside_message_content(self):
+        messages = [
+            {"role": "system", "content": "you are the desk editor"},
+            {"role": "user", "content": "endpoint=postgres password=xK9!q2zZ api_key=sk-live-1234"},
+        ]
+        redacted = llm._redact_messages(messages)
+        content = redacted[1]["content"]
+        self.assertNotIn("xK9!q2zZ", content)
+        self.assertNotIn("sk-live-1234", content)
+        self.assertIn("password", content)  # key remains, value redacted
+        self.assertEqual(redacted[0]["content"], "you are the desk editor")  # shape preserved
+
+    def test_no_credentials_passes_through_unchanged(self):
+        messages = [{"role": "user", "content": "plain homelab update text"}]
+        redacted = llm._redact_messages(messages)
+        self.assertEqual(redacted, messages)
+        self.assertIsNot(redacted, messages)  # defensive: new list, never shared ref
 
 
 class WebhookSecurityTests(unittest.TestCase):

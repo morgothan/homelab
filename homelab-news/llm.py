@@ -33,35 +33,10 @@ def _truncate_to_token_limit(text: str, max_tokens: int) -> str:
     return _CL100K_ENCODING.decode(tokens[:max_tokens])
 
 
-try:
-    from headroom import compress as _headroom_compress, CompressConfig as _HeadroomConfig
-    _HEADROOM_AVAILABLE = True
-    # onnxruntime isn't installed (kompress_model="disabled" below means we never need
-    # the ML tier), so headroom's native core warns on every call before falling back
-    # to its unidiff tier. That fallback is what we want; the warning is just noise.
-    logging.getLogger("headroom_core.transforms.detection").setLevel(logging.ERROR)
-except ImportError:
-    _HEADROOM_AVAILABLE = False
-
-
-# Compress LLM messages before dispatch. Uses SmartCrusher for JSON arrays (up to 86%
-# savings) and falls back transparently if headroom is unavailable or raises.
-def _compress_messages(messages: list[dict]) -> list[dict]:
-    messages = redact_data(messages)
-    if not _HEADROOM_AVAILABLE:
-        return messages
-    try:
-        result = _headroom_compress(messages, model="gpt-4o", config=_HeadroomConfig(
-            compress_user_messages=True,
-            compress_system_messages=False,
-            protect_recent=0,
-            protect_analysis_context=False,
-            kompress_model="disabled",
-        ))
-        return result.messages
-    except Exception as e:
-        log.debug("Headroom compression failed; using uncompressed messages: %s", e)
-    return messages
+# Redact credentials from LLM messages before dispatch. Headroom (LLM message
+# compression) was retired; redaction-at-the-sink is preserved.
+def _redact_messages(messages: list[dict]) -> list[dict]:
+    return redact_data(messages)
 
 
 # Patterns that indicate a prompt injection attempt in untrusted text.
@@ -222,7 +197,7 @@ async def llm_analysis(issues: list[dict], context: str) -> Optional[str]:
         "say so plainly and keep the fix scoped to that host."
     )
     user = json.dumps({"context": context, "entries": sanitized_issues}, indent=2)
-    messages = _compress_messages([
+    messages = _redact_messages([
         {"role": "system", "content": system},
         {"role": "user",   "content": user},
     ])
@@ -261,7 +236,7 @@ async def llm_changelog_analysis(container: str, image: str, tag: str, notes: st
         "Output only the 1-2 sentence summary. No headers, no bullet points, no preamble."
     )
     user = f"Image: {safe_image}  New tag: {safe_tag}\n\nRELEASE NOTES:\n{safe_notes}"
-    messages = _compress_messages([
+    messages = _redact_messages([
         {"role": "system", "content": system},
         {"role": "user",   "content": user},
     ])
@@ -341,7 +316,7 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         "- Output ONLY a valid JSON array. No markdown, no explanation.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
-    messages = _compress_messages([
+    messages = _redact_messages([
         {"role": "system", "content": system},
         {"role": "user",   "content": f"SOFTWARE UPDATE STATUS:\n{situation}"},
     ])

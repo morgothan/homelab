@@ -34,7 +34,7 @@ from homelab_news.collectors.monitoring import (
     check_beszel, check_jellystat, check_kopia, check_prometheus,
 )
 from llm import (
-    generate_articles, llm_analysis, _compress_messages, _load_context,
+    generate_articles, llm_analysis, _redact_messages, _load_context,
     _sanitize_for_llm,
 )
 from media import fetch_recent_media, merge_library_additions
@@ -298,7 +298,7 @@ async def generate_newspaper(
         "- Output ONLY a valid JSON array. No markdown fences, no explanation, no preamble.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
-    messages = _compress_messages([
+    messages = _redact_messages([
         {"role": "system", "content": system},
         {"role": "user",   "content": f"CURRENT HOMELAB STATUS:\n{situation}"},
     ])
@@ -372,7 +372,7 @@ async def generate_periodic_summary(
         "- Output ONLY a valid JSON array. No markdown, no preamble.\n"
         "  Format: [{\"headline\": \"...\", \"blurb\": \"...\", \"section\": \"City Hall\"}]"
     )
-    messages = _compress_messages([
+    messages = _redact_messages([
         {"role": "system", "content": system},
         {"role": "user",   "content": json.dumps(sanitized_entries, indent=2)},
     ])
