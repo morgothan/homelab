@@ -161,7 +161,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:v3.15.0
+    image: prom/prometheus:v3.15.1
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -626,7 +626,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.94.0
+    image: oliver006/redis_exporter:v1.95.0
     container_name: redis-exporter
     depends_on:
       - redis
@@ -798,7 +798,7 @@ services:
 # Media request management for Jellyfin — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
-    image: ghcr.io/seerr-team/seerr:v3.5.0
+    image: ghcr.io/seerr-team/seerr:v3.5.1
     init: true
     container_name: overseerr
     environment:
