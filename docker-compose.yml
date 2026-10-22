@@ -134,7 +134,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.45.2
+    image: portainer/portainer-ce:2.45.3
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -886,7 +886,7 @@ services:
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
-    image: henrygd/beszel-agent:0.21.0
+    image: henrygd/beszel-agent:0.21.1
     container_name: "beszel-agent"
     restart: unless-stopped
     logging: *logging
