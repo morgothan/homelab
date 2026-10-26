@@ -585,7 +585,7 @@ services:
       - ${DOCKERNET}
     volumes:
       - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
-    image: prompve/prometheus-pve-exporter:3.10.1
+    image: prompve/prometheus-pve-exporter:3.10.2
 
 
 ########## Redis
