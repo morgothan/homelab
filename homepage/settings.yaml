@@ -65,7 +65,7 @@ background:
   image: /images/Kraken.png
 #  blur: sm
 
-title: Homelab
+title: {{HOMEPAGE_VAR_TITLE}}
 iconStyle: theme
 statusStyle: "dot"
 
