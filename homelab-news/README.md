@@ -12,6 +12,12 @@ Disabled collectors are not called, their prompt sections receive no synthetic
 under `capabilities`. The `configuration` snapshot contains only feature policy
 and the configuration path; it never includes connection details or secrets.
 
+Host-monitoring policy lives under `[beszel]` in the same file. The
+`expected_high_memory_hosts` allowlist should be supplied at runtime from OpenBao
+as `BESZEL_EXPECTED_HIGH_MEMORY_HOSTS` (comma-separated), so real host names never
+enter git. `BESZEL_MEMORY_WARN_PCT` overrides `memory_warn_pct`. Disabling
+`host_monitoring` disables both the Beszel and OOM checks.
+
 The portable core is organized under `homelab_news/`: collectors return events
 with completeness metadata, newsroom policy deterministically selects and covers
 important events, and top-level worker modules remain stable compatibility entry
@@ -230,6 +236,8 @@ environment:
 | `BESZEL_URL` | Beszel API URL |
 | `BESZEL_EMAIL` | Beszel login identity |
 | `BESZEL_PASS` | Beszel login password |
+| `BESZEL_EXPECTED_HIGH_MEMORY_HOSTS` | Comma-separated Beszel system names whose memory is intentionally near the ceiling; their memory warnings are suppressed while HOST DOWN and DISK alerts still apply. Supply this from OpenBao, not git. |
+| `BESZEL_MEMORY_WARN_PCT` | Optional memory-warning threshold override (default `92`) |
 | `JELLYFIN_URL` | Jellyfin API URL |
 | `JELLYFIN_KEY` | Jellyfin API key |
 | `JELLYFIN_WEB_URL` | Public Jellyfin base URL used for media detail links |
@@ -242,6 +250,12 @@ environment:
 | `JELLYSTAT_KEY` | Jellystat API key |
 
 Unset optional integrations are skipped or reported as unconfigured.
+
+Kernel OOM-kill events (`node_vmstat_oom_kill`) and earlyoom actions remain
+alerts even when a host's memory warning is suppressed. The OOM collector queries
+Prometheus and the earlyoom journal on `SPARK_SSH_HOST` and `SPARK2_SSH_HOST`,
+de-duplicates events with `/data/oom_state.json`, and seeds baselines on first
+run so historical kills are not replayed.
 
 ### Security intelligence and media events
 

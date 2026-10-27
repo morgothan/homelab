@@ -31,7 +31,7 @@ from storage import load_json, save_json
 from containers import get_container_status_async
 from hindsight import hindsight_recall, hindsight_targeted_recall
 from homelab_news.collectors.monitoring import (
-    check_beszel, check_jellystat, check_kopia, check_prometheus,
+    check_beszel, check_jellystat, check_kopia, check_oom, check_prometheus,
 )
 from llm import (
     generate_articles, llm_analysis, _redact_messages, _load_context,
@@ -170,6 +170,7 @@ async def generate_newspaper(
     correlations: Optional[list[dict]] = None,
     targeted_history: str = "",
     operational_alert: Optional[dict] = None,
+    oom: Optional[dict] = None,
 ) -> Optional[list[dict]]:
     from security import _SECURITY_NOISE, _security_prompt_block
 
@@ -221,6 +222,7 @@ async def generate_newspaper(
         _fmt_section(prometheus, "PROMETHEUS ALERTS:", "PROMETHEUS METRICS:"),
         _fmt_section(kopia,      "BACKUP ALERTS:"),
         _fmt_section(beszel,     "HOST ALERTS:"),
+        _fmt_section(oom,        "MEMORY-KILL ALERTS:", "MEMORY-KILL STATUS:"),
         _fmt_section(jellystat,  "JELLYFIN ALERTS:", "JELLYFIN ACTIVITY:"),
     ]:
         if block:
@@ -275,6 +277,13 @@ async def generate_newspaper(
         "  failures at ~110/hr for weeks; time sync still working; needs a config fix'), not a\n"
         "  lead story. Escalation labels from the deterministic layer name the condition, not its\n"
         "  blast radius — 'NTP time-sync failures on one host' is exactly that, nothing wider.\n\n"
+        "MEMORY-KILL INTERPRETATION GUIDE — read before writing any memory article:\n"
+        "- MEMORY-KILL ALERTS mean the kernel OOM killer or earlyoom actually killed a process\n"
+        "  to reclaim memory. That is a real incident, not 'high memory usage' or 'memory pressure'.\n"
+        "  Make it the lead story: name the host, how many processes were killed, and the process\n"
+        "  name and RSS when given. Do not soften it to 'approaching the memory ceiling'.\n"
+        "- A host running near its memory ceiling by design is not an incident and is not a\n"
+        "  MEMORY-KILL alert. Only report a kill when the alert says a process was killed.\n\n"
         "Rules:\n"
         "- 'UPDATE AVAILABLE' lines are PENDING updates that have NOT been installed — nothing has\n"
         "  been upgraded, rebuilt, or refreshed yet. Write these as availability, not completed action:\n"
@@ -405,13 +414,14 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     })
 
     (docker_issues, loki_issues, (bans, probes),
-     prometheus, kopia, beszel, jellystat) = await asyncio.gather(
+     prometheus, kopia, beszel, oom, jellystat) = await asyncio.gather(
         check_docker_logs(since_ts=since_ts) if features.docker else disabled([]),
         check_loki(start=since) if features.loki else disabled(disabled_loki),
         check_fail2ban_bans() if features.security else disabled(([], [])),
         check_prometheus() if features.prometheus else disabled({}),
         check_kopia() if features.backups else disabled({}),
         check_beszel() if features.host_monitoring else disabled({}),
+        check_oom() if features.host_monitoring else disabled({}),
         check_jellystat() if features.media else disabled({}),
     )
     loki_collection = getattr(loki_issues, "metadata", {
@@ -501,7 +511,7 @@ async def run_news_cycle(since: datetime, target_file: str) -> None:
     newspaper = await generate_newspaper(
         docker_issues, loki_issues, update_hosts, unhealthy_names,
         bans, probes, prometheus, kopia, beszel, jellystat, asn_suggestions, media_events,
-        correlations, targeted_history, operational_alert,
+        correlations, targeted_history, operational_alert, oom=oom,
     )
     log.info("run_news_cycle complete: %d articles, %d bans",
              len(newspaper) if newspaper else 0, len(bans))

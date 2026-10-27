@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 import httpx
-from ssh_transport import ssh_arguments
+from ssh_transport import ssh_run
 
 from config import (
     ADGUARD_PASSWORD, ADGUARD_URLS, ADGUARD_USERNAME, BESZEL_SSH_HOST, HERMES_SSH_HOST,
@@ -158,36 +158,13 @@ async def _check_host(label: str, url: str, sem: asyncio.Semaphore) -> dict:
     return {"status": "done", "ts": datetime.now(timezone.utc).isoformat(), "results": results}
 
 
-async def _ssh_run(host: str, cmd: str, timeout: int = 45) -> tuple[bool, str]:
-    """Run cmd over SSH, return (success, stdout)."""
-    proc = await asyncio.create_subprocess_exec(
-        *ssh_arguments(), host, cmd,
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-    try:
-        out, err = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-        if proc.returncode == 0:
-            return True, out.decode(errors="replace")
-        log.warning("SSH %s failed (rc=%d): %s", host, proc.returncode,
-                    err.decode(errors="replace")[:200])
-        return False, err.decode(errors="replace")[:200]
-    except asyncio.TimeoutError:
-        try:
-            proc.kill()
-            await proc.communicate()
-        except Exception:
-            pass
-        return False, "SSH timeout"
-
-
 async def check_proxmox_apt() -> dict:
     """Check Proxmox VE for available apt upgrades."""
     label = "Proxmox VE"
     ts = datetime.now(timezone.utc).isoformat()
     # grep -v returns exit code 1 when nothing passes the filter (all packages current).
     # Use || true so the pipeline always exits 0.
-    ok, out = await _ssh_run(
+    ok, out = await ssh_run(
         PVE_SSH_HOST,
         "sudo -n apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
         timeout=90,
@@ -221,7 +198,7 @@ async def check_pve_lxc_status() -> dict:
     ts = datetime.now(timezone.utc).isoformat()
     if not PVE_SSH_HOST:
         return {"label": label, "status": "skipped", "ts": ts, "down": []}
-    ok, out = await _ssh_run(
+    ok, out = await ssh_run(
         PVE_SSH_HOST,
         "for id in $(sudo -n pct list | tail -n +2 | awk '{print $1}'); do "
         "cfg=$(sudo -n pct config $id); "
@@ -332,9 +309,9 @@ async def check_truenas_apps() -> dict:
     ts = datetime.now(timezone.utc).isoformat()
 
     cmd = """midclt call app.query '[["upgrade_available","=",true]]' 2>/dev/null"""
-    ok, out = await _ssh_run(TRUENAS_SSH_HOST, cmd, timeout=60)
+    ok, out = await ssh_run(TRUENAS_SSH_HOST, cmd, timeout=60)
     if not ok:
-        ok, out = await _ssh_run(TRUENAS_SSH_HOST, "sudo " + cmd, timeout=60)
+        ok, out = await ssh_run(TRUENAS_SSH_HOST, "sudo " + cmd, timeout=60)
     if not ok:
         return {"label": label, "status": "error", "ts": ts, "error": out[:100], "updates": []}
 
@@ -399,10 +376,10 @@ async def check_truenas_update() -> dict:
     label = "TrueNAS Scale"
     ts = datetime.now(timezone.utc).isoformat()
 
-    ok, ver_out = await _ssh_run(TRUENAS_SSH_HOST, "midclt call system.version 2>/dev/null", timeout=30)
+    ok, ver_out = await ssh_run(TRUENAS_SSH_HOST, "midclt call system.version 2>/dev/null", timeout=30)
     current_version = ver_out.strip() if ok else "?"
 
-    ok, out = await _ssh_run(TRUENAS_SSH_HOST, "midclt call update.available_versions 2>/dev/null", timeout=60)
+    ok, out = await ssh_run(TRUENAS_SSH_HOST, "midclt call update.available_versions 2>/dev/null", timeout=60)
     if not ok or not out.strip():
         return {"label": label, "status": "error", "ts": ts,
                 "error": out[:100] if not ok else "empty response", "updates": []}
@@ -429,7 +406,7 @@ async def check_beszel_update() -> dict:
     """Check Beszel hub version via container image label against latest GitHub release."""
     label = "Beszel"
     ts = datetime.now(timezone.utc).isoformat()
-    ok, out = await _ssh_run(
+    ok, out = await ssh_run(
         BESZEL_SSH_HOST,
         "docker inspect beszel --format '{{index .Config.Labels \"org.opencontainers.image.version\"}}' 2>/dev/null",
         timeout=15,
@@ -465,7 +442,7 @@ async def check_vllm_update() -> dict:
     ts = datetime.now(timezone.utc).isoformat()
     if not SPARK_SSH_HOST:
         return {"label": label, "status": "skipped", "ts": ts, "updates": []}
-    ok, out = await _ssh_run(
+    ok, out = await ssh_run(
         SPARK_SSH_HOST,
         "~/.local/bin/sparkrun --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1; "
         "echo '---'; "
@@ -511,7 +488,7 @@ async def check_spark_apt(host: str, label: str) -> dict:
     ts = datetime.now(timezone.utc).isoformat()
     if not host:
         return {"label": label, "status": "skipped", "ts": ts, "updates": []}
-    ok, out = await _ssh_run(
+    ok, out = await ssh_run(
         host,
         "apt-get update -qq 2>/dev/null; apt list --upgradable 2>/dev/null | grep -v 'Listing...' || true",
         timeout=120,

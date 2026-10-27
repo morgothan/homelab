@@ -135,9 +135,9 @@ class IssueCoverageTests(unittest.TestCase):
             {"source": host, "level": "error", "count": 1,
              "message": f'WRN No upgrades detected for this device error="{detail}" current_version=2025'}
             for host, detail in (
-                ("spark.lan", "Device is not updatable"),
-                ("spark2.lan", "current version is 2025: 2025=same"),
-                ("spark2.lan", "No releases found"),
+                ("compute-a.example.invalid", "Device is not updatable"),
+                ("compute-b.example.invalid", "current version is 2025: 2025=same"),
+                ("compute-b.example.invalid", "No releases found"),
             )
         ]
         self.assertEqual(select_news_issues(issues), [])
@@ -214,6 +214,7 @@ class OperationalAlertFallbackTests(unittest.TestCase):
                 "check_prometheus": AsyncMock(return_value={}),
                 "check_kopia": AsyncMock(return_value={}),
                 "check_beszel": AsyncMock(return_value={}),
+                "check_oom": AsyncMock(return_value={}),
                 "check_jellystat": AsyncMock(return_value={}),
                 "fetch_recent_media": AsyncMock(return_value=[]),
                 "get_container_status_async": AsyncMock(return_value=([], [], 0)),
@@ -242,9 +243,37 @@ class OperationalAlertFallbackTests(unittest.TestCase):
             self.assertNotEqual(alerts[0]["headline"], "Stale alert")
 
 
+class MemoryKillPromptTests(unittest.TestCase):
+    def test_oom_alert_and_interpretation_guide_reach_the_prompt(self):
+        captured = {}
+
+        async def fake_generate_articles(messages, **kwargs):
+            captured["messages"] = messages
+            return [{"headline": "Kernel kills one process", "blurb": "x", "section": "Weather"}]
+
+        with (
+            patch.object(lib, "generate_articles", fake_generate_articles),
+            patch.object(lib, "hindsight_recall", AsyncMock(return_value="")),
+            patch.object(lib, "_load_context", return_value=""),
+        ):
+            result = asyncio.run(lib.generate_newspaper(
+                docker_issues=[], loki_issues=[], update_hosts={}, unhealthy_names=[],
+                oom={
+                    "alerts": ["KERNEL OOM KILL: node-a.example.invalid:9100 — 1 process(es) killed"],
+                    "info": [],
+                },
+            ))
+        self.assertEqual(result[0]["headline"], "Kernel kills one process")
+        prompt = "\n".join(message["content"] for message in captured["messages"])
+        self.assertIn("KERNEL OOM KILL: node-a.example.invalid:9100", prompt)
+        self.assertIn("MEMORY-KILL INTERPRETATION GUIDE", prompt)
+        self.assertIn("actually killed a process", prompt)
+
+
 class NewsCyclePersistenceTests(unittest.TestCase):
-    def _run_cycle(self, target_file: str, generated_articles):
+    def _run_cycle(self, target_file: str, generated_articles, oom=None):
         empty = AsyncMock(return_value=[])
+        generate = AsyncMock(return_value=generated_articles)
         checks = {
             "check_docker_logs": empty,
             "check_loki": empty,
@@ -252,12 +281,13 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             "check_prometheus": AsyncMock(return_value={}),
             "check_kopia": AsyncMock(return_value={}),
             "check_beszel": AsyncMock(return_value={}),
+            "check_oom": AsyncMock(return_value=oom or {}),
             "check_jellystat": AsyncMock(return_value={}),
             "fetch_recent_media": AsyncMock(return_value=[]),
             "get_container_status_async": AsyncMock(return_value=([], [], 0)),
             "llm_analysis": AsyncMock(return_value=None),
             "hindsight_targeted_recall": AsyncMock(return_value=""),
-            "generate_newspaper": AsyncMock(return_value=generated_articles),
+            "generate_newspaper": generate,
         }
         with (
             patch.multiple(lib, **checks),
@@ -266,6 +296,21 @@ class NewsCyclePersistenceTests(unittest.TestCase):
             patch.object(lib, "UPDATE_DETECTION_STATE_FILE", target_file + ".update_state"),
         ):
             asyncio.run(lib.run_news_cycle(datetime.now(timezone.utc), target_file))
+        return generate
+
+    def test_oom_events_are_passed_to_newspaper(self):
+        oom = {
+            "alerts": ["KERNEL OOM KILL: node-a.example.invalid:9100 — 1 process(es) killed"],
+            "info": [],
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            target = os.path.join(tmp, "today.json")
+            generate = self._run_cycle(
+                target,
+                [{"headline": "Kernel kills one process", "blurb": "x", "section": "Weather"}],
+                oom=oom,
+            )
+        self.assertEqual(generate.await_args.kwargs["oom"], oom)
 
     def test_failed_generation_preserves_last_successful_edition(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -339,6 +384,7 @@ class NewsCyclePersistenceTests(unittest.TestCase):
                     check_prometheus=forbidden,
                     check_kopia=forbidden,
                     check_beszel=forbidden,
+                    check_oom=forbidden,
                     check_jellystat=forbidden,
                     fetch_recent_media=forbidden,
                     get_container_status_async=AsyncMock(return_value=([], [], 0)),

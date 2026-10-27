@@ -13,3 +13,15 @@ media = true
 updates = true
 trend_intelligence = true
 investigations = true
+
+# Host-monitoring policy applied to Beszel system records.
+[beszel]
+# Percentage at which a host's memory is reported as a warning. Hosts whose
+# memory is intentionally near the ceiling still receive HOST DOWN and DISK
+# alerts; only this memory warning is suppressed for them.
+memory_warn_pct = 92
+
+# Comma-separated Beszel system names whose high memory is expected by design.
+# Supply this at runtime from OpenBao as BESZEL_EXPECTED_HIGH_MEMORY_HOSTS; do
+# not commit real host names here.
+# expected_high_memory_hosts = ["compute-a", "compute-b"]

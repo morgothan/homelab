@@ -1,14 +1,29 @@
 """Infrastructure monitoring collectors: Prometheus, Kopia, Beszel, Jellystat."""
 
 import asyncio
+import contextlib
+import fcntl
 import logging
+import re
 import ssl
 import time
 from datetime import datetime, timedelta, timezone
 
 import httpx
 
+from homelab_news.configuration import APP_SETTINGS, BeszelSettings
+from ssh_transport import ssh_run
+from storage import load_json, save_json
+
 log = logging.getLogger(__name__)
+
+
+def _numeric_or_zero(value: object) -> float:
+    """Coerce a Beszel metric to float; missing/null values count as zero."""
+    try:
+        return float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 # ── Prometheus / infrastructure checks ────────────────────────────────────────
@@ -288,13 +303,21 @@ async def check_kopia() -> dict:
     return out
 
 
-async def check_beszel() -> dict:
+async def check_beszel(settings: BeszelSettings | None = None) -> dict:
     """Query Beszel for per-host CPU, memory, disk, and uptime status.
 
     Returns {"alerts": [...], "info": [...]} — alerts for hosts that are down
     or have critically high resource usage; info gives a compact summary.
+
+    Memory-percentage alerts are suppressed for hosts listed in
+    ``expected_high_memory_hosts`` (their high memory is an intentional
+    steady state, such as an inference engine's preallocated working set).
+    HOST DOWN and DISK alerts still apply to those hosts.
     """
     from config import BESZEL_EMAIL, BESZEL_PASS, BESZEL_URL
+
+    policy = settings or APP_SETTINGS.beszel
+    expected_high_memory = {name.casefold() for name in policy.expected_high_memory_hosts}
 
     out: dict = {"alerts": [], "info": []}
 
@@ -323,15 +346,15 @@ async def check_beszel() -> dict:
             name   = s.get("name", "unknown")
             status = s.get("status", "unknown")
             info   = s.get("info") or {}
-            cpu    = info.get("cpu", 0)
-            mp     = info.get("mp", 0)   # memory %
-            dp     = info.get("dp", 0)   # disk %
+            cpu    = _numeric_or_zero(info.get("cpu"))
+            mp     = _numeric_or_zero(info.get("mp"))   # memory %
+            dp     = _numeric_or_zero(info.get("dp"))   # disk %
 
             if status != "up":
                 down.append(f"{name} ({status})")
             elif dp > 90:
                 high_disk.append(f"{name}: disk {dp:.0f}%")
-            elif mp > 92:
+            elif mp > policy.memory_warn_pct and name.casefold() not in expected_high_memory:
                 high_mem.append(f"{name}: mem {mp:.0f}%")
             else:
                 ok.append(f"{name} cpu={cpu:.0f}% mem={mp:.0f}% disk={dp:.0f}%")
@@ -358,6 +381,164 @@ async def check_beszel() -> dict:
 
     except Exception as e:
         log.warning("check_beszel failed: %s", e)
+
+    return out
+
+
+_JOURNAL_TIMESTAMP = re.compile(
+    r"^(?P<timestamp>\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?[+-]\d{2}:?\d{2})\s+"
+)
+_EARLYOOM_KILL = re.compile(
+    r'sending (?P<signal>SIG(?:TERM|KILL)) to process (?P<pid>\d+) '
+    r'uid (?P<uid>\d+) "(?P<name>[^"]*)": badness (?P<badness>\d+), '
+    r'VmRSS (?P<rss>\d+) MiB'
+)
+
+
+@contextlib.contextmanager
+def _oom_state_lock(path: str):
+    """Serialize read-modify-write access to the OOM baselines across workers."""
+    with open(f"{path}.lock", "a", encoding="utf-8") as lock:
+        fcntl.flock(lock, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            fcntl.flock(lock, fcntl.LOCK_UN)
+
+
+def _parse_earlyoom_events(text: str) -> list[tuple[float, str, int, int, str, int]]:
+    """Extract (timestamp, signal, pid, uid, name, rss) from earlyoom journal lines."""
+    events: list[tuple[float, str, int, int, str, int]] = []
+    for line in text.splitlines():
+        timestamp_match = _JOURNAL_TIMESTAMP.match(line)
+        kill_match = _EARLYOOM_KILL.search(line)
+        if not timestamp_match or not kill_match:
+            continue
+        timestamp_text = re.sub(
+            r"([+-]\d{2})(\d{2})$", r"\1:\2", timestamp_match.group("timestamp")
+        )
+        try:
+            event_at = datetime.fromisoformat(timestamp_text).timestamp()
+        except ValueError:
+            continue
+        name = " ".join(kill_match.group("name").split()).replace('"', "'")[:60] or "unknown"
+        events.append((
+            event_at,
+            kill_match.group("signal"),
+            int(kill_match.group("pid")),
+            int(kill_match.group("uid")),
+            name,
+            int(kill_match.group("rss")),
+        ))
+    return events
+
+
+async def check_oom(
+    *,
+    state_file: str | None = None,
+    prom_query=_prom_query,
+    ssh_runner=ssh_run,
+) -> dict:
+    """Detect actual memory-kill events (kernel OOM and earlyoom actions).
+
+    Returns {"alerts": [...], "info": [...]}. The kernel signal is any increase
+    in node_vmstat_oom_kill; the earlyoom signal is a ``sending SIG(TERM|KILL)
+    to process`` journal line. Baselines live in OOM_STATE_FILE so each event
+    alerts once even when the rolling and today workers overlap. First run
+    seeds baselines without replaying historical events.
+    """
+    from config import OOM_STATE_FILE, SPARK2_SSH_HOST, SPARK_SSH_HOST
+
+    path = state_file or OOM_STATE_FILE
+    out: dict = {"alerts": [], "info": []}
+    scan_started = time.time()
+
+    try:
+        with _oom_state_lock(path):
+            state = load_json(path) or {}
+            kernel_previous = dict(state.get("kernel") or {})
+            earlyoom_previous = dict(state.get("earlyoom") or {})
+    except OSError as error:
+        log.warning("check_oom: cannot read state %s: %s", path, error)
+        return out
+
+    counters: dict[str, float] = {}
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            rows = await prom_query(client, 'node_vmstat_oom_kill{job="node"}')
+        for row in rows:
+            try:
+                counters[row["metric"]["instance"]] = float(row["value"][1])
+            except (KeyError, IndexError, TypeError, ValueError):
+                continue
+    except Exception as error:
+        log.warning("check_oom: kernel OOM query failed: %s", error)
+
+    ssh_hosts = [host for host in (SPARK_SSH_HOST, SPARK2_SSH_HOST) if host]
+    journal_events: dict[str, list[tuple[float, str, int, int, str, int]]] = {}
+    for host in ssh_hosts:
+        since = int(earlyoom_previous.get(host, scan_started))
+        command = (
+            f"journalctl -u earlyoom --since '@{since}' "
+            "--grep='sending SIG(TERM|KILL) to process' --no-pager -o short-iso || true"
+        )
+        try:
+            ok, output = await ssh_runner(host, command, timeout=20)
+        except Exception as error:
+            log.warning("check_oom: earlyoom query failed on %s: %s", host, error)
+            continue
+        if not ok:
+            log.warning("check_oom: earlyoom query failed on %s: %s", host, output[:120])
+            continue
+        journal_events[host] = _parse_earlyoom_events(output)
+
+    try:
+        with _oom_state_lock(path):
+            state = load_json(path) or {}
+            kernel_state = state.setdefault("kernel", {})
+            earlyoom_state = state.setdefault("earlyoom", {})
+
+            for instance, current in counters.items():
+                previous = kernel_state.get(instance)
+                if previous is None:
+                    kernel_state[instance] = current
+                    continue
+                try:
+                    previous_value = float(previous)
+                except (TypeError, ValueError):
+                    kernel_state[instance] = current
+                    continue
+                if current > previous_value:
+                    killed = int(round(current - previous_value))
+                    out["alerts"].append(
+                        f"KERNEL OOM KILL: {instance} — {killed} process(es) killed"
+                    )
+                    kernel_state[instance] = current
+                elif current < previous_value:
+                    # Reboot or node_exporter restart resets the counter; do not alert.
+                    kernel_state[instance] = current
+
+            for host, events in journal_events.items():
+                cursor = earlyoom_state.get(host)
+                try:
+                    threshold = float(cursor)
+                except (TypeError, ValueError):
+                    threshold = scan_started
+                display_host = host.rsplit("@", 1)[-1]
+                for event_at, signal, pid, uid, name, rss in events:
+                    if event_at <= threshold:
+                        continue
+                    out["alerts"].append(
+                        f"EARLYOOM {signal}: {display_host} — "
+                        f"pid {pid}, uid {uid}, {name}, RSS {rss} MiB"
+                    )
+                earlyoom_state[host] = max(
+                    [scan_started] + [event[0] for event in events]
+                )
+
+            save_json(path, state)
+    except OSError as error:
+        log.warning("check_oom: cannot update state %s: %s", path, error)
 
     return out
 

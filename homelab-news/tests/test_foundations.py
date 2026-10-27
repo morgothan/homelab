@@ -55,6 +55,52 @@ class ConfigurationTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "unknown feature"):
                 load_settings(path, {})
 
+    def test_beszel_policy_loads_from_toml(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as destination:
+                destination.write(
+                    "[beszel]\n"
+                    "memory_warn_pct = 95\n"
+                    "expected_high_memory_hosts = [\"compute-a\", \"compute-b\"]\n"
+                )
+            settings = load_settings(path, {})
+        self.assertEqual(settings.beszel.memory_warn_pct, 95.0)
+        self.assertEqual(
+            settings.beszel.expected_high_memory_hosts, ("compute-a", "compute-b")
+        )
+
+    def test_beszel_policy_can_be_overridden_from_environment(self):
+        settings = load_settings("/does/not/exist", {
+            "BESZEL_MEMORY_WARN_PCT": "95",
+            "BESZEL_EXPECTED_HIGH_MEMORY_HOSTS": "compute-a, compute-b",
+        })
+        self.assertEqual(settings.beszel.memory_warn_pct, 95.0)
+        self.assertEqual(
+            settings.beszel.expected_high_memory_hosts, ("compute-a", "compute-b")
+        )
+
+    def test_beszel_defaults_when_config_is_absent(self):
+        settings = load_settings("/does/not/exist", {})
+        self.assertEqual(settings.beszel.memory_warn_pct, 92.0)
+        self.assertEqual(settings.beszel.expected_high_memory_hosts, ())
+
+    def test_unknown_beszel_configuration_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as destination:
+                destination.write("[beszel]\ntelepathy = true\n")
+            with self.assertRaisesRegex(ValueError, "unknown beszel"):
+                load_settings(path, {})
+
+    def test_invalid_beszel_memory_threshold_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = os.path.join(directory, "config.toml")
+            with open(path, "w", encoding="utf-8") as destination:
+                destination.write("[beszel]\nmemory_warn_pct = 101\n")
+            with self.assertRaisesRegex(ValueError, "memory_warn_pct"):
+                load_settings(path, {})
+
     def test_capability_report_contains_no_connection_configuration(self):
         settings = load_settings("/does/not/exist", {"NEWS_FEATURE_LOKI": "false"})
         report = configured_capabilities(settings.features)
