@@ -203,7 +203,7 @@ services:
 ########## Grafana
 # Metrics visualization and dashboards, OIDC login via Authelia
   grafana:
-    image: grafana/grafana:13.2.4
+    image: grafana/grafana:13.3.0
     restart: unless-stopped
     logging: *logging
     container_name: grafana
@@ -591,7 +591,7 @@ services:
 ########## Redis
 # Shared session store for Authelia (db 0) and Traefik (db 1), exposed to LAN on :6379
   redis:
-    image: redis:8.10.2
+    image: redis:8.10.3
       #image: docker.io/valkey/valkey:latest
     container_name: redis
     healthcheck:
