@@ -26,6 +26,7 @@ from storage import load_json, save_json
 
 from containers import (
     remote_digest, parse_image_ref, latest_semver_tag, _semver_sort_key,
+    _semver_tag_pattern,
     get_containers_local, get_containers_tcp, get_containers_ssh, get_containers_pct,
 )
 from llm import llm_changelog_analysis, generate_homelab_intel
@@ -432,54 +433,252 @@ async def check_beszel_update() -> dict:
             "current_version": current_version, "updates": updates}
 
 
-async def check_vllm_update() -> dict:
-    """Check the spark inference stack. Since 2026-08-27 vLLM runs as a distributed,
-    sparkrun-orchestrated container cluster (systemd `sparkrun-deepseek` on spark1),
-    not a native venv — so the meaningful "is it current" signal is the `sparkrun`
-    CLI version (real PyPI package) rather than the vLLM build (a pinned community
-    fork image, `ghcr.io/bjk110/vllm-spark`, with no upstream "latest" to diff)."""
-    label = "vLLM"
-    ts = datetime.now(timezone.utc).isoformat()
-    if not SPARK_SSH_HOST:
-        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
-    ok, out = await ssh_run(
-        SPARK_SSH_HOST,
-        "~/.local/bin/sparkrun --version 2>/dev/null | grep -oE '[0-9]+\\.[0-9]+\\.[0-9]+' | head -1; "
-        "echo '---'; "
-        "docker exec \"$(docker ps -q -f name=node_0 2>/dev/null | head -1)\" "
-        "/opt/env/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null",
-        timeout=25,
+# The spark head node serves :8000 from exactly one inference engine at a time:
+# TensorFold TP2 (live since 2026-10-22) or the sparkrun-orchestrated vLLM
+# rollback path. One SSH probe answers liveness (the endpoint's /v1/models),
+# engine identity (systemd units, containers, and the served models' owned_by),
+# versions (engine binary, git head, kit tag, sparkrun, vLLM build), and the
+# upstream heads used by the update checks. It ends with `true` so the probe's
+# exit status reflects the SSH transport, not the last optional command.
+_INFERENCE_PROBE_COMMAND = r"""
+echo "==UNIT_TF"; systemctl is-active tensorfold-tp2 2>/dev/null || true
+echo "==UNIT_VLLM"; systemctl is-active sparkrun-deepseek 2>/dev/null || true
+echo "==UNIT_VLLM_USER"; systemctl --user is-active vllm 2>/dev/null || true
+echo "==CTR_TF"; docker ps --format '{{.Names}}' 2>/dev/null | grep -x tp2-lane || true
+echo "==CTR_VLLM"; docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^node_[0-9]+' || true
+echo "==MODELS"; curl -s -m 8 http://127.0.0.1:8000/v1/models 2>/dev/null || true; echo
+echo "==TF_VER"; "$HOME/tf1017/engine-bin/tensorfold-native" --version 2>/dev/null || true
+echo "==TF_HEAD"; git -C "$HOME/tf1017/engine" rev-parse --short=8 HEAD 2>/dev/null || true
+echo "==KIT_TAG"; grep -o -- '--branch v[0-9][0-9.]*' "$HOME/tf1017/lane/prep-assemble.sh" 2>/dev/null | head -1 | sed 's/--branch //' || true
+echo "==VLLM_BUILD"; node=$(docker ps -q -f name=node_0 2>/dev/null | head -1); [ -n "$node" ] && docker exec "$node" /opt/env/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null || true
+echo "==SPARKRUN"; "$HOME/.local/bin/sparkrun" --version 2>/dev/null | head -1 || true
+echo "==TF_UPSTREAM"; upstream=$(git ls-remote https://github.com/bertholomus/TensorFold refs/heads/deepseek-v41-zig 2>/dev/null | cut -f1); echo "$upstream"
+echo "==TF_UPSTREAM_LOCAL"; if [ -n "$upstream" ] && git -C "$HOME/tf1017/engine" merge-base --is-ancestor "$upstream" HEAD 2>/dev/null; then echo yes; fi
+echo "==KIT_TAGS"; git ls-remote --tags https://github.com/bertholomus/deepseek-v4.1-tensorfold-tp2-2xgb10 'refs/tags/v*' 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//' | sort -u || true
+echo "==END"
+true
+"""
+
+_INFERENCE_LABELS = {"tensorfold": "TensorFold TP2", "vllm": "vLLM"}
+_ACTIVE_UNIT_STATES = {"active", "activating", "reloading"}
+_TENSORFOLD_BRANCH = "deepseek-v41-zig"
+
+
+_PROBE_SECTION_RE = re.compile(r"==([A-Z][A-Z0-9_]*)")
+
+
+def _probe_sections(output: str) -> dict[str, str]:
+    """Split ``==KEY``-delimited probe output into ``{KEY: text}``.
+
+    Markers are matched even when glued to the previous value: ``curl`` and
+    ``git`` may omit a trailing newline, so ``==TF_VER`` can follow the JSON
+    model list on the same line.
+    """
+    sections: dict[str, str] = {}
+    current: Optional[str] = None
+    position = 0
+    for match in _PROBE_SECTION_RE.finditer(output):
+        if current is not None:
+            sections[current] = output[position:match.start()].strip()
+        current = match.group(1)
+        position = match.end()
+    if current is not None:
+        sections[current] = output[position:].strip()
+    return sections
+
+
+def _model_entries(raw: str) -> list[dict]:
+    try:
+        payload = json.loads(raw or "{}")
+    except (TypeError, ValueError):
+        return []
+    entries = payload.get("data") if isinstance(payload, dict) else None
+    if not isinstance(entries, list):
+        return []
+    return [entry for entry in entries if isinstance(entry, dict)]
+
+
+def _detect_inference_engine(probe: dict[str, str]) -> dict:
+    """Resolve which engine is live on the spark head node.
+
+    The serving endpoint is authoritative: ``/v1/models`` answers as soon as the
+    engine accepts requests, and each engine names itself in ``owned_by``
+    ("tensorfold" for TensorFold, "vllm" for vLLM). Systemd units and containers
+    are the fallback for an engine that is starting or wedged before it answers.
+    """
+    models = _model_entries(probe.get("MODELS", ""))
+    owners = {str(entry.get("owned_by", "")).lower() for entry in models}
+    tensorfold_present = (
+        probe.get("UNIT_TF", "").strip() in _ACTIVE_UNIT_STATES
+        or bool(probe.get("CTR_TF", "").strip())
     )
-    sparkrun_version, _, vllm_build = (out.strip().partition("---"))
-    sparkrun_version = sparkrun_version.strip()
-    vllm_build = vllm_build.strip()
-    if not ok or not sparkrun_version:
-        return {"label": label, "status": "error", "ts": ts,
-                "error": "could not read sparkrun version on spark", "updates": []}
+    vllm_present = (
+        any(probe.get(name, "").strip() in _ACTIVE_UNIT_STATES
+            for name in ("UNIT_VLLM", "UNIT_VLLM_USER"))
+        or bool(probe.get("CTR_VLLM", "").strip())
+    )
 
-    current_version = sparkrun_version
-    if vllm_build:
-        current_version += f" (vLLM {vllm_build} in container)"
+    if any("tensorfold" in owner for owner in owners):
+        engine = "tensorfold"
+    elif any("vllm" in owner for owner in owners):
+        engine = "vllm"
+    elif tensorfold_present:
+        engine = "tensorfold"
+    elif vllm_present:
+        engine = "vllm"
+    else:
+        engine = ""
+    return {"engine": engine, "serving": bool(models)}
 
-    new_version = ""
+
+def _tensorfold_current_version(probe: dict[str, str]) -> str:
+    parts = [probe.get("TF_VER", "").strip(), probe.get("TF_HEAD", "").strip()]
+    kit = probe.get("KIT_TAG", "").strip()
+    if kit:
+        parts.append(f"kit {kit}")
+    if parts[1]:
+        parts[1] = f"engine {parts[1]}"
+    return ", ".join(part for part in parts if part)
+
+
+def _tensorfold_update_entries(probe: dict[str, str]) -> list[dict]:
+    """Compare the live TensorFold engine and kit with their upstream refs.
+
+    The lane builds the engine from a branch carrying local patches, so the
+    local head need not exist upstream. A remote head is an update only when it
+    differs from the local head and is not already contained in local history
+    (``==TF_UPSTREAM_LOCAL`` = yes means the remote commit is an ancestor).
+    """
+    entries: list[dict] = []
+    head = probe.get("TF_HEAD", "").strip()
+    upstream = probe.get("TF_UPSTREAM", "").strip()
+    contained = probe.get("TF_UPSTREAM_LOCAL", "").strip() == "yes"
+    if head and upstream and not upstream.lower().startswith(head.lower()) and not contained:
+        entries.append({
+            "app":             "TensorFold engine",
+            "current_version": head,
+            "new_version":     upstream[:8],
+            "changelog_analysis": (
+                f"Upstream {_TENSORFOLD_BRANCH} moved to {upstream[:8]}. Review with "
+                f"`git fetch && git log --oneline {head}..origin/{_TENSORFOLD_BRANCH}` before rebuilding."
+            ),
+        })
+
+    kit = probe.get("KIT_TAG", "").strip()
+    tags = [tag.strip() for tag in probe.get("KIT_TAGS", "").splitlines() if tag.strip()]
+    if kit and tags:
+        pattern = _semver_tag_pattern(kit)
+        candidates = [tag for tag in tags if pattern and pattern.match(tag)]
+        if candidates:
+            latest = max(candidates, key=_semver_sort_key)
+            if _semver_sort_key(latest) > _semver_sort_key(kit):
+                entries.append({
+                    "app":             "TensorFold kit",
+                    "current_version": kit,
+                    "new_version":     latest,
+                    "changelog_analysis": (
+                        f"Kit release {latest} is newer than {kit}. Bump prep-assemble.sh's "
+                        "--branch, rebuild the kit, and verify with tools/verify_kit.sh."
+                    ),
+                })
+    return entries
+
+
+def _sparkrun_version(raw: str) -> str:
+    match = re.search(r"\d+\.\d+\.\d+", raw or "")
+    return match.group(0) if match else ""
+
+
+async def _pypi_version(package: str) -> str:
     try:
         async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.get("https://pypi.org/pypi/sparkrun/json")
-            r.raise_for_status()
-            new_version = (r.json().get("info", {}).get("version") or "").strip()
-    except Exception as e:  # noqa: BLE001
-        log.warning("vLLM check: PyPI sparkrun lookup failed: %s", e)
+            response = await client.get(f"https://pypi.org/pypi/{package}/json")
+            response.raise_for_status()
+            return (response.json().get("info", {}).get("version") or "").strip()
+    except Exception as error:  # noqa: BLE001
+        log.warning("inference: PyPI %s lookup failed: %s", package, error)
+        return ""
 
+
+async def _vllm_current_version_and_updates(probe: dict[str, str]) -> tuple[str, list[dict]]:
+    """vLLM rollback path: its container image is a digest-pinned fork with no
+    upstream "latest", so the meaningful currency signal is the sparkrun CLI."""
+    sparkrun_version = _sparkrun_version(probe.get("SPARKRUN", ""))
+    vllm_build = probe.get("VLLM_BUILD", "").strip()
+    current_version = sparkrun_version
+    if vllm_build:
+        current_version = f"{current_version} vLLM {vllm_build} in container".strip()
+    if not sparkrun_version:
+        log.warning("inference: vLLM is serving but its sparkrun version could not be read")
+        return current_version, []
+
+    latest = await _pypi_version("sparkrun")
     updates = []
-    if new_version and new_version != sparkrun_version:
+    if latest and latest != sparkrun_version:
         updates.append({
             "app":             "sparkrun",
             "current_version": sparkrun_version,
-            "new_version":     new_version,
+            "new_version":     latest,
         })
-    log.info("vLLM/sparkrun: current=%s latest=%s vllm_build=%s updates=%d",
-             sparkrun_version, new_version, vllm_build or "?", len(updates))
-    return {"label": label, "status": "done", "ts": ts,
+    return current_version, updates
+
+
+async def check_inference_update() -> dict:
+    """Detect and version-check the engine serving spark's inference endpoint.
+
+    Replaces the vLLM-only check: liveness is the endpoint's ``/v1/models``
+    answer, not a container name. A down report requires neither engine to be
+    running; an engine that runs without answering is reported against that
+    engine, never against the idle one.
+    """
+    ts = datetime.now(timezone.utc).isoformat()
+    label = "Inference"
+    if not SPARK_SSH_HOST:
+        return {"label": label, "status": "skipped", "ts": ts, "updates": []}
+
+    ok, output = await ssh_run(SPARK_SSH_HOST, _INFERENCE_PROBE_COMMAND, timeout=40)
+    if not ok:
+        return {"label": label, "status": "error", "ts": ts, "outage": False,
+                "error": "could not run the inference probe on spark", "updates": []}
+    probe = _probe_sections(output)
+    if not probe:
+        return {"label": label, "status": "error", "ts": ts, "outage": False,
+                "error": "empty inference probe response from spark", "updates": []}
+
+    detection = _detect_inference_engine(probe)
+    engine = detection["engine"]
+    if engine:
+        label = _INFERENCE_LABELS[engine]
+
+    if not detection["serving"]:
+        if engine:
+            details = []
+            unit = probe.get("UNIT_TF" if engine == "tensorfold" else "UNIT_VLLM", "").strip()
+            if not unit and engine == "vllm":
+                unit = probe.get("UNIT_VLLM_USER", "").strip()
+            if unit:
+                details.append(f"unit {unit}")
+            container = probe.get("CTR_TF" if engine == "tensorfold" else "CTR_VLLM", "").strip()
+            if container:
+                details.append(f"container {container.splitlines()[0]}")
+            suffix = f" ({', '.join(details)})" if details else ""
+            error = f"{label} is running but its API endpoint is not answering{suffix}"
+        else:
+            error = "neither TensorFold nor vLLM is running on spark"
+        return {"label": label, "status": "error", "ts": ts, "engine": engine,
+                "outage": True, "error": error, "updates": []}
+
+    if engine == "tensorfold":
+        current_version = _tensorfold_current_version(probe)
+        updates = _tensorfold_update_entries(probe)
+    elif engine == "vllm":
+        current_version, updates = await _vllm_current_version_and_updates(probe)
+    else:
+        current_version, updates = "", []
+
+    log.info("Inference: engine=%s current=%s updates=%d",
+             engine or "unknown", current_version or "?", len(updates))
+    return {"label": label, "status": "done", "ts": ts, "engine": engine,
             "current_version": current_version, "updates": updates}
 
 
@@ -604,7 +803,7 @@ async def run_homelab_checks() -> dict:
         check_homeassistant_update(),
         check_truenas_update(),
         check_beszel_update(),
-        check_vllm_update(),
+        check_inference_update(),
         check_spark_apt(SPARK_SSH_HOST, "DGX Spark"),
         check_spark_apt(SPARK2_SSH_HOST, "DGX Spark 2"),
         check_traefik_plugins(),
@@ -617,7 +816,7 @@ async def run_homelab_checks() -> dict:
         ["proxmox", "proxmox_lxc"]
         + [_key(label) for _, label in ADGUARD_URLS]
         + ["jellyfin", "truenas", "home_assistant", "truenas_system", "beszel",
-           "vllm", "dgx_spark", "dgx_spark_2", "traefik_plugins"]
+           "inference", "dgx_spark", "dgx_spark_2", "traefik_plugins"]
     )
     sources: dict = {}
     for key, result in zip(keys, all_results):

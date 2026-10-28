@@ -88,7 +88,7 @@ the container-based validation workflow are documented in `DEVELOPMENT.md`.
 ## Requirements
 
 - Docker Engine and Docker Compose
-- An OpenAI-compatible local inference endpoint, such as vLLM
+- An OpenAI-compatible local inference endpoint served by vLLM or TensorFold
 - Loki for aggregated logs
 - Optional Prometheus metrics and the integrations described below
 - A deliberately scoped way to inspect local and remote container state
@@ -144,7 +144,7 @@ All configuration is supplied through environment variables. Values containing c
 |----------|-------------|---------|
 | `SITE_NAME` | Publication name shown in the masthead | `Homelab News` |
 | `DATA_DIR` | Persistent state directory | `/data` |
-| `VLLM_URL` | Base URL of the OpenAI-compatible inference endpoint | Empty |
+| `VLLM_URL` | Base URL of the OpenAI-compatible inference endpoint (served by vLLM or TensorFold) | Empty |
 | `VLLM_MODEL` | Model identifier sent to the inference endpoint | Empty |
 | `OLLAMA_TIMEOUT` | LLM request timeout in seconds; retained as a legacy variable name | `3600` |
 | `REFRESH_INTERVAL` | Rolling-report interval in seconds | `900` |
@@ -173,6 +173,19 @@ GET requests plus API negotiation; the app has no Docker socket mount or Docker
 group membership. The proxy has no published port and uses a private internal
 network. Remote Docker endpoints retain their independently configured access
 controls.
+
+The inference check on `SPARK_SSH_HOST` detects which engine is actually serving
+the endpoint instead of assuming vLLM. One probe reads `GET /v1/models` for
+liveness, identifies the engine from each model's `owned_by` field (falling back
+to the `tensorfold-tp2` / `sparkrun-deepseek` systemd units and their containers),
+and gathers the version facts needed for the update check. The Wire source is
+labelled `TensorFold TP2` or `vLLM` accordingly, and an outage is reported only
+when neither engine is running. A running engine whose API endpoint does not
+answer is reported against that engine, never against the idle one. Updates
+follow the live engine: TensorFold checks the upstream `deepseek-v41-zig` branch
+head (against the built engine's git head) and the recipe repository's kit
+release tags; vLLM checks the `sparkrun` CLI version on PyPI, because its
+container image is a digest-pinned fork with no upstream "latest" to compare.
 
 Provision verified keys in the host's SSH `known_hosts` before deployment. The
 entry point copies that file and the monitoring key into the unprivileged user's
@@ -223,7 +236,7 @@ environment:
 | `PVE_SSH_HOST` | SSH target used for virtualization-host update checks |
 | `TRUENAS_SSH_HOST` | SSH target used for storage-host update checks |
 | `BESZEL_SSH_HOST` | SSH target used for monitoring-host version checks |
-| `SPARK_SSH_HOST` | SSH target used for compute-host version checks |
+| `SPARK_SSH_HOST` | SSH target used for compute-host version checks and live inference-engine detection |
 | `SPARK2_SSH_HOST` | SSH target used for the second compute-host version checks |
 | `HERMES_SSH_HOST` | SSH target used for agent-host version checks |
 | `ADGUARD_PRIMARY_URL` | Primary DNS service URL |

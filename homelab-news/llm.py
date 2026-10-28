@@ -16,9 +16,10 @@ from typing import Optional
 import httpx
 import tiktoken
 from privacy import redact_data, redact_text
+from storage import load_json
 
 from config import (
-    CONTEXT_FILE, LOCAL, OLLAMA_TIMEOUT, VLLM_MODEL, VLLM_URL,
+    CONTEXT_FILE, HOMELAB_INTEL_FILE, LOCAL, OLLAMA_TIMEOUT, VLLM_MODEL, VLLM_URL,
 )
 
 log = logging.getLogger(__name__)
@@ -79,16 +80,37 @@ def _sanitize_for_llm(text: str, max_len: int = 200) -> str:
 from security import _label_sip_phone_prefix  # noqa: E402,F401
 
 
+def _live_inference_line() -> str:
+    """Name the engine currently serving spark's endpoint, from the update worker's
+    last detection. Keeps prompts from calling TensorFold "vLLM" when it isn't."""
+    intel = load_json(HOMELAB_INTEL_FILE)
+    sources = intel.get("sources") if isinstance(intel, dict) else None
+    source = sources.get("inference") if isinstance(sources, dict) else None
+    engine = str(source.get("engine") or "") if isinstance(source, dict) else ""
+    label = {"tensorfold": "TensorFold TP2", "vllm": "vLLM"}.get(engine)
+    if not label:
+        return ""
+    version = str(source.get("current_version") or "").strip()
+    return (f"- Inference engine on spark.{LOCAL}: {label}"
+            + (f" ({version})" if version else ""))
+
+
 def _load_context() -> str:
     """Load optional homelab context file from /data/context.md.
     Returns empty string if the file doesn't exist."""
     try:
         with open(CONTEXT_FILE) as f:
             ctx = f.read().strip()
+        live = []
         if VLLM_MODEL:
+            live.append(f"- Currently loaded inference model on spark.{LOCAL}: `{VLLM_MODEL}`")
+        engine_line = _live_inference_line()
+        if engine_line:
+            live.append(engine_line)
+        if live:
             ctx = (
                 "## Live Config (authoritative, overrides anything below)\n"
-                f"- Currently loaded vLLM model on spark.{LOCAL}: `{VLLM_MODEL}`\n\n"
+                + "\n".join(live) + "\n\n"
             ) + ctx
         return _sanitize_for_llm(ctx, max_len=12000)
     except FileNotFoundError:
@@ -275,12 +297,13 @@ async def generate_homelab_intel(docker_hosts: dict, sources: dict) -> Optional[
         status = src.get("status", "unknown")
         if status == "error":
             err = _sanitize_for_llm(src.get("error", "unknown"), max_len=80)
-            lines.append(f"{lbl.upper()}: check failed — {err}")
+            state = "DOWN" if src.get("outage") else "check failed"
+            lines.append(f"{lbl.upper()}: {state} — {err}")
             continue
         updates = src.get("updates", [])
         if not updates:
             cur = src.get("current_version", "")
-            lines.append(f"{lbl.upper()}: current" + (f" (v{cur})" if cur else ""))
+            lines.append(f"{lbl.upper()}: current" + (f" (version {cur})" if cur else ""))
             continue
         for u in updates:
             pkg = _sanitize_for_llm(u.get("package") or u.get("app", "?"), max_len=60)
