@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+# update-hosts — apt update + full-upgrade on dns, dns.kids, pve and every running Proxmox CT,
+# via ansible/upgrade.yml. Extra args go straight to ansible-playbook:
+#
+#   bin/update-hosts --check --diff        # dry run: what would upgrade, per host
+#   bin/update-hosts                       # upgrade
+#   bin/update-hosts --limit dns           # just the dns group (also: containers, pve, a CT like ct104-jellyfin)
+#   bin/update-hosts -e include_self=true  # also this host (CT102) last — bounces Traefik if docker-ce updates
+#
+# Sparks deliberately excluded: a DGX OTA apt run + needrestart took inference down 2026-10-20.
+cd "$(dirname "$(readlink -f "$0")")/../ansible" && exec ansible-playbook upgrade.yml "$@"

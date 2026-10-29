@@ -1,0 +1,63 @@
+# apt update + full-upgrade across the lab. Run via bin/update-hosts.
+# Order: containers (parallel) → dns pairs (one host at a time, so a resolver is always up) → pve → this host (opt-in).
+# confdef/confold (apt module default) keeps locally-edited config files. No autoremove: never prune pve kernels.
+
+- name: Containers
+  hosts: containers
+  gather_facts: false
+  tasks: &upgrade
+    - name: apt update + dist-upgrade
+      ansible.builtin.apt:
+        update_cache: true
+        upgrade: dist
+        lock_timeout: 300
+    - name: Check reboot-required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot
+    - name: REBOOT REQUIRED
+      ansible.builtin.debug:
+        msg: reboot required
+      when: reboot.stat.exists
+
+- name: DNS (one at a time)
+  hosts: dns
+  gather_facts: false
+  serial: 1
+  tasks: *upgrade
+
+# nat's sudo on pve is NOPASSWD for apt-get + pct only. Ansible's become wraps everything in
+# `/bin/sh -c python3 …`, which that rule can't match, so apt-get is called directly here.
+- name: Proxmox host
+  hosts: pve
+  gather_facts: false
+  tasks:
+    - name: apt-get update
+      ansible.builtin.command: sudo apt-get -qq update
+      changed_when: false
+      check_mode: false
+    - name: Simulate dist-upgrade
+      ansible.builtin.command: sudo apt-get -s dist-upgrade
+      register: sim
+      changed_when: false
+      check_mode: false
+    - name: Pending
+      ansible.builtin.debug:
+        msg: "{{ sim.stdout_lines | select('match', '^Inst ') | map('split') | map(attribute=1) | list }}"
+      when: "'\nInst ' in sim.stdout"
+    - name: apt-get dist-upgrade
+      ansible.builtin.command: sudo apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade
+      when: "'\nInst ' in sim.stdout"
+    - name: Check reboot-required
+      ansible.builtin.stat:
+        path: /var/run/reboot-required
+      register: reboot
+    - name: REBOOT REQUIRED
+      ansible.builtin.debug:
+        msg: reboot required
+      when: reboot.stat.exists
+
+- name: This host (CT102) — opt-in; a docker-ce bump restarts dockerd, bouncing Traefik
+  hosts: "{{ 'self_host' if include_self | default(false) | bool else 'none' }}"
+  gather_facts: false
+  tasks: *upgrade
