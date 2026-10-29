@@ -1,0 +1,143 @@
+# Converge / rebuild the DNS hosts (dns, dns.kids, CT110 dns2, CT112 kids secondary) from
+# backups/dns/<host>/, written nightly by dns-backup.yml. Idempotent — on a healthy host it changes
+# nothing, and it never overwrites a live AdGuardHome.yaml (the UI + adguardhome-sync own that).
+#
+# Rebuild a Pi:  flash RPi OS (user nat + SSH key), boot, then
+#                ansible-playbook dns.yml --limit dns.kids.<LOCAL> -K   (-K until NOPASSWD sudo exists)
+# Rebuild a CT:  recreate it on pve (same VMID/IP/VLAN), start it, then
+#                ansible-playbook dns.yml --limit ct112-dns-kids-secondary
+# Not covered: beszel-agent (needs the hub's key — re-add from the Beszel UI).
+
+- name: DNS hosts
+  hosts: dns
+  vars:
+    bk: "{{ (playbook_dir ~ '/../backups/dns/' ~ inventory_hostname) | realpath }}"
+    seed: "{{ (playbook_dir ~ '/../backups/dns/' ~ seed_from | default(inventory_hostname)) | realpath }}"
+    agh_yaml: /opt/AdGuardHome/AdGuardHome.yaml
+  tasks:
+    # ── Pi base (see 2026-10-06 dns.kids incident: a merged `127.0.0.1 localhost <name>` line made
+    #    rsyslog label every log host=localhost in Loki)
+    - name: Pi base
+      when: pi_hostname is defined
+      block:
+        - name: Hostname
+          ansible.builtin.hostname:
+            name: "{{ pi_hostname }}"
+        - name: Unmerge hostname from the localhost line
+          ansible.builtin.replace:
+            path: /etc/hosts
+            regexp: '^(127\.0\.0\.1[ \t]+localhost)[ \t]+\S.*$'
+            replace: '\1'
+        - name: Fix a stale 127.0.1.1 name
+          ansible.builtin.replace:
+            path: /etc/hosts
+            regexp: '^127\.0\.1\.1[ \t]+(?!{{ pi_hostname }}[ \t]*$).*$'
+            replace: "127.0.1.1 {{ pi_hostname }}"
+        - name: Add 127.0.1.1 if missing
+          ansible.builtin.shell: grep -q '^127\.0\.1\.1[[:space:]]' /etc/hosts || { echo "127.0.1.1 {{ pi_hostname }}" >> /etc/hosts; echo added; }
+          register: hosts_add
+          changed_when: "'added' in hosts_add.stdout"
+        - name: Check for cloud-init
+          ansible.builtin.stat:
+            path: /etc/cloud
+          register: cloud
+        - name: Disable cloud-init (its manage_etc_hosts rewrites /etc/hosts)
+          ansible.builtin.copy:
+            content: ""
+            dest: /etc/cloud/cloud-init.disabled
+            force: false
+          when: cloud.stat.exists
+
+    - name: Packages
+      ansible.builtin.apt:
+        name: "{{ (['rsyslog'] if rsyslog | default(false) else [])
+                + (['prometheus-node-exporter'] if node_exporter | default(false) else [])
+                + (['unbound', 'dns-root-data'] if unbound | default(false) else []) }}"
+        update_cache: true
+        cache_valid_time: 86400
+      when: rsyslog | default(false) or node_exporter | default(false) or unbound | default(false)
+
+    - name: Remote syslog
+      when: rsyslog | default(false)
+      block:
+        - name: Check for an existing forward rule
+          ansible.builtin.shell: grep -rqs '^[^#].*@logger\.' /etc/rsyslog.conf /etc/rsyslog.d/
+          register: fwd
+          changed_when: false
+          failed_when: false
+          check_mode: false
+        - name: Forward to logger
+          ansible.builtin.copy:
+            content: "*.* @logger.{{ lan_domain }}:514\n"
+            dest: /etc/rsyslog.d/90-remote.conf
+          when: fwd.rc != 0
+          notify: Restart rsyslog
+
+    # ── unbound (dns + dns2): AdGuard forwards to it on 127.0.0.1:5335
+    - name: Unbound
+      when: unbound | default(false)
+      block:
+        - name: Require an unbound backup — without it unbound would bind :53 and fight AdGuard
+          ansible.builtin.assert:
+            that: lookup('ansible.builtin.fileglob', bk ~ '/etc/unbound/unbound.conf.d/*.conf') | length > 0
+            fail_msg: "no unbound config in {{ bk }} — run dns-backup.yml while the host is healthy"
+        - name: Restore unbound config + exporter
+          ansible.builtin.copy:
+            src: "{{ item }}"
+            dest: "{{ item | replace(bk, '') }}"
+            mode: "{{ '0755' if item.endswith('/unbound_exporter') else '0644' }}"
+          with_fileglob:
+            - "{{ bk }}/etc/unbound/unbound.conf.d/*.conf"
+            - "{{ bk }}/usr/bin/unbound_exporter"
+            - "{{ bk }}/etc/systemd/system/unbound*exporter.service"
+          notify: Restart unbound
+          register: unbound_files
+        - name: Unbound running
+          ansible.builtin.systemd_service:
+            name: unbound
+            state: started
+            enabled: true
+        - name: Exporter running
+          ansible.builtin.systemd_service:
+            name: "{{ item | basename | splitext | first }}"
+            state: started
+            enabled: true
+            daemon_reload: "{{ unbound_files is changed }}"
+          with_fileglob: "{{ bk }}/etc/systemd/system/unbound*exporter.service"
+
+    # ── AdGuard Home
+    - name: Check AdGuard binary
+      ansible.builtin.stat:
+        path: /opt/AdGuardHome/AdGuardHome
+      register: agh
+    - name: Install AdGuard Home (it self-updates from the UI afterwards)
+      ansible.builtin.unarchive:
+        src: "https://static.adguard.com/adguardhome/release/AdGuardHome_linux_{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}.tar.gz"
+        dest: /opt
+        remote_src: true
+      when: not agh.stat.exists
+    - name: Restore AdGuardHome.yaml (own backup, else the origin's for a replica) — only if absent
+      ansible.builtin.copy:
+        src: "{{ (bk if lookup('ansible.builtin.fileglob', bk ~ agh_yaml) else seed) ~ agh_yaml }}"
+        dest: "{{ agh_yaml }}"
+        mode: "0600"
+        force: false
+    - name: Install AdGuard service
+      ansible.builtin.command:
+        cmd: /opt/AdGuardHome/AdGuardHome -s install
+        creates: /etc/systemd/system/AdGuardHome.service
+    - name: AdGuard running
+      ansible.builtin.systemd_service:
+        name: AdGuardHome
+        state: started
+        enabled: true
+
+  handlers:
+    - name: Restart unbound
+      ansible.builtin.systemd_service:
+        name: unbound
+        state: restarted
+    - name: Restart rsyslog
+      ansible.builtin.systemd_service:
+        name: rsyslog
+        state: restarted

@@ -545,6 +545,25 @@ services:
       - FEATURES_DHCP_STATIC_LEASES=false
       - API_PORT=8080
       - API_METRICS_ENABLED=true
+
+# Same, kids pair: dns.kids → kids secondary (CT112). Neither kids instance has web auth.
+# Host rebuild/backup for all four DNS hosts lives in ansible/dns.yml + dns-backup.yml.
+  adguardhome-sync-kids:
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.5
+    container_name: adguardhome-sync-kids
+    restart: unless-stopped
+    logging: *logging
+    networks:
+      - ${DOCKERNET}
+    command: ["run"]
+    environment:
+      - ORIGIN_URL=http://dns.kids.${LOCAL}
+      - REPLICA1_URL=http://dns2.kids.${LOCAL}
+      - CRON=*/5 * * * *
+      - RUN_ON_START=true
+      - CONTINUE_ON_ERROR=true
+      - FEATURES_DHCP_SERVER_CONFIG=false
+      - FEATURES_DHCP_STATIC_LEASES=false
 ########## Tdarr Exporter
 # Exports Tdarr media transcoding metrics to Prometheus
   tdarr-exporter:

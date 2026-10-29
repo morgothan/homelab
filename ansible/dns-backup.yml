@@ -1,0 +1,18 @@
+# Pull each DNS host's live config into backups/dns/<host>/<original path> (gitignored; Kopia snapshots
+# the repo dir daily at 06:30). dns.yml rebuilds a host from there. Runs nightly from nat's crontab.
+- name: Back up DNS host config
+  hosts: dns
+  gather_facts: false
+  tasks:
+    - name: List config files
+      ansible.builtin.shell: |
+        ls /opt/AdGuardHome/AdGuardHome.yaml /etc/unbound/unbound.conf.d/*.conf /usr/bin/unbound_exporter 2>/dev/null
+        for u in unbound_exporter unbound-exporter; do systemctl show -P FragmentPath $u; done 2>/dev/null | grep . ; true
+      register: files
+      changed_when: false
+      check_mode: false
+    - name: Fetch
+      ansible.builtin.fetch:
+        src: "{{ item }}"
+        dest: "{{ playbook_dir }}/../backups/dns/"
+      loop: "{{ files.stdout_lines }}"
