@@ -320,7 +320,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.3.5
+    image: amir20/dozzle:v11.4.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -524,7 +524,7 @@ services:
 # One-way configuration sync from primary DNS to the independent secondary.
 # DHCP is intentionally excluded; UniFi remains the DHCP authority.
   adguardhome-sync:
-    image: ghcr.io/bakito/adguardhome-sync:v0.9.5
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.6
     container_name: adguardhome-sync
     restart: unless-stopped
     logging: *logging
@@ -549,7 +549,7 @@ services:
 # Same, kids pair: dns.kids → kids secondary (CT112). Neither kids instance has web auth.
 # Host rebuild/backup for all four DNS hosts lives in ansible/dns.yml + dns-backup.yml.
   adguardhome-sync-kids:
-    image: ghcr.io/bakito/adguardhome-sync:v0.9.5
+    image: ghcr.io/bakito/adguardhome-sync:v0.9.6
     container_name: adguardhome-sync-kids
     restart: unless-stopped
     logging: *logging
@@ -605,7 +605,7 @@ services:
       - ${DOCKERNET}
     volumes:
       - ${DOCKERDIR}/pve/pve.yml:/etc/prometheus/pve.yml
-    image: prompve/prometheus-pve-exporter:3.10.2
+    image: prompve/prometheus-pve-exporter:3.11.0
 
 
 ########## Redis
@@ -1067,7 +1067,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.29.0 #
+    image: ghcr.io/mealie-recipes/mealie:v3.30.0 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
