@@ -1,0 +1,183 @@
+# Upgrade AdGuard Home on the DNS hosts (dns, dns.kids, CT110 dns2, CT112 kids secondary).
+# Run via bin/update-dns. One host at a time, so a resolver is always up.
+#
+# Target version comes from AdGuard's release channel; pin one with `-e agh_version=v0.107.80`.
+# Each host verifies the GitHub release tarball against that release's checksums.txt, backs up
+# the running binary as /opt/AdGuardHome/AdGuardHome.backup-<old version>, then swaps it in.
+# Idempotent: hosts already at the target version are skipped, so `--check` shows what would move.
+#
+# Rollback (per host): stop AdGuardHome, copy /opt/AdGuardHome/AdGuardHome.backup-<old> over
+# /opt/AdGuardHome/AdGuardHome, start it again.
+
+- name: AdGuard Home upgrade
+  hosts: dns
+  serial: 1
+  vars:
+    agh_dir: /opt/AdGuardHome
+    agh_bin: "{{ agh_dir }}/AdGuardHome"
+    agh_arch: "{{ 'arm64' if ansible_facts.architecture == 'aarch64' else 'amd64' }}"
+    agh_asset: "AdGuardHome_linux_{{ agh_arch }}.tar.gz"
+    agh_tarball: "/tmp/agh-{{ agh_target | default('pending') }}.tar.gz"
+    agh_stage: /tmp/agh-stage
+  tasks:
+    - name: Resolve target version (release channel)
+      ansible.builtin.uri:
+        url: https://static.adguard.com/adguardhome/release/version.json
+        return_content: true
+        timeout: 15
+      register: agh_release
+      when: agh_version is not defined
+      changed_when: false
+      check_mode: false
+
+    - name: Pin target version
+      ansible.builtin.set_fact:
+        agh_target: "{{ agh_version }}"
+      when: agh_version is defined
+
+    - name: Use release-channel version
+      ansible.builtin.set_fact:
+        agh_target: "{{ (agh_release.content | from_json).version }}"
+      when: agh_version is not defined
+
+    - name: Validate target version
+      ansible.builtin.assert:
+        that: agh_target is match('^v[0-9]+\.[0-9]+\.[0-9]+$')
+        fail_msg: "agh_target '{{ agh_target }}' is not a release tag like v0.107.80"
+
+    - name: Current AdGuard version
+      ansible.builtin.command:
+        cmd: "{{ agh_bin }} --version"
+      register: agh_current
+      changed_when: false
+      check_mode: false
+
+    - name: AdGuard status
+      ansible.builtin.debug:
+        msg: "{{ inventory_hostname }}: {{ agh_current.stdout.split() | last }} → {{ agh_target }}"
+      when: agh_current.stdout.split() | last != agh_target
+
+    - name: Upgrade AdGuard Home
+      when:
+        - agh_current.stdout.split() | last != agh_target
+        - not ansible_check_mode
+      block:
+        - name: Fetch release checksums
+          ansible.builtin.uri:
+            url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ agh_target }}/checksums.txt"
+            return_content: true
+            timeout: 15
+          register: agh_sums
+          changed_when: false
+
+        - name: Select checksum for {{ agh_asset }}
+          ansible.builtin.set_fact:
+            agh_sha: >-
+              {{ (agh_sums.content.splitlines()
+                 | select('search', agh_asset ~ '$')
+                 | first).split()[0] }}
+
+        - name: Validate checksum
+          ansible.builtin.assert:
+            that: agh_sha is match('^[0-9a-f]{64}$')
+            fail_msg: "no sha256 for {{ agh_asset }} in {{ agh_target }} checksums.txt"
+
+        - name: Download {{ agh_asset }}
+          ansible.builtin.get_url:
+            url: "https://github.com/AdguardTeam/AdGuardHome/releases/download/{{ agh_target }}/{{ agh_asset }}"
+            dest: "{{ agh_tarball }}"
+            checksum: "sha256:{{ agh_sha }}"
+            mode: "0644"
+
+        - name: Create staging directory
+          ansible.builtin.file:
+            path: "{{ agh_stage }}"
+            state: directory
+            mode: "0700"
+
+        - name: Stage release
+          ansible.builtin.unarchive:
+            src: "{{ agh_tarball }}"
+            dest: "{{ agh_stage }}"
+            remote_src: true
+
+        - name: Backup current binary
+          ansible.builtin.copy:
+            src: "{{ agh_bin }}"
+            dest: "{{ agh_dir }}/AdGuardHome.backup-{{ agh_current.stdout.split() | last }}"
+            remote_src: true
+            force: false
+            mode: preserve
+
+        - name: Stop AdGuard Home
+          ansible.builtin.systemd_service:
+            name: AdGuardHome
+            state: stopped
+
+        - name: Install {{ agh_target }}
+          ansible.builtin.copy:
+            src: "{{ agh_stage }}/AdGuardHome/AdGuardHome"
+            dest: "{{ agh_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+
+        - name: Start AdGuard Home
+          ansible.builtin.systemd_service:
+            name: AdGuardHome
+            state: started
+
+        - name: Wait for DNS listener
+          ansible.builtin.wait_for:
+            host: 127.0.0.1
+            port: 53
+            delay: 2
+            timeout: 30
+
+        - name: Verify running version
+          ansible.builtin.command:
+            cmd: "{{ agh_bin }} --version"
+          register: agh_after
+          changed_when: false
+          until: agh_after.stdout.split() | last == agh_target
+          retries: 10
+          delay: 2
+          check_mode: false
+
+        - name: Upgraded
+          ansible.builtin.debug:
+            msg: "{{ inventory_hostname }}: {{ agh_current.stdout.split() | last }} → {{ agh_target }}"
+      rescue:
+        - name: Restore previous binary
+          ansible.builtin.copy:
+            src: "{{ agh_dir }}/AdGuardHome.backup-{{ agh_current.stdout.split() | last }}"
+            dest: "{{ agh_bin }}"
+            remote_src: true
+            owner: root
+            group: root
+            mode: "0755"
+          ignore_errors: true
+
+        - name: Start previous version
+          ansible.builtin.systemd_service:
+            name: AdGuardHome
+            state: started
+          ignore_errors: true
+
+        - name: Report failed upgrade
+          ansible.builtin.fail:
+            msg: >-
+              {{ inventory_hostname }}: upgrade to {{ agh_target }} failed
+              ({{ ansible_failed_result.msg | default('see task log') }});
+              restored {{ agh_current.stdout.split() | last }} if a backup existed
+
+    - name: Remove download
+      ansible.builtin.file:
+        path: "{{ agh_tarball }}"
+        state: absent
+
+    - name: Remove staging directory
+      ansible.builtin.file:
+        path: "{{ agh_stage }}"
+        state: absent

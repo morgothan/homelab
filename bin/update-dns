@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+# update-dns — upgrade AdGuard Home on dns, dns.kids and both CT secondaries, one host at a
+# time, via ansible/dns-upgrade.yml. Extra args go straight to ansible-playbook:
+#
+#   bin/update-dns                            # latest AdGuard release
+#   bin/update-dns --check --diff             # dry run: old → new per host
+#   bin/update-dns -e agh_version=v0.107.80   # pin a release tag
+#   bin/update-dns --limit dns.kids.hirschnet # one host
+#
+# Each host verifies the release tarball checksum, keeps the old binary as
+# AdGuardHome.backup-<version>, and skips itself if already at the target version.
+cd "$(dirname "$(readlink -f "$0")")/../ansible" && exec ansible-playbook dns-upgrade.yml "$@"
