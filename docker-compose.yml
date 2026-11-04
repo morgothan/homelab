@@ -646,7 +646,7 @@ services:
 ########## Redis Exporter
 # Exports Redis metrics to Prometheus
   redis-exporter:
-    image: oliver006/redis_exporter:v1.96.0
+    image: oliver006/redis_exporter:v1.97.0
     container_name: redis-exporter
     depends_on:
       - redis
