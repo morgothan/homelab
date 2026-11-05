@@ -27,3 +27,15 @@ RUN grep -q "DroidSansM Nerd Font" /usr/src/app/build/client/xterm_config/functi
 # disconnected, so a stalled or reconnecting tab cannot inject them.
 COPY patch-session.mjs /tmp/patch-session.mjs
 RUN node /tmp/patch-session.mjs
+
+# tmux refuses to draw a sixel image when the client pty reports zero pixel
+# dimensions; it substitutes a "SIXEL IMAGE (WxH)" placeholder plus '+' lines.
+# node-pty hardcodes ws_xpixel/ws_ypixel to 0, so tmux never sees a pixel size
+# over SSH. Report 8x16 per cell (close to xterm.js's default cell) on spawn
+# and resize, then rebuild the native addon (build/Release is loaded before
+# prebuilds).
+RUN cd /usr/src/app/node_modules/node-pty && \
+    sed -i 's/winp.ws_xpixel = 0;/winp.ws_xpixel = winp.ws_col * 8;/g; s/winp.ws_ypixel = 0;/winp.ws_ypixel = winp.ws_row * 16;/g' src/unix/pty.cc && \
+    test "$(grep -c 'winp.ws_xpixel = winp.ws_col \* 8' src/unix/pty.cc)" = 3 && \
+    /usr/local/lib/node_modules/npm/node_modules/node-gyp/bin/node-gyp.js rebuild --nodedir=/usr/local && \
+    test -f build/Release/pty.node
