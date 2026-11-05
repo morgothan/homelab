@@ -689,9 +689,11 @@ services:
       # WeTTY's default Socket.IO heartbeat is very aggressive (ping every 3s,
       # pong timeout 7s), which false-trips over Cloudflare/WARP latency and
       # drops the browser connection (the tmux session itself survives, so it
-      # just reconnects). Relax it to tolerate WARP jitter.
+      # just reconnects). Relax it to tolerate WARP jitter and browser stalls
+      # (a busy/background tab can miss pongs for tens of seconds); the 2-minute
+      # timeout avoids those spurious reconnects/flicker.
       - PINGINTERVAL=20000
-      - PINGTIMEOUT=30000
+      - PINGTIMEOUT=120000
     labels:
       - traefik.enable=true
       - traefik.http.routers.wetty.entrypoints=https
