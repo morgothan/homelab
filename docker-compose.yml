@@ -162,7 +162,7 @@ services:
 ########## Prometheus
 # Metrics collection and storage, scrapes all exporters on a 15s interval
   prometheus:
-    image: prom/prometheus:v3.15.1
+    image: prom/prometheus:v3.16.0
     container_name: prometheus
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:9090/-/healthy || exit 1"]
@@ -320,7 +320,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.4.0
+    image: amir20/dozzle:v11.4.1
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
