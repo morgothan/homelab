@@ -507,7 +507,9 @@ services:
 # Exports AdGuard Home metrics (primary + independent secondary + kids) to Prometheus
   adguard-exporter:
     container_name: adguard_exporter
-    image: ghcr.io/henrywhitaker3/adguard-exporter:v1.2.1
+    build: ./adguard-exporter
+    pull_policy: never
+    image: adguard-exporter:local
     security_opt:
       - no-new-privileges:true
     restart: unless-stopped
@@ -515,9 +517,9 @@ services:
     networks:
       - ${DOCKERNET}
     environment:
-      - ADGUARD_SERVERS=http://dns.${LOCAL},http://dns2.${LOCAL},http://dns.kids.${LOCAL}
-      - ADGUARD_USERNAMES=admin,admin,admin
-      - ADGUARD_PASSWORDS=${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD}
+      - ADGUARD_SERVERS=http://dns.${LOCAL},http://dns2.${LOCAL},http://dns.kids.${LOCAL},http://dns2.kids.${LOCAL}
+      - ADGUARD_USERNAMES=admin,admin,admin,admin
+      - ADGUARD_PASSWORDS=${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD},${ADGUARD_SYNC_PASSWORD}
       - INTERVAL=15s
 
 ########## AdGuard Home Sync
@@ -559,6 +561,8 @@ services:
     environment:
       - ORIGIN_URL=http://dns.kids.${LOCAL}
       - REPLICA1_URL=http://dns2.kids.${LOCAL}
+      - API_PORT=8080
+      - API_METRICS_ENABLED=true
       - CRON=*/5 * * * *
       - RUN_ON_START=true
       - CONTINUE_ON_ERROR=true
