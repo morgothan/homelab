@@ -107,6 +107,9 @@ ARCHIVE_INDEX = os.path.join(ARCHIVE_DIR, "index.json")
 SEARCH_INDEX_FILE = os.path.join(DATA_DIR, "search_index.db")
 INVESTIGATIONS_FILE = os.path.join(DATA_DIR, "investigations.json")
 INVESTIGATIONS_ARCHIVE_FILE = os.path.join(DATA_DIR, "investigations_archive.json")
+# Recurring log conditions already investigated within this window are reused
+# instead of spending another analysis on a differently-worded headline.
+INCIDENT_REINVESTIGATE_HOURS = _integer("INCIDENT_REINVESTIGATE_HOURS", 168)
 
 PVE_SSH_HOST = os.getenv("PVE_SSH_HOST", "")
 TRUENAS_SSH_HOST = os.getenv("TRUENAS_SSH_HOST", "")

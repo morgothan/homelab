@@ -4,6 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 sys.path.insert(0, os.path.dirname(os.path.dirname(__file__)))
@@ -73,6 +74,96 @@ class InvestigationTests(unittest.TestCase):
             ))
             self.assertEqual(cached, reports)
             self.assertEqual(complete.await_count, 2)
+
+
+class IncidentIdentityTests(unittest.TestCase):
+    HEADLINE = "Hermes Cron Receipt Recovery Loop Persists"
+    ISSUE = {
+        "source": "hermes", "level": "warn", "count": 41,
+        "message": (
+            "2026-11-04 12:39:17,373 WARNING cron.scheduler_authority: "
+            "Cron receipt recovery deferred: /home/nat/.hermes/cron/admissions/"
+            "fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210.json"
+        ),
+    }
+
+    def test_incident_key_is_stable_across_volatile_log_fields(self):
+        later = {
+            "source": "hermes", "level": "warn", "count": 37,
+            "message": (
+                "2026-11-04 12:41:17,411 WARNING cron.scheduler_authority: "
+                "Cron receipt recovery deferred: /home/nat/.hermes/cron/admissions/"
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef.json"
+            ),
+        }
+        first = investigations.incident_key({"headline": self.HEADLINE}, [self.ISSUE])
+        second = investigations.incident_key({"headline": self.HEADLINE}, [later])
+        self.assertTrue(first)
+        self.assertEqual(first, second)
+
+    def test_incident_key_ignores_an_issue_merely_mentioned_in_passing(self):
+        article = {"headline": "Hermes Agent Tool Calls Fail During the Day"}
+        self.assertIsNone(investigations.incident_key(article, [self.ISSUE]))
+
+    def test_recent_incident_reuses_archived_analysis_without_llm(self):
+        article = {"headline": self.HEADLINE, "blurb": "Warnings recur every minute.",
+                   "section": "Public Works"}
+        key = investigations.incident_key(article, [self.ISSUE])
+        known = {
+            "id": "archived-report", "headline": self.HEADLINE, "incident_key": key,
+            "investigated_at": datetime.now(timezone.utc).isoformat(),
+            "confidence": "high", "finding": "The gateway tick retries a stuck receipt.",
+            "impact": "Log noise only.", "status": "complete",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "archive.json")
+            with open(archive_path, "w", encoding="utf-8") as destination:
+                json.dump([known], destination)
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", archive_path), \
+                    patch.object(investigations, "_complete", AsyncMock()) as complete:
+                reports = asyncio.run(investigations.investigate_edition(
+                    articles=[article], docker_issues=[], loki_issues=[self.ISSUE],
+                    events=[], correlations=[], cache_path=os.path.join(tmp, "cache.json"),
+                    llm_url="http://model", llm_model="local", llm_timeout=5,
+                ))
+        self.assertEqual([report["id"] for report in reports], ["archived-report"])
+        complete.assert_not_awaited()
+
+    def test_expired_incident_is_investigated_again(self):
+        article = {"headline": self.HEADLINE, "blurb": "Warnings recur every minute.",
+                   "section": "Public Works"}
+        key = investigations.incident_key(article, [self.ISSUE])
+        stale = {
+            "id": "archived-report", "headline": self.HEADLINE, "incident_key": key,
+            "investigated_at": (datetime.now(timezone.utc) - timedelta(hours=169)).isoformat(),
+            "confidence": "high", "finding": "The gateway tick retries a stuck receipt.",
+            "impact": "Log noise only.", "status": "complete",
+        }
+        triage = {"decisions": [{
+            "id": investigations._fingerprint(article), "investigate": True,
+            "reason": "The condition persists past the cooldown.",
+        }]}
+        analysis = {
+            "finding": "The receipt remains stuck.", "confidence": "medium",
+            "impact": "Repeated warnings.", "evidence": ["Warnings continue."],
+            "alternatives": [], "next_checks": [], "limitations": "Read-only evidence.",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            archive_path = os.path.join(tmp, "archive.json")
+            with open(archive_path, "w", encoding="utf-8") as destination:
+                json.dump([stale], destination)
+            with patch.object(investigations.config, "INVESTIGATIONS_ARCHIVE_FILE", archive_path), \
+                    patch.object(investigations, "_complete",
+                                 AsyncMock(side_effect=[triage, analysis])) as complete:
+                reports = asyncio.run(investigations.investigate_edition(
+                    articles=[article], docker_issues=[], loki_issues=[self.ISSUE],
+                    events=[], correlations=[], cache_path=os.path.join(tmp, "cache.json"),
+                    llm_url="http://model", llm_model="local", llm_timeout=5,
+                ))
+        self.assertEqual(len(reports), 1)
+        self.assertNotEqual(reports[0]["id"], stale["id"])
+        self.assertEqual(reports[0]["incident_key"], key)
+        self.assertEqual(complete.await_count, 2)
 
 
 class HindsightRetainInvestigationTests(unittest.TestCase):

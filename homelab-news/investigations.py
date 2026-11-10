@@ -30,6 +30,13 @@ _PROMPT_INJECTION = re.compile(
     r"(?i)(ignore (?:all |any )?(?:previous|prior|above) instructions|"
     r"system prompt|developer message|you are now|act as)"
 )
+# Volatile parts of a log line: same recurring condition, different cycle.
+_INCIDENT_TIMESTAMP = re.compile(
+    r"\b\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:[.,]\d+)?(?:Z|[+-]\d{2}:?\d{2})?\b"
+)
+_INCIDENT_HEX = re.compile(r"\b[0-9a-f]{12,}\b", re.I)
+_INCIDENT_IPV4 = re.compile(r"\b\d{1,3}(?:\.\d{1,3}){3}(?::\d+)?\b")
+_INCIDENT_NUMBER = re.compile(r"\b\d+(?:\.\d+)?\b")
 
 
 INCIDENT_GROUP_THRESHOLD = 0.35  # min Jaccard similarity between two reports to be "same incident"
@@ -78,6 +85,65 @@ def significant_tokens(report: dict[str, Any]) -> frozenset[str]:
         t for t in re.findall(r"[a-z][a-z0-9_]{2,}", text)
         if t not in _INCIDENT_NOISE and not t.isdigit()
     )
+
+
+def _incident_signature(issue: dict[str, Any]) -> str:
+    """Stable identity for one grouped log condition across cycles.
+
+    Timestamps, hashes, IPs, and counts vary every observation; normalizing them
+    leaves the log pattern, which is what makes two cycles the same incident.
+    """
+    text = f"{issue.get('source') or ''}|{issue.get('message') or ''}".lower()
+    text = _INCIDENT_TIMESTAMP.sub("[TS]", text)
+    text = _INCIDENT_HEX.sub("[HASH]", text)
+    text = _INCIDENT_IPV4.sub("[IP]", text)
+    text = _INCIDENT_NUMBER.sub("[N]", text)
+    return " ".join(text.split())[:400]
+
+
+def incident_key(article: dict[str, Any], issues: list[dict[str, Any]]) -> str | None:
+    """Return a stable key for the log condition an article is actually about.
+
+    Only issues sharing at least two distinctive headline tokens qualify, and the
+    strongest overlap wins (ties broken by signature), so a story that merely
+    mentions a recurring warning in passing does not inherit that incident.
+    """
+    headline_tokens = significant_tokens({"headline": _clean(article.get("headline"), 200)})
+    if not headline_tokens:
+        return None
+    ranked: list[tuple[int, str]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        tokens = significant_tokens({"headline": _clean(issue.get("message"), 300)})
+        overlap = len(headline_tokens & tokens)
+        if overlap >= 2:
+            ranked.append((overlap, _incident_signature(issue)))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return hashlib.sha256(ranked[0][1].encode()).hexdigest()[:20]
+
+
+def _recent_incident_reports(cutoff: datetime) -> dict[str, dict[str, Any]]:
+    """Map incident keys to their newest archived report investigated since CUTOFF."""
+    archive = load_json(config.INVESTIGATIONS_ARCHIVE_FILE) or []
+    if not isinstance(archive, list):
+        return {}
+    recent: dict[str, dict[str, Any]] = {}
+    for report in reversed(archive):  # newest reports are appended last
+        if not isinstance(report, dict):
+            continue
+        key = report.get("incident_key")
+        if not isinstance(key, str) or not key or key in recent:
+            continue
+        try:
+            fresh = datetime.fromisoformat(report.get("investigated_at")) >= cutoff
+        except (TypeError, ValueError):
+            fresh = False
+        if fresh:
+            recent[key] = report
+    return recent
 
 
 def _similarity(a: frozenset[str], b: frozenset[str]) -> float:
@@ -198,6 +264,7 @@ def select_candidates(articles: list[dict], issues: list[dict]) -> list[dict[str
         candidates.append({
             "id": _fingerprint(article), "headline": headline, "blurb": blurb,
             "section": _clean(article.get("section"), 50),
+            "incident_key": incident_key({"headline": headline}, issues),
         })
         if len(candidates) >= MAX_CANDIDATES:
             break
@@ -245,7 +312,7 @@ def _validate_report(raw: dict[str, Any] | None, article: dict[str, str],
     def strings(name: str, count: int) -> list[str]:
         value = raw.get(name)
         return [_clean(item, 500) for item in value[:count]] if isinstance(value, list) else []
-    return {
+    report = {
         "id": article["id"], "headline": article["headline"], "status": "complete",
         "investigated_at": datetime.now(timezone.utc).isoformat(),
         "triage_reason": _clean(triage_reason, 400),
@@ -255,6 +322,9 @@ def _validate_report(raw: dict[str, Any] | None, article: dict[str, str],
         "next_checks": strings("next_checks", 6),
         "limitations": _clean(raw.get("limitations"), 600),
     }
+    if article.get("incident_key"):
+        report["incident_key"] = article["incident_key"]
+    return report
 
 
 async def investigate_edition(*, articles: list[dict], docker_issues: list[dict],
@@ -262,7 +332,13 @@ async def investigate_edition(*, articles: list[dict], docker_issues: list[dict]
                               correlations: list[dict], cache_path: str,
                               llm_url: str, llm_model: str,
                               llm_timeout: int) -> list[dict[str, Any]]:
-    """Triage an edition and investigate only unresolved, worthwhile incidents."""
+    """Triage an edition and investigate only unresolved, worthwhile incidents.
+
+    A candidate whose log condition matches a report investigated within
+    ``config.INCIDENT_REINVESTIGATE_HOURS`` reuses that analysis verbatim: a
+    differently worded headline for the same recurring warning is not a new
+    incident, and re-investigating it every cycle only fills the archive.
+    """
     issues = list(docker_issues) + list(loki_issues)
     candidates = select_candidates(articles, issues)
     if not candidates or not llm_url or not llm_model:
@@ -272,8 +348,22 @@ async def investigate_edition(*, articles: list[dict], docker_issues: list[dict]
     cached_reports = cache.get("reports", {}) if isinstance(cache, dict) else {}
     cached_triage = cache.get("triage", {}) if isinstance(cache, dict) else {}
     cutoff = datetime.now(timezone.utc) - timedelta(hours=CACHE_HOURS)
+    incident_cutoff = datetime.now(timezone.utc) - timedelta(hours=config.INCIDENT_REINVESTIGATE_HOURS)
+    recent_incidents = _recent_incident_reports(incident_cutoff)
     reports, uncached, selected = [], [], []
+    reused_ids: set[str] = set()
     for article in candidates:
+        known = recent_incidents.get(article.get("incident_key"))
+        if known is not None:
+            # The same log condition, reworded by a new cycle: reuse the existing
+            # analysis instead of paying for another LLM investigation. Two stories
+            # can describe one condition; only surface its analysis once.
+            known_id = str(known.get("id") or article.get("incident_key"))
+            if known_id not in reused_ids:
+                reports.append(known)
+                reused_ids.add(known_id)
+            cached_reports[article["id"]] = known
+            continue
         cached = cached_reports.get(article["id"])
         try:
             fresh = datetime.fromisoformat(cached["investigated_at"]) >= cutoff
@@ -340,8 +430,13 @@ async def investigate_edition(*, articles: list[dict], docker_issues: list[dict]
                            "triage": cached_triage, "reports": cached_reports})
 
     candidate_ids = {article["id"] for article in candidates}
+    candidate_keys = {article["incident_key"] for article in candidates
+                      if article.get("incident_key")}
     return [report for report in reports
-            if isinstance(report, dict) and report.get("id") in candidate_ids][:MAX_INVESTIGATIONS]
+            if isinstance(report, dict) and (
+                report.get("id") in candidate_ids
+                or report.get("incident_key") in candidate_keys
+            )][:MAX_INVESTIGATIONS]
 
 
 def persist_investigations(reports: list[dict[str, Any]]) -> list[dict[str, Any]]:

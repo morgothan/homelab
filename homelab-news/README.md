@@ -47,8 +47,11 @@ Operational editions also run an automatic Investigation Desk. A low-cost LLM
 triage pass asks whether each substantive incident has a realistically established
 cause and whether further analysis would be useful. At most two unresolved incidents
 per edition receive a deeper, read-only analysis of the collected log observations,
-event history, and timing correlations. Results are cached for 24 hours; the
-investigator cannot execute commands or make infrastructure changes.
+event history, and timing correlations. Results are cached for 24 hours; a recurring
+log condition already investigated within `INCIDENT_REINVESTIGATE_HOURS` (default
+168 hours) reuses that analysis, so a differently worded headline for the same
+condition does not pay for another investigation. The investigator cannot execute
+commands or make infrastructure changes.
 
 Generated articles use newspaper-style sections such as **City Hall**, **Public Safety**, **Weather**, **City Archives**, **Arts & Entertainment**, and **Public Works**. The most important item can be promoted to a lead story.
 
@@ -147,6 +150,7 @@ All configuration is supplied through environment variables. Values containing c
 | `VLLM_URL` | Base URL of the OpenAI-compatible inference endpoint (served by vLLM or TensorFold) | Empty |
 | `VLLM_MODEL` | Model identifier sent to the inference endpoint | Empty |
 | `OLLAMA_TIMEOUT` | LLM request timeout in seconds; retained as a legacy variable name | `3600` |
+| `INCIDENT_REINVESTIGATE_HOURS` | Window in which an already-analyzed recurring log condition is reused instead of investigated again | `168` |
 | `REFRESH_INTERVAL` | Rolling-report interval in seconds | `900` |
 | `UPDATE_INTERVAL` | Front-page and update-check interval in seconds | `3600` |
 | `ROLLING_HOURS` | Lookback window for Current Events | `1` |
