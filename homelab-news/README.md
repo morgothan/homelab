@@ -242,6 +242,7 @@ environment:
 | `ADGUARD_PRIMARY_URL` | Primary DNS service URL |
 | `ADGUARD_SECONDARY_URL` | Independent secondary DNS service URL |
 | `ADGUARD_KIDS_URL` | Kids-policy DNS service URL |
+| `ADGUARD_KIDS_SECONDARY_URL` | Kids-policy secondary DNS service URL |
 | `ADGUARD_USERNAME` | AdGuard API username used for update checks |
 | `ADGUARD_PASSWORD` | AdGuard API password used for update checks |
 | `HOMEASSISTANT_URL` | Home Assistant API URL |

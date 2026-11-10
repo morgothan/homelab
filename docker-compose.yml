@@ -1205,6 +1205,7 @@ services:
       - ADGUARD_PRIMARY_URL=${ADGUARD_PRIMARY_URL}
       - ADGUARD_SECONDARY_URL=http://dns2.${LOCAL}
       - ADGUARD_KIDS_URL=${ADGUARD_KIDS_URL}
+      - ADGUARD_KIDS_SECONDARY_URL=http://dns2.kids.${LOCAL}
       - ADGUARD_USERNAME=admin
       - ADGUARD_PASSWORD=${ADGUARD_SYNC_PASSWORD}
       - ABUSEIPDB_KEY=${ABUSEIPDB_KEY}  # optional: enables abuse score on police blotter

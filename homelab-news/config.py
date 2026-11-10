@@ -114,6 +114,7 @@ ADGUARD_URLS: list[tuple[str, str]] = [
     (os.getenv("ADGUARD_PRIMARY_URL", ""), "Primary DNS"),
     (os.getenv("ADGUARD_SECONDARY_URL", ""), "Secondary DNS"),
     (os.getenv("ADGUARD_KIDS_URL", ""), "Kids DNS"),
+    (os.getenv("ADGUARD_KIDS_SECONDARY_URL", ""), "Kids Secondary DNS"),
 ]
 ADGUARD_USERNAME = os.getenv("ADGUARD_USERNAME", "")
 ADGUARD_PASSWORD = os.getenv("ADGUARD_PASSWORD", "")
