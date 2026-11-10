@@ -10,7 +10,7 @@ Usage:
   bin/update-images              # interactive: show changes, prompt to apply
   bin/update-images --dry-run    # check only, no changes
   bin/update-images --yes        # skip confirmation prompt
-  bin/update-images --all        # also update beszel/whisper/spark/hermes/sketchy-nas over SSH
+  bin/update-images --all        # also update beszel/whisper/spark/hermes (semver tags scanned) + sketchy-nas
   bin/update-images --edge-gateway  # include HAProxy (brief direct-LAN interruption)
   bin/update-images --no-commit  # skip the automatic git commit + push of tag bumps
 
@@ -233,15 +233,23 @@ async def _latest_semver_tag(name: str, current: str, sem: asyncio.Semaphore) ->
 
 # ── compose parsing ────────────────────────────────────────────────────────────
 
-def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
+def _parse_compose_text(text: str, include_edge_gateway: bool = False,
+                        secrets: Optional[dict] = None,
+                        edge_compose: bool = False) -> dict:
     """
-    Parse one compose file into three categories:
+    Parse compose text into three categories:
       semver:  [(full_ref, image_name, tag), ...]
       rolling: [(service_name, full_ref), ...]
       builds:  [(service_name, build_context_str), ...]
 
+    `secrets` resolves ${VAR} image refs (the local stack passes OpenBao
+    secrets). Remote hosts pass an empty dict: their compose can use different
+    vars, and resolving them with this host's values would check the wrong tag.
+
     Assumes build: appears before image: within each service block.
     """
+    if secrets is None:
+        secrets = _SECRETS
     semver: list = []
     rolling: list = []
     builds: list = []
@@ -253,7 +261,7 @@ def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
         if cur_svc and cur_build is not None and cur_build != "__block__":
             builds.append((cur_svc, cur_build))
 
-    for line in path.read_text().splitlines():
+    for line in text.splitlines():
         # Track top-level sections (unindented keys)
         if re.match(r'^[a-zA-Z]', line):
             _flush()
@@ -290,7 +298,7 @@ def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
         # image: <ref>
         if (
             "update-images: ignore" in line
-            and not (include_edge_gateway and path == EDGE_COMPOSE and cur_svc == "edge-gateway")
+            and not (include_edge_gateway and edge_compose and cur_svc == "edge-gateway")
         ):
             continue
         img_m = re.match(r'^    image:\s+"?([^"#\s]+)"?', line)
@@ -305,7 +313,7 @@ def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
         # Resolve ${VAR} substitutions against OpenBao secrets (dc.sh injects these
         # the same way at deploy time — see e.g. POLLER_TAG for unpoller).
         if "$" in ref:
-            ref = re.sub(r"\$\{(\w+)\}", lambda m: _SECRETS.get(m.group(1), m.group(0)), ref)
+            ref = re.sub(r"\$\{(\w+)\}", lambda m: secrets.get(m.group(1), m.group(0)), ref)
         # Skip anything still unresolved
         if "$" in ref:
             continue
@@ -323,6 +331,15 @@ def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
 
     _flush()
     return {"semver": semver, "rolling": rolling, "builds": builds}
+
+
+def _parse_compose(path: Path, include_edge_gateway: bool = False) -> dict:
+    return _parse_compose_text(
+        path.read_text(),
+        include_edge_gateway=include_edge_gateway,
+        secrets=_SECRETS,
+        edge_compose=(path == EDGE_COMPOSE),
+    )
 
 
 # ── Dockerfile FROM parsing ────────────────────────────────────────────────────
@@ -442,17 +459,32 @@ async def _check_all(include_edge_gateway: bool = False) -> dict:
 
 # ── apply / revert semver tag updates ─────────────────────────────────────────
 
+def _apply_semver_text(text: str, items: list) -> tuple[str, list]:
+    """Apply tag bumps to compose text; return (text, applied_items).
+
+    A bump is applied only when its exact old image ref appears. Returns the
+    applied subset so callers can detect stale/missing refs instead of silently
+    claiming a bump that never landed.
+    """
+    applied: list = []
+    for full_ref, name, old_tag, new_tag in items:
+        new_ref = f"{name}:{new_tag}"
+        changed = False
+        for old_s, new_s in [
+            (f"image: {full_ref}",   f"image: {new_ref}"),
+            (f'image: "{full_ref}"', f'image: "{new_ref}"'),
+        ]:
+            if old_s in text:
+                text = text.replace(old_s, new_s)
+                changed = True
+        if changed:
+            applied.append((full_ref, name, old_tag, new_tag))
+    return text, applied
+
+
 def _apply_semver(semver_by_file: dict) -> None:
     for cf, items in semver_by_file.items():
-        text = cf.read_text()
-        for full_ref, name, old_tag, new_tag in items:
-            new_ref = f"{name}:{new_tag}"
-            for old_s, new_s in [
-                (f"image: {full_ref}",   f"image: {new_ref}"),
-                (f'image: "{full_ref}"', f'image: "{new_ref}"'),
-            ]:
-                if old_s in text:
-                    text = text.replace(old_s, new_s)
+        text, _ = _apply_semver_text(cf.read_text(), items)
         cf.write_text(text)
 
 
@@ -573,6 +605,94 @@ def _autocommit_compose(applied_bumps: list) -> Optional[tuple]:
 
 # ── remote hosts (--all) ───────────────────────────────────────────────────────
 
+REMOTE_COMPOSE = "docker-compose.yml"
+REMOTE_COMPOSE_BAK = "docker-compose.yml.ui-bak"
+REMOTE_COMPOSE_NEW = "docker-compose.yml.ui-new"
+
+
+def _ssh_capture(host: str, cmd: str, input_text: Optional[str] = None) -> tuple[int, str]:
+    """Run an SSH command without echoing its stdout (remote compose contents)."""
+    kwargs = {"capture_output": True, "text": True}
+    if input_text is None:
+        kwargs["stdin"] = subprocess.DEVNULL
+    else:
+        kwargs["input"] = input_text
+    proc = subprocess.run(["ssh", f"nat@{host}", cmd], **kwargs)
+    return proc.returncode, (proc.stdout or "") + (proc.stderr or "")
+
+
+def _fetch_remote_compose(host: str) -> tuple[int, str]:
+    return _ssh_capture(host, f"cat ~/docker/{REMOTE_COMPOSE}")
+
+
+def _write_remote_compose(host: str, text: str) -> bool:
+    """Atomically replace the remote compose file, keeping its mode, with a backup."""
+    cmd = (
+        f"cd ~/docker && cp -p {REMOTE_COMPOSE} {REMOTE_COMPOSE_BAK} && "
+        f"cat > {REMOTE_COMPOSE_NEW} && "
+        f"chmod --reference={REMOTE_COMPOSE} {REMOTE_COMPOSE_NEW} && "
+        f"mv {REMOTE_COMPOSE_NEW} {REMOTE_COMPOSE}"
+    )
+    rc, out = _ssh_capture(host, cmd, input_text=text)
+    if rc != 0:
+        print(f"\n[!] {host}: compose write failed — {out.strip()}", file=sys.stderr)
+    return rc == 0
+
+
+def _restore_remote_compose(host: str) -> None:
+    cmd = (
+        f"cd ~/docker && "
+        f"if [ -f {REMOTE_COMPOSE_BAK} ]; then mv {REMOTE_COMPOSE_BAK} {REMOTE_COMPOSE}; fi && "
+        f"rm -f {REMOTE_COMPOSE_NEW}"
+    )
+    rc, out = _ssh_capture(host, cmd)
+    if rc != 0:
+        print(f"\n[!] {host}: compose restore failed — {out.strip()}", file=sys.stderr)
+
+
+def _cleanup_remote_compose(host: str) -> None:
+    _ssh_capture(host, f"cd ~/docker && rm -f {REMOTE_COMPOSE_BAK} {REMOTE_COMPOSE_NEW}")
+
+
+async def _check_remote_semver() -> dict:
+    """Semver-scan each --all host's ~/docker/docker-compose.yml.
+
+    Returns host -> {"text", "parsed", "bumps", "error"}. Remote ${VAR} refs are
+    not resolved (each host has its own OpenBao secrets), so only literal semver
+    tags are candidates. A single skopeo check is shared across hosts.
+    """
+    print(f"\nChecking pinned tags in {len(REMOTE_DC_HOSTS)} remote compose file(s)...")
+    sem = asyncio.Semaphore(_SEM_SIZE)
+    fetched = await asyncio.gather(*(
+        asyncio.to_thread(_fetch_remote_compose, host) for host in REMOTE_DC_HOSTS
+    ))
+    plan: dict = {}
+    checks: dict = {}
+    for host, (rc, text) in zip(REMOTE_DC_HOSTS, fetched):
+        if rc != 0 or not text.strip():
+            plan[host] = {"text": None, "parsed": None, "bumps": [],
+                          "error": "compose fetch failed"}
+            continue
+        parsed = _parse_compose_text(text, secrets={})
+        plan[host] = {"text": text, "parsed": parsed, "bumps": [], "error": None}
+        for _, name, tag in parsed["semver"]:
+            checks[(name, tag)] = None
+
+    async def _check_tag(name: str, tag: str) -> tuple:
+        return (name, tag), await _latest_semver_tag(name, tag, sem)
+
+    versions = dict(await asyncio.gather(*(_check_tag(n, t) for n, t in checks)))
+    for _host, info in plan.items():
+        if info["parsed"] is None:
+            continue
+        info["bumps"] = [
+            (full_ref, name, tag, versions[(name, tag)])
+            for full_ref, name, tag in info["parsed"]["semver"]
+            if versions.get((name, tag))
+        ]
+    return plan
+
+
 def _parse_img_updates(output: str) -> list[str]:
     """Lift the repo:tag list emitted between the snapshot markers by REMOTE_DC_CMD."""
     m = re.search(r"^__IMG_UPDATED__$(.*?)^__IMG_END__$", output, re.S | re.M)
@@ -581,39 +701,87 @@ def _parse_img_updates(output: str) -> list[str]:
     return [ln.split()[0] for ln in m.group(1).splitlines() if ln.strip()]
 
 
-def _update_remote_hosts() -> tuple:
-    """SSH into each remote host and run its own pull/up/prune (or update script).
+def _update_remote_hosts(plan: Optional[dict] = None) -> tuple:
+    """SSH into each remote host: apply remote semver tag bumps, then pull/up/prune.
 
-    Returns (host_updates, failed): host_updates maps each host that succeeded to
-    the list of image refs whose ID changed (empty list = nothing new pulled).
+    plan comes from _check_remote_semver. A host with bumps gets its compose file
+    backed up and atomically rewritten; if the remote pull/up fails both the tag
+    and the old containers are restored. Returns (host_updates, failed, plan):
+    host_updates maps each successful host to image refs whose ID changed.
     Every host emits the __IMG_UPDATED__ block — the dc.sh hosts via REMOTE_DC_CMD,
     sketchy-nas via its own ~/docker-update.sh.
     """
+    plan = plan or {}
     host_updates: dict = {}
     failed: list = []
     for host in [*REMOTE_DC_HOSTS, SKETCHY_NAS_HOST]:
         cmd = SKETCHY_NAS_CMD if host == SKETCHY_NAS_HOST else REMOTE_DC_CMD
         print(f"\n=== {host} ===")
+        info = plan.setdefault(host, {})
+        applied: list = []
+        if info.get("bumps"):
+            new_text, applied = _apply_semver_text(info["text"], info["bumps"])
+            missing = [b for b in info["bumps"] if b not in applied]
+            if missing:
+                print(f"  [!] {len(missing)} tag bump(s) absent from remote compose; skipped")
+            if applied:
+                desc = ", ".join(
+                    f"{name.rsplit('/', 1)[-1]} {old} → {new}"
+                    for _, name, old, new in applied
+                )
+                print(f"  compose tag bump: {desc}")
+                if not _write_remote_compose(host, new_text):
+                    _restore_remote_compose(host)
+                    failed.append(host)
+                    info["write_error"] = True
+                    continue
+
         rc, out = _run_capture(["ssh", f"nat@{host}", cmd])
+        info["applied"] = applied if rc == 0 else []
         if rc == 0:
             host_updates[host] = _parse_img_updates(out)
+            if applied:
+                _cleanup_remote_compose(host)
         else:
             failed.append(host)
+            if applied:
+                print("\n[!] remote update failed — restoring compose tag(s)", file=sys.stderr)
+                _restore_remote_compose(host)
+                info["reverted"] = applied
+                _run_capture(["ssh", f"nat@{host}", "cd ~/docker && ./dc.sh up -d"])
     if failed:
         print(f"\n[!] Failed on: {', '.join(failed)}", file=sys.stderr)
-    return host_updates, failed
+    return host_updates, failed, plan
 
 
-def _remote_rows(host_updates: dict, failed: list) -> list:
-    """Summary-table rows for the remote pass: one row per updated image on each
-    host, a single plain 'ok' row for a host with no image changes, one per failure."""
+def _remote_rows(host_updates: dict, failed: list, plan: Optional[dict] = None) -> list:
+    """Summary-table rows for the remote pass: semver bumps, image-ID changes,
+    scan failures, and a plain 'ok' row for a host with nothing to report."""
+    plan = plan or {}
     rows: list = []
     for host, imgs in host_updates.items():
+        info = plan.get(host, {})
+        bumped_refs: set = set()
+        for _, name, old, new in info.get("applied", []):
+            bumped_refs.add(f"{name}:{new}")
+            rows.append(("remote", host,
+                         f"{name.rsplit('/', 1)[-1]} {old} → {new}", "updated"))
         for img in imgs:
+            if img in bumped_refs:
+                continue
             rows.append(("remote", host, img.rsplit("/", 1)[-1], "image updated"))
-        if not imgs:
+        if not imgs and not info.get("applied"):
             rows.append(("remote", host, "pull && up -d && prune", "ok"))
+        if info.get("error"):
+            rows.append(("remote", host, "semver scan", "FAILED; rolling tags only"))
     for host in failed:
+        info = plan.get(host, {})
+        if info.get("write_error"):
+            rows.append(("remote", host, "compose tag bump", "FAILED"))
+        for _, name, old, new in info.get("reverted", []):
+            rows.append(("remote", host,
+                         f"{name.rsplit('/', 1)[-1]} {old} → {new}",
+                         "REVERTED (update failed)"))
         rows.append(("remote", host, "pull && up -d && prune", "FAILED"))
     return rows
 
@@ -651,7 +819,7 @@ def main() -> None:
     parser.add_argument("--yes", "-y", action="store_true",
                         help="skip confirmation prompt")
     parser.add_argument("--all", "-a", action="store_true",
-                        help="also update beszel/whisper/spark/hermes/sketchy-nas over SSH")
+                        help="also update beszel/whisper/spark/hermes (semver tags scanned) and sketchy-nas over SSH")
     parser.add_argument("--edge-gateway", action="store_true",
                         help="also check/update HAProxy; briefly interrupts direct LAN/host-port traffic")
     parser.add_argument("--no-commit", action="store_true",
@@ -659,6 +827,7 @@ def main() -> None:
     args = parser.parse_args()
 
     results        = asyncio.run(_check_all(include_edge_gateway=args.edge_gateway))
+    remote_plan    = asyncio.run(_check_remote_semver()) if args.all else {}
     semver_by_file = results["semver_by_file"]
     rolling_stale  = results["rolling_stale"]
     build_stale    = results["build_stale"]
@@ -685,15 +854,31 @@ def main() -> None:
             changed = [b for b in svc_bases.get((cf, svc), []) if b in stale_bases]
             print(f"  {svc}: {', '.join(changed)}")
 
+    remote_bumps = [
+        (host, bump)
+        for host, info in remote_plan.items()
+        for bump in info["bumps"]
+    ]
+    if remote_bumps:
+        print("\nRemote-host semver updates (--all):")
+        for host, (_, name, old, new) in remote_bumps:
+            flag = "  [major]" if _sort_key(new)[0] > _sort_key(old)[0] else ""
+            print(f"  {host}: {name}: {old}  →  {new}{flag}")
+    for host, info in remote_plan.items():
+        if info["error"]:
+            print(f"  [!] {host}: {info['error']} — pinned tags not checked")
+
     n_semver  = sum(len(v) for v in semver_by_file.values())
     n_rolling = len(rolling_stale)
     n_builds  = len(build_stale)
-    total     = n_semver + n_rolling + n_builds
+    n_remote  = len(remote_bumps)
+    total     = n_semver + n_rolling + n_builds + n_remote
 
+    remote_summary = f", {n_remote} remote semver update(s)" if args.all else ""
     print(
         f"\n{n_semver} semver update(s), "
         f"{n_rolling} rolling-tag pull(s), "
-        f"{n_builds} local rebuild(s)."
+        f"{n_builds} local rebuild(s){remote_summary}."
     )
     if args.edge_gateway:
         print("Edge gateway updates enabled (Cloudflare stays up; direct LAN ports briefly restart).")
@@ -723,8 +908,8 @@ def main() -> None:
             return
 
     if total == 0:
-        host_updates, remote_failed = _update_remote_hosts()
-        _print_change_table(_remote_rows(host_updates, remote_failed))
+        host_updates, remote_failed, remote_plan = _update_remote_hosts(remote_plan)
+        _print_change_table(_remote_rows(host_updates, remote_failed, remote_plan))
         return
 
     main_cf    = REPO_ROOT / "docker-compose.yml"
@@ -818,7 +1003,9 @@ def main() -> None:
         git_row = _autocommit_compose(applied_bumps)
 
     # ── 7. remote hosts ──────────────────────────────────────────────────────
-    host_updates, remote_failed = _update_remote_hosts() if args.all else ({}, [])
+    host_updates, remote_failed, remote_plan = (
+        _update_remote_hosts(remote_plan) if args.all else ({}, [], {})
+    )
 
     # ── 8. summary table ─────────────────────────────────────────────────────
     rows: list = []
@@ -842,7 +1029,7 @@ def main() -> None:
         rows.append(("deploy", "openbao stack", "compose up -d", "ok"))
     if git_row:
         rows.append(("git", "compose files", git_row[0], git_row[1]))
-    rows += _remote_rows(host_updates, remote_failed)
+    rows += _remote_rows(host_updates, remote_failed, remote_plan)
 
     _print_change_table(rows)
     print("\nDone.")
