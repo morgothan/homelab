@@ -447,13 +447,17 @@ echo "==UNIT_VLLM_USER"; systemctl --user is-active vllm 2>/dev/null || true
 echo "==CTR_TF"; docker ps --format '{{.Names}}' 2>/dev/null | grep -x tp2-lane || true
 echo "==CTR_VLLM"; docker ps --format '{{.Names}}' 2>/dev/null | grep -E '^node_[0-9]+' || true
 echo "==MODELS"; curl -s -m 8 http://127.0.0.1:8000/v1/models 2>/dev/null || true; echo
-echo "==TF_VER"; "$HOME/tf1017/engine-bin/tensorfold-native" --version 2>/dev/null || true
-echo "==TF_HEAD"; git -C "$HOME/tf1017/engine" rev-parse --short=8 HEAD 2>/dev/null || true
-echo "==KIT_TAG"; grep -o -- '--branch v[0-9][0-9.]*' "$HOME/tf1017/lane/prep-assemble.sh" 2>/dev/null | head -1 | sed 's/--branch //' || true
+# The live lane is the unit's WorkingDirectory (~/tf1017/v073/lane; ~/tf1017/lane on the v0.6.1 rollback); engine-bin,
+# engine and the kit checkout sit beside it.
+L=$(systemctl show -p WorkingDirectory --value tensorfold-tp2 2>/dev/null); L=${L:-$HOME/tf1017/lane}
+E=$(bash -c '. "$1/config.env" >/dev/null 2>&1; echo "$ENGINE_DIR"' _ "$L"); E=${E:-$L/../engine-bin}
+echo "==TF_VER"; "$E/tensorfold-native" --version 2>/dev/null || true
+echo "==TF_HEAD"; git -C "$L/../engine" rev-parse --short=8 HEAD 2>/dev/null || true
+echo "==KIT_TAG"; git -C "$L/../kit-repo" describe --tags --exact-match 2>/dev/null || grep -o -- '--branch v[0-9][0-9.]*' "$L/prep-assemble.sh" 2>/dev/null | head -1 | sed 's/--branch //' || true
 echo "==VLLM_BUILD"; node=$(docker ps -q -f name=node_0 2>/dev/null | head -1); [ -n "$node" ] && docker exec "$node" /opt/env/bin/python -c 'import vllm; print(vllm.__version__)' 2>/dev/null || true
 echo "==SPARKRUN"; "$HOME/.local/bin/sparkrun" --version 2>/dev/null | head -1 || true
-echo "==TF_UPSTREAM"; upstream=$(git ls-remote https://github.com/bertholomus/TensorFold refs/heads/deepseek-v41-zig 2>/dev/null | cut -f1); echo "$upstream"
-echo "==TF_UPSTREAM_LOCAL"; if [ -n "$upstream" ] && git -C "$HOME/tf1017/engine" merge-base --is-ancestor "$upstream" HEAD 2>/dev/null; then echo yes; fi
+echo "==TF_UPSTREAM"; upstream=$(git ls-remote https://github.com/bertholomus/TensorFold refs/heads/deepseek-v41-zig-tp2 2>/dev/null | cut -f1); echo "$upstream"
+echo "==TF_UPSTREAM_LOCAL"; if [ -n "$upstream" ] && git -C "$L/../engine" merge-base --is-ancestor "$upstream" HEAD 2>/dev/null; then echo yes; fi
 echo "==KIT_TAGS"; git ls-remote --tags https://github.com/bertholomus/deepseek-v4.1-tensorfold-tp2-2xgb10 'refs/tags/v*' 2>/dev/null | sed 's#.*refs/tags/##; s/\^{}//' | sort -u || true
 echo "==END"
 true
@@ -461,7 +465,7 @@ true
 
 _INFERENCE_LABELS = {"tensorfold": "TensorFold TP2", "vllm": "vLLM"}
 _ACTIVE_UNIT_STATES = {"active", "activating", "reloading"}
-_TENSORFOLD_BRANCH = "deepseek-v41-zig"
+_TENSORFOLD_BRANCH = "deepseek-v41-zig-tp2"
 
 
 _PROBE_SECTION_RE = re.compile(r"==([A-Z][A-Z0-9_]*)")
@@ -577,8 +581,8 @@ def _tensorfold_update_entries(probe: dict[str, str]) -> list[dict]:
                     "current_version": kit,
                     "new_version":     latest,
                     "changelog_analysis": (
-                        f"Kit release {latest} is newer than {kit}. Bump prep-assemble.sh's "
-                        "--branch, rebuild the kit, and verify with tools/verify_kit.sh."
+                        f"Kit release {latest} is newer than {kit}. Read its README/RUNNING.md, then "
+                        "follow tensorfold-tp2/v073/README.md's upgrade steps (new kit, maybe weights)."
                     ),
                 })
     return entries
