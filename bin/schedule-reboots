@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+# schedule-reboots - schedule the overnight reboot that upgrade.yml leaves pending, without running
+# apt. Hosts flagged /var/run/reboot-required reboot at 02:00 (dns), 02:05 (dns.kids), 02:10 (pve),
+# so a DNS resolver is always up. Containers are reported only (their kernel is pve's).
+# Extra args go straight to ansible-playbook:
+#
+#   bin/schedule-reboots                      # schedule pending reboots
+#   bin/schedule-reboots --check --diff       # show which hosts would reboot, schedule nothing
+#   bin/schedule-reboots -e reboot_at=never   # report only
+#   bin/schedule-reboots --limit pve          # just the hypervisor
+#
+# Cancel a scheduled reboot: ssh nat@<host> 'sudo /usr/sbin/shutdown -c'
+cd "$(dirname "$(readlink -f "$0")")/../ansible" && exec ansible-playbook reboot-pending.yml "$@"

@@ -1,0 +1,24 @@
+# Schedule the overnight reboot for hosts already flagged /var/run/reboot-required, without running
+# apt. Run via bin/schedule-reboots. Same tasks and per-host times as upgrade.yml.
+#
+# dns first, one host at a time, so a resolver stays up while the play runs; the reboots themselves
+# are staggered in inventory.py (dns 02:00, dns.kids 02:05, pve 02:10).
+
+- name: DNS hosts (one at a time)
+  hosts: dns
+  gather_facts: false
+  serial: 1
+  tasks:
+    - ansible.builtin.import_tasks: tasks/reboot-pending.yml
+
+- name: Proxmox host
+  hosts: pve
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/reboot-pending.yml
+
+- name: Containers - report only
+  hosts: containers
+  gather_facts: false
+  tasks:
+    - ansible.builtin.import_tasks: tasks/reboot-pending.yml

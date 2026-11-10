@@ -28,9 +28,11 @@ DNS_CTS = {"110", "112"}  # dns-secondary, dns-kids-secondary
 
 # What dns.yml builds on each DNS host. seed_from: replica whose AdGuard config can be seeded from its
 # origin's backup if its own is missing (adguardhome-sync then overwrites it within 5 min).
+# reboot_at staggers the overnight reboots upgrade.yml schedules (tasks/reboot-pending.yml): dns 02:00,
+# dns.kids 02:05, pve 02:10 (pve hosts the two DNS CTs), so the four resolvers never go down together.
 DNS_VARS = {
-    f"dns.{LOCAL}":      {"pi_hostname": "DNS", "unbound": True, "node_exporter": True, "rsyslog": True},
-    f"dns.kids.{LOCAL}": {"pi_hostname": "DNS-KIDS", "node_exporter": True, "rsyslog": True},
+    f"dns.{LOCAL}":      {"pi_hostname": "DNS", "unbound": True, "node_exporter": True, "rsyslog": True, "reboot_at": "02:00"},
+    f"dns.kids.{LOCAL}": {"pi_hostname": "DNS-KIDS", "node_exporter": True, "rsyslog": True, "reboot_at": "02:05"},
     "110":               {"unbound": True, "node_exporter": True, "seed_from": f"dns.{LOCAL}"},
     "112":               {"seed_from": f"dns.kids.{LOCAL}"},
 }
@@ -41,7 +43,7 @@ out = subprocess.run(["ssh", "-o", "BatchMode=yes", f"nat@{PVE}", "sudo", "/usr/
 running = {c[0]: c[-1] for c in (l.split() for l in out.splitlines()[1:]) if c[1] == "running"}
 
 hostvars = {
-    PVE: {"ansible_user": "nat"},
+    PVE: {"ansible_user": "nat", "reboot_at": "02:10"},
     **{h: {"ansible_user": "nat", "ansible_become": True, **DNS_VARS[h]} for h in (f"dns.{LOCAL}", f"dns.kids.{LOCAL}")},
 }
 groups = {"containers": [], "dns": [f"dns.{LOCAL}", f"dns.kids.{LOCAL}"], "pve": [PVE], "self_host": []}

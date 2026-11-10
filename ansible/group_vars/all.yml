@@ -1,0 +1,5 @@
+# Default overnight reboot time for ansible/upgrade.yml and ansible/reboot-pending.yml.
+# Per-host stagger (dns 02:00, dns.kids 02:05, pve 02:10) lives in inventory.py so the DNS
+# resolvers never reboot together. `-e reboot_at=never` turns scheduling off (report only);
+# `-e reboot_at=HH:MM` overrides every host.
+reboot_at: "02:00"

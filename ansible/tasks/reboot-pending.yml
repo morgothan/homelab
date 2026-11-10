@@ -1,0 +1,131 @@
+# Shared by upgrade.yml and reboot-pending.yml. When apt flags /var/run/reboot-required, schedule
+# the reboot for reboot_at instead of leaving the update half-applied until someone reboots by hand.
+# The schedule is one-shot state in /run: any later reboot clears it, and `shutdown -c` cancels it.
+#
+# reboot_at: HH:MM (next occurrence of that wall-clock time), now, or never (report only).
+# Per-host staggering lives in inventory.py so the two DNS Pis and pve do not reboot on top of each
+# other — a resolver stays up.
+#
+# Containers are reported, never scheduled: their kernel is pve's, so rebooting a CT cannot apply a
+# kernel update; pve's own reboot covers them.
+- name: Validate reboot_at
+  ansible.builtin.assert:
+    that: reboot_at is match('^(([01][0-9]|2[0-3]):[0-5][0-9]|never|now)$')
+    fail_msg: "reboot_at '{{ reboot_at }}' must be HH:MM, now, or never"
+
+- name: Check reboot-required
+  ansible.builtin.stat:
+    path: /var/run/reboot-required
+  register: reboot_flag
+
+- name: Reboot-required packages
+  ansible.builtin.command:
+    cmd: cat /var/run/reboot-required.pkgs
+  register: reboot_pkgs
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  when: reboot_flag.stat.exists
+
+- name: Reboot required
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: reboot required
+      ({{ reboot_pkgs.stdout_lines | join(', ') if reboot_pkgs.stdout_lines | default([]) else 'see /var/run/reboot-required' }})
+  when: reboot_flag.stat.exists
+
+- name: Report container reboot flag
+  ansible.builtin.debug:
+    msg: >-
+      {{ inventory_hostname }}: reboot flag inside a container - not scheduled (the kernel is pve's);
+      restart services or reboot pve, or run `pct reboot {{ proxmox_vmid }}` for the CT itself
+  when:
+    - reboot_flag.stat.exists
+    - ansible_connection | default('ssh') == 'community.proxmox.proxmox_pct_remote'
+    - reboot_at != 'never'
+
+# Probe with -c (cancel): a no-op when nothing is scheduled, and it exercises the exact command
+# path the schedule uses, so a missing NOPASSWD rule fails before anything is scheduled.
+- name: Probe passwordless shutdown
+  ansible.builtin.command:
+    cmd: sudo -n /usr/sbin/shutdown -c
+  register: reboot_cap
+  failed_when: false
+  changed_when: false
+  check_mode: false
+  when:
+    - reboot_flag.stat.exists
+    - reboot_at != 'never'
+    - ansible_connection | default('ssh') != 'community.proxmox.proxmox_pct_remote'
+
+- name: Missing NOPASSWD shutdown
+  ansible.builtin.fail:
+    msg: >-
+      {{ inventory_hostname }}: sudo needs a password for /usr/sbin/shutdown, so the reboot cannot be
+      scheduled. Provision the rule once, then re-run:
+      echo 'nat ALL=(ALL) NOPASSWD: /usr/sbin/shutdown' | sudo tee /etc/sudoers.d/ansible-shutdown &&
+      sudo chmod 440 /etc/sudoers.d/ansible-shutdown &&
+      sudo visudo -c
+  when:
+    - reboot_cap is not skipped
+    - reboot_cap.rc != 0
+    - not ansible_check_mode
+
+- name: Schedule reboot at {{ reboot_at }}
+  ansible.builtin.command:
+    cmd: sudo -n /usr/sbin/shutdown -r {{ reboot_at }}
+  register: reboot_sched
+  when:
+    - reboot_flag.stat.exists
+    - reboot_at != 'never'
+    - ansible_connection | default('ssh') != 'community.proxmox.proxmox_pct_remote'
+
+- name: Would schedule reboot
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: would schedule reboot at {{ reboot_at }}"
+  when:
+    - reboot_flag.stat.exists
+    - reboot_at != 'never'
+    - ansible_connection | default('ssh') != 'community.proxmox.proxmox_pct_remote'
+    - ansible_check_mode
+
+- name: Confirm reboot scheduled
+  ansible.builtin.stat:
+    path: /run/systemd/shutdown/scheduled
+  register: reboot_sched_file
+  when:
+    - reboot_sched is not skipped
+    - reboot_at != 'now'
+
+- name: Assert reboot is scheduled
+  ansible.builtin.assert:
+    that: reboot_sched_file.stat.exists
+    fail_msg: "{{ inventory_hostname }}: shutdown returned success but nothing is scheduled (check `shutdown -c` state)"
+  when:
+    - reboot_sched is not skipped
+    - reboot_at != 'now'
+
+# systemd stores the schedule as USEC= microseconds since the epoch; print it as wall-clock local time.
+- name: Scheduled reboot time
+  ansible.builtin.shell:
+    cmd: date -d @$(awk -F= '/^USEC=/{printf "%d", $2/1000000}' /run/systemd/shutdown/scheduled)
+  register: reboot_sched_time
+  changed_when: false
+  check_mode: false
+  when:
+    - reboot_sched is not skipped
+    - reboot_at != 'now'
+
+- name: Reboot scheduled
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: reboot scheduled for {{ reboot_sched_time.stdout }}"
+  when:
+    - reboot_sched is not skipped
+    - reboot_at != 'now'
+
+- name: Reboot now
+  ansible.builtin.debug:
+    msg: "{{ inventory_hostname }}: reboot now requested"
+  when:
+    - reboot_sched is not skipped
+    - reboot_at == 'now'

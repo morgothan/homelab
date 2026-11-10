@@ -1,6 +1,9 @@
 # apt update + full-upgrade across the lab. Run via bin/update-hosts.
 # Order: containers (parallel) → dns pairs (one host at a time, so a resolver is always up) → pve → this host (opt-in).
 # confdef/confold (apt module default) keeps locally-edited config files. No autoremove: never prune pve kernels.
+# Hosts left flagged /var/run/reboot-required get a one-shot overnight reboot scheduled (tasks/reboot-pending.yml):
+# dns 02:00, dns.kids 02:05, pve 02:10 — staggered so a resolver is always up. Containers are report-only
+# (their kernel is pve's). Opt out with -e reboot_at=never; schedule pending ones without apt via bin/schedule-reboots.
 
 - name: Containers
   hosts: containers
@@ -11,14 +14,8 @@
         update_cache: true
         upgrade: dist
         lock_timeout: 300
-    - name: Check reboot-required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: reboot
-    - name: REBOOT REQUIRED
-      ansible.builtin.debug:
-        msg: reboot required
-      when: reboot.stat.exists
+    - name: Schedule overnight reboot if required
+      ansible.builtin.import_tasks: tasks/reboot-pending.yml
 
 - name: DNS (one at a time)
   hosts: dns
@@ -48,14 +45,8 @@
     - name: apt-get dist-upgrade
       ansible.builtin.command: sudo apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade
       when: "'\nInst ' in sim.stdout"
-    - name: Check reboot-required
-      ansible.builtin.stat:
-        path: /var/run/reboot-required
-      register: reboot
-    - name: REBOOT REQUIRED
-      ansible.builtin.debug:
-        msg: reboot required
-      when: reboot.stat.exists
+    - name: Schedule overnight reboot if required
+      ansible.builtin.import_tasks: tasks/reboot-pending.yml
 
 - name: This host (CT102) — opt-in; a docker-ce bump restarts dockerd, bouncing Traefik
   hosts: "{{ 'self_host' if include_self | default(false) | bool else 'none' }}"
