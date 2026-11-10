@@ -260,8 +260,7 @@ async def reflect_on_trends(archive_dates: list[str]) -> dict[str, Any] | None:
             ],
             max_tokens=2200,
             temperature=0.2,
-            # ponytail: no response_format: the TensorFold backend 400s on it. The prompt
-            # pins the shape and _parse_reflection is defensive; restore it if malformed JSON shows up.
+            response_format={"type": "json_object"},
         )
         if not isinstance(result, dict):
             log.warning("Trend synthesis did not return a JSON object")
