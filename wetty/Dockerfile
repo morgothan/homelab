@@ -28,6 +28,13 @@ RUN grep -q "DroidSansM Nerd Font" /usr/src/app/build/client/xterm_config/functi
 COPY patch-session.mjs /tmp/patch-session.mjs
 RUN node /tmp/patch-session.mjs
 
+# Firefox refuses navigator.clipboard.writeText() from a mouseup handler, so
+# the stock copy-on-select silently fails there (Chrome permits it). Swap the
+# copy helper to execCommand inside the gesture, copy the real xterm selection
+# for Ctrl+Shift+C, and let Ctrl+V fall through to the browser's native paste.
+COPY patch-clipboard.mjs /tmp/patch-clipboard.mjs
+RUN node /tmp/patch-clipboard.mjs
+
 # tmux refuses to draw a sixel image when the client pty reports zero pixel
 # dimensions; it substitutes a "SIXEL IMAGE (WxH)" placeholder plus '+' lines.
 # node-pty hardcodes ws_xpixel/ws_ypixel to 0, so tmux never sees a pixel size
