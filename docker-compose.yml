@@ -97,7 +97,7 @@ services:
 ########## Homepage
 # Dashboard with service widgets, status monitoring, and quick links
   homepage:
-    image: ghcr.io/gethomepage/homepage:v2.7.0
+    image: ghcr.io/gethomepage/homepage:v2.8.0
     container_name: homepage
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:3000/ || exit 1"]
@@ -359,7 +359,7 @@ services:
     logging: *logging
 
 ########## Jellystat
-# Jellyfin watch history and statistics (replaces Tautulli)
+# Jellyfin watch history and statistics (Jellystat; Tautulli covers Plex)
   jellystat-db:
     image: postgres:15
     container_name: jellystat-db
@@ -412,6 +412,44 @@ services:
       - traefik.http.routers.jellystat-http-local.entrypoints=http
       - traefik.http.routers.jellystat-http-local.rule=Host(`jellystat.${LOCAL}`)
       - traefik.http.routers.jellystat-http-local.service=jellystat
+
+########## Tautulli
+# Plex watch history and statistics; monitors the Plex server on smsf
+  tautulli:
+    image: ghcr.io/tautulli/tautulli
+    container_name: tautulli
+    restart: unless-stopped
+    logging: *logging
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8181/status || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    volumes:
+      - /etc/localtime:/etc/localtime:ro
+      - /etc/timezone:/etc/timezone:ro
+      - ${DOCKERDIR}/tautulli:/config
+    environment:
+      - PUID=1000
+      - PGID=1000
+      - TZ=America/New_York
+    networks:
+      - ${DOCKERNET}
+    labels:
+      - traefik.enable=true
+      - traefik.http.routers.tautulli-http.entrypoints=https
+      - traefik.http.routers.tautulli-http.rule=Host(`tautulli.${DOMAIN}`)
+      - traefik.http.routers.tautulli-http.middlewares=chain-authelia-nowaf@file
+      - traefik.http.routers.tautulli-http.service=tautulli
+      - traefik.http.routers.tautulli-http.tls.certresolver=letsencrypt
+      - traefik.http.routers.tautulli-http.tls.domains[0].main=${DOMAIN}
+      - traefik.http.routers.tautulli-http.tls.domains[0].sans=*.${DOMAIN}
+      - traefik.http.services.tautulli.loadbalancer.server.port=8181
+        #local access
+      - traefik.http.routers.tautulli-http-local.entrypoints=http
+      - traefik.http.routers.tautulli-http-local.rule=Host(`tautulli.${LOCAL}`)
+      - traefik.http.routers.tautulli-http-local.service=tautulli
 
 ########## Authelia
 # SSO, 2FA, and OIDC provider — forward-auth for all external services
@@ -824,7 +862,7 @@ services:
 # Media request management for Jellyfin — integrates with Radarr and Sonarr
   overseerr:
 #    image: sctx/overseerr:latest
-    image: ghcr.io/seerr-team/seerr:v3.5.1
+    image: ghcr.io/seerr-team/seerr:v3.5.2
     init: true
     container_name: overseerr
     environment:
