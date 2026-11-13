@@ -320,7 +320,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.4.2
+    image: amir20/dozzle:v11.4.3
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
@@ -950,7 +950,7 @@ services:
 ########## Beszel Agent
 # Monitoring agent — reports host and container metrics to the Beszel hub
   beszel-agent:
-    image: henrygd/beszel-agent:0.21.1
+    image: henrygd/beszel-agent:0.21.2
     container_name: "beszel-agent"
     restart: unless-stopped
     logging: *logging
@@ -1111,7 +1111,7 @@ services:
 ########## Mealie
 # Recipe manager with OIDC login via Authelia, no password login
   mealie:
-    image: ghcr.io/mealie-recipes/mealie:v3.30.0 #
+    image: ghcr.io/mealie-recipes/mealie:v3.31.0 #
     container_name: mealie
     restart: unless-stopped
     logging: *logging
