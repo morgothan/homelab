@@ -135,7 +135,7 @@ services:
 ########## Portainer
 # Docker management UI with OIDC login via Authelia
   portainer:
-    image: portainer/portainer-ce:2.45.3
+    image: portainer/portainer-ce:2.45.4
     command: -H unix:///var/run/docker.sock
     container_name: portainer
     restart: unless-stopped
@@ -1162,7 +1162,7 @@ services:
 ########## Homelab Monitor
 # Plain-text status page — container health, image updates, Docker + syslog analysis
   lab-monitor-docker-api:
-    image: haproxy:3.4.7-alpine
+    image: haproxy:3.4.8-alpine
     container_name: lab-monitor-docker-api
     restart: unless-stopped
     user: "65534:996"
