@@ -312,6 +312,12 @@ services:
       - UP_UNIFI_DEFAULT_URL=${UNIFI_URL}
       - UP_POLLER_DEBUG=${POLLER_DEBUG}
       - UP_UNIFI_DEFAULT_SAVE_DPI=${POLLER_SAVE_DPI}
+      # Protect device metrics require a Protect Integration API key minted at
+      # https://<console>/network/default/integrations/ and stored in OpenBao as
+      # UNIFI_PROTECT_API_KEY. With no key, Protect metrics are omitted and
+      # Network polling continues unaffected.
+      - UP_UNIFI_DEFAULT_SAVE_PROTECT_DEVICES=true
+      - UP_UNIFI_DEFAULT_PROTECT_API_KEY=${UNIFI_PROTECT_API_KEY:-}
       - UP_LOKI_DISABLE=false
       - UP_LOKI_URL=http://logger.${LOCAL}:3100
 
@@ -320,7 +326,7 @@ services:
 ########## Dozzle
 # Live Docker log viewer with remote agents on multiple hosts across the network
   dozzle:
-    image: amir20/dozzle:v11.4.3
+    image: amir20/dozzle:v11.5.0
     container_name: dozzle
     healthcheck:
       test: ["CMD", "/dozzle", "healthcheck"]
